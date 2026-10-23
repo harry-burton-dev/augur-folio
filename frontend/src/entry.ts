@@ -29,6 +29,7 @@ export default defineMicroFrontend({
         .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
         .userId=${ctx.user.id}
         floor-name=${ctx.workspace.name}
+        floor-kind=${ctx.workspace.kind}
         .place=${placeFor(ctx.path)}
         @folio-place=${moved}
       ></folio-app>`,

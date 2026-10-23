@@ -204,7 +204,12 @@ const LIBRARY_COLUMNS = 'id, workspace_id, name, description, created_by, create
 const FOLDER_COLUMNS = 'id, library_id, parent_id, name, created_by, created_at';
 
 export class PgFolioStore implements FolioStore {
-  constructor(private readonly pool: pg.Pool) {}
+  // A plain field, not a parameter property: `pnpm dev:app` runs this file with Node's type stripping.
+  private readonly pool: pg.Pool;
+
+  constructor(pool: pg.Pool) {
+    this.pool = pool;
+  }
 
   static async connect(connectionString: string) {
     const store = new PgFolioStore(new pg.Pool({ connectionString }));

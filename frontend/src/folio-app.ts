@@ -42,6 +42,7 @@ export class FolioApp extends LitElement {
   static override properties = {
     api: { attribute: false },
     floorName: { type: String, attribute: 'floor-name' },
+    floorKind: { type: String, attribute: 'floor-kind' },
     place: { attribute: false },
     libraries: { state: true },
     canCreate: { state: true },
@@ -56,6 +57,7 @@ export class FolioApp extends LitElement {
 
   declare api: FolioApi;
   declare floorName: string;
+  declare floorKind: 'personal' | 'team' | 'org';
   /** Where to start, from the path the shell mounted Folio at. */
   declare place: Place;
   declare libraries: Library[];
@@ -72,6 +74,7 @@ export class FolioApp extends LitElement {
   constructor() {
     super();
     this.floorName = '';
+    this.floorKind = 'team';
     this.place = { adding: false };
     this.libraries = [];
     this.canCreate = false;
@@ -181,12 +184,17 @@ export class FolioApp extends LitElement {
     this.dialog = e.detail.action.id === 'rename' ? 'rename-folder' : 'remove-folder';
   }
 
+  /** "Your libraries" on your own floor, "Libraries on Finance" on a team's. */
+  private get shelfName() {
+    return this.floorKind === 'personal' ? 'Your libraries' : this.floorName ? `Libraries on ${this.floorName}` : 'Libraries';
+  }
+
   private rail() {
     const open = this.open;
     return html`<nav class="folio-rail" aria-label="Libraries and folders">
       <ui-tree
         label="Libraries"
-        heading=${this.floorName ? `Libraries on ${this.floorName}` : 'Libraries'}
+        heading=${this.shelfName}
         .items=${this.libraries.map((l): TreeItem => ({ id: l.id, label: l.name, icon: 'library' }))}
         selected=${open?.id ?? ''}
         @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openLibrary(e.detail.item.id)}
@@ -226,14 +234,16 @@ export class FolioApp extends LitElement {
         ...(this.mayChange(f) ? { actions: [{ id: 'rename', label: 'Rename' }, { id: 'remove', label: 'Remove' }] } : {}),
       }));
     return html`<div class="folio-main-inner" aria-busy=${this.opening ? 'true' : 'false'}>
-      <ol class="folio-trail" aria-label="Where you are">
-        <li><button class="folio-crumb" ?aria-current=${!here} @click=${() => this.goToFolder(undefined)}>${open.name}</button></li>
-        ${trail.map(
-          (f, i) => html`<li><span aria-hidden="true">/</span><button class="folio-crumb" aria-current=${i === trail.length - 1 ? 'page' : nothing} @click=${() => this.goToFolder(f.id)}>${f.name}</button></li>`,
-        )}
-      </ol>
+      ${here
+        ? html`<ol class="folio-trail" aria-label="Where you are">
+            <li><button class="folio-crumb" @click=${() => this.goToFolder(undefined)}>${open.name}</button></li>
+            ${trail.map(
+              (f, i) => html`<li><span aria-hidden="true">/</span><button class="folio-crumb" aria-current=${i === trail.length - 1 ? 'page' : nothing} @click=${() => this.goToFolder(f.id)}>${f.name}</button></li>`,
+            )}
+          </ol>`
+        : nothing}
       <div class="folio-head">
-        <ui-heading eyebrow=${here ? open.name : (this.floorName || 'Library')} heading=${here?.name ?? open.name} summary=${here ? '' : open.description}></ui-heading>
+        <ui-heading eyebrow=${here ? (trail.at(-2)?.name ?? open.name) : this.shelfName} heading=${here?.name ?? open.name} summary=${here ? '' : open.description}></ui-heading>
         <div class="folio-actions">
           ${open.can.addFolders ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
           ${open.can.manage && !here
@@ -265,7 +275,7 @@ export class FolioApp extends LitElement {
     const siblings = (except?: string) => (open?.folders ?? []).filter((f) => f.parent === (this.target ? this.target.parent : this.folder) && f.id !== except).map((f) => f.name);
     switch (this.dialog) {
       case 'new-library':
-        return html`<ui-dialog open eyebrow=${this.floorName || 'Folio'} heading="New library" summary="Everyone on this floor can read it and add to it; its leads look after it."
+        return html`<ui-dialog open eyebrow=${this.floorName || 'Folio'} heading="New library" summary=${this.floorKind === 'personal' ? 'Only you can see it.' : 'Everyone on this floor can see it and add folders; its leads look after it.'}
           action-label="Make it" busy-label="Making…" .submit=${this.submitNewLibrary} @ui-close=${close}>
           <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .validate=${nameCheck(this.libraries.map((l) => l.name), 'library')}></ui-text-field>
           <ui-text-field slot="fields" name="description" label="What it’s for" optional multiline maxlength="500"></ui-text-field>
@@ -310,7 +320,8 @@ export class FolioApp extends LitElement {
 
   override render() {
     return html`<style>
-        folio-app { display: grid; grid-template-columns: minmax(220px, 280px) 1fr; min-height: 100%; }
+        /* Folio's own ground: the shell's water stays outside the app. */
+        folio-app { display: grid; grid-template-columns: minmax(220px, 280px) 1fr; min-height: 100%; background: var(--slate); }
         folio-app .folio-rail { display: flex; flex-direction: column; gap: var(--space-5); padding: var(--space-6) var(--space-3); border-right: 1px solid var(--hairline); overflow-y: auto; }
         folio-app .folio-rail-act { padding: 0 var(--space-2); }
         folio-app .folio-main { min-width: 0; padding: var(--space-6) var(--edge); }

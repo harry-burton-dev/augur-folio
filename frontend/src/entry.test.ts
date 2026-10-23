@@ -104,6 +104,8 @@ describe('folio', () => {
     expect(libs.selected).toBe('l-1');
     expect(folders.items.map((i) => i.label)).toEqual(['HR', 'IT']);
     expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Policies');
+    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('Libraries on Finance');
+    expect(el.querySelector('.folio-trail')).toBeNull();
     expect(list(el).items.map((i) => i.title)).toEqual(['HR', 'IT']);
     await app.unmount!(el);
     expect(el.querySelector('folio-app')).toBeNull();
@@ -117,15 +119,26 @@ describe('folio', () => {
     await settle(el);
     expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/f-hr');
     expect([...el.querySelectorAll('.folio-crumb')].map((c) => c.textContent)).toEqual(['Policies', 'HR']);
+    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('Policies');
     expect(list(el).items.map((i) => i.title)).toEqual(['Leave']);
     expect(trees(el)[1].selected).toBe('f-hr');
   });
 
   it('opens straight at a folder from its path', async () => {
     const { fetch } = service();
-    const el = await mounted(fetch, '/libraries/l-1/f-hr');
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('HR');
-    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('Policies');
+    const el = await mounted(fetch, '/libraries/l-1/f-leave');
+    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Leave');
+    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('HR');
+    expect(trees(el)[1].selected).toBe('f-leave');
+  });
+
+  it('calls them your libraries on your own floor', async () => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const own: Workspace = { ...floor, id: 'w-me', kind: 'personal', name: 'You', role: 'lead' };
+    await app.mount(el, { ...ctx(service().fetch), workspace: own, getWorkspace: () => own });
+    await settle(el);
+    expect(trees(el)[0].heading).toBe('Your libraries');
   });
 
   it('offers Rename and Remove only on folders the person may change', async () => {
