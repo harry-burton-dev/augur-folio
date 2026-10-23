@@ -1,0 +1,25 @@
+{
+  "name": "@apps/folio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Folio's service: its API behind the gateway at /api/folio.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@augur/service-kit": "workspace:*",
+    "fastify": "^5.6.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}

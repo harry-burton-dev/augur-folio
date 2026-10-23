@@ -1,0 +1,23 @@
+{
+  "name": "@apps/folio-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Folio's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@augur/mfe-sdk": "workspace:*",
+    "@augur/ui-kit": "workspace:*",
+    "lit": "^3.3.0"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^7.3.7",
+    "vitest": "^3.2.0"
+  }
+}

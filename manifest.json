@@ -1,0 +1,44 @@
+{
+  "id": "folio",
+  "name": "Folio",
+  "route": "/folio",
+  "entry": "/apps/folio/entry.js",
+  "version": "0.0.0",
+  "sdk": "^1.1.1",
+  "description": "Libraries of documents for you, your teams and the org",
+  "icon": "library",
+  "floors": [
+    "personal",
+    "team",
+    "org"
+  ],
+  "storage": {
+    "database": true,
+    "bucket": true
+  },
+  "maxUpload": 200,
+  "menu": [
+    {
+      "id": "libraries",
+      "label": "Libraries",
+      "icon": "library",
+      "items": [
+        {
+          "id": "all",
+          "label": "All libraries",
+          "icon": "library",
+          "path": "/libraries",
+          "detail": "Everything kept on this floor",
+          "keywords": "documents folders shelves"
+        },
+        {
+          "id": "new",
+          "label": "New library",
+          "icon": "plus",
+          "path": "/libraries/new",
+          "keywords": "create add shelf"
+        }
+      ]
+    }
+  ]
+}
