@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@augur/service-kit": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/lib-storage": "^3.1156.0",
     "fastify": "^5.6.0",
     "pg": "^8.23.1"
   },

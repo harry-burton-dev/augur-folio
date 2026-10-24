@@ -1,6 +1,8 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BadParentError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, type FolioStore } from './store.ts';
+import { BadParentError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, type FolioStore, type NewVersion } from './store.ts';
+
+const file = (doc: string, id: string, size = 10, by = 'u-1'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType: 'application/pdf', size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
 
 /** The same behaviour from every store. */
 const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = async () => {}) => {
@@ -62,6 +64,50 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.deleteFolder(lib.id, hr.id)).toBe(false);
     expect((await store.folders(lib.id)).map((f) => f.name)).toEqual(['IT and security']);
   });
+
+  it('keeps documents in their folder, newest version first, and numbers versions in turn', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    const travel = await store.createDocument({ id: 'd-travel', library: lib.id, title: 'Travel policy', createdBy: 'u-1' }, file('d-travel', 'v-1', 1200));
+    expect(travel).toMatchObject({ id: 'd-travel', workspace: 'w-fin', library: lib.id, title: 'Travel policy', latest: { number: 1, size: 1200, filename: 'v-1.pdf' } });
+    expect(travel.folder).toBeUndefined();
+    expect(travel.latest).not.toHaveProperty('objectKey');
+    await store.createDocument({ id: 'd-leave', library: lib.id, folder: hr.id, title: 'Annual leave', createdBy: 'u-2' }, file('d-leave', 'v-2'));
+    expect((await store.documents(lib.id)).map((d) => d.title)).toEqual(['Travel policy']);
+    expect((await store.documents(lib.id, hr.id)).map((d) => d.title)).toEqual(['Annual leave']);
+    const [second, third] = await Promise.all([store.addVersion('d-travel', file('d-travel', 'v-3', 20, 'u-2')), store.addVersion('d-travel', file('d-travel', 'v-4', 30))]);
+    expect([second?.number, third?.number].sort()).toEqual([2, 3]);
+    expect((await store.versions('d-travel')).map((v) => v.number)).toEqual([3, 2, 1]);
+    expect((await store.document('d-travel'))?.latest.number).toBe(3);
+    expect(await store.version('d-travel', 1)).toMatchObject({ number: 1, objectKey: 'documents/d-travel/v-1', sha256: 'ab'.repeat(32) });
+    expect(await store.version('d-travel', 9)).toBeUndefined();
+    expect(await store.addVersion('nope', file('nope', 'v-5'))).toBeUndefined();
+  });
+
+  it('refuses a document in another library’s folder', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', name: 'Other', createdBy: 'u-1' });
+    const theirs = await store.createFolder({ library: other.id, name: 'Theirs', createdBy: 'u-1' });
+    await expect(store.createDocument({ id: 'd-1', library: lib.id, folder: theirs.id, title: 'X', createdBy: 'u-1' }, file('d-1', 'v-1'))).rejects.toBeInstanceOf(BadParentError);
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'X', createdBy: 'u-1' }, file('d-2', 'v-2'));
+    await expect(store.updateDocument('d-2', { folder: theirs.id })).rejects.toBeInstanceOf(BadParentError);
+  });
+
+  it('retitles and moves documents, and deletes them out of sight', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Leave', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    expect(await store.updateDocument('d-1', { title: 'Annual leave', folder: hr.id })).toMatchObject({ title: 'Annual leave', folder: hr.id });
+    await expect(store.deleteFolder(lib.id, hr.id)).rejects.toBeInstanceOf(NotEmptyError);
+    expect((await store.updateDocument('d-1', { folder: null }))?.folder).toBeUndefined();
+    expect((await store.updateDocument('d-1', { title: 'Leave' }))?.folder).toBeUndefined();
+    expect(await store.deleteDocument('d-1', 'u-1')).toBe(true);
+    expect(await store.deleteDocument('d-1', 'u-1')).toBe(false);
+    expect(await store.document('d-1')).toBeUndefined();
+    expect(await store.documents(lib.id)).toEqual([]);
+    expect(await store.updateDocument('d-1', { title: 'Back' })).toBeUndefined();
+    expect(await store.deleteFolder(lib.id, hr.id)).toBe(true);
+  });
 };
 
 describe('MemoryFolioStore', () => behavesLikeAStore(() => new MemoryFolioStore()));
@@ -83,13 +129,13 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.folders, folio.libraries');
+      await admin.query('truncate folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
   );
 
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents']);
   });
 });
