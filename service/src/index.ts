@@ -1,15 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { appCredentialsFromEnv, appStorageFromEnv, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
+import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
 
 const port = Number(process.env.PORT ?? 8083);
-// Folio keeps its libraries in its own schema (docs/app-storage.md). Without one it forgets them
-// on restart, which is fine under pnpm dev:app and never in production.
-const { databaseUrl } = appStorageFromEnv();
-if (!databaseUrl && process.env.NODE_ENV === 'production') throw new Error('Folio needs DATABASE_URL: give it its storage (docs/app-storage.md).');
+// Folio keeps its libraries in its own schema and its files in its own bucket (docs/app-storage.md).
+// Without them it forgets everything on restart, which is fine under pnpm dev:app and never in production.
+const { databaseUrl, bucket } = appStorageFromEnv();
+if ((!databaseUrl || !bucket) && process.env.NODE_ENV === 'production') throw new Error('Folio needs DATABASE_URL and its bucket (S3_*): give it its storage (docs/app-storage.md).');
 const store = databaseUrl ? await PgFolioStore.connect(databaseUrl) : new MemoryFolioStore();
-const app = await buildApp({ store });
+const objects = bucket ? new S3ObjectStore(bucket) : new MemoryObjectStore();
+const app = await buildApp({ store, objects });
 await app.listen({ port, host: '0.0.0.0' });
 
 // Put Folio in the platform's catalogue, so the shell can offer it.

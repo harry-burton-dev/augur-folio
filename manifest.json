@@ -16,6 +16,9 @@
     "database": true,
     "bucket": true
   },
+  "scopes": [
+    "audit:write"
+  ],
   "maxUpload": 200,
   "menu": [
     {

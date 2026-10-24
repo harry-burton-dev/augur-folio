@@ -1,8 +1,23 @@
 import { LitElement, html, nothing } from 'lit';
-import type { DialogSubmit, FieldCheck, ListItem, TreeItem } from '@augur/ui-kit';
-import type { FolioApi, Folder, Library, OpenLibrary, Place } from './api.js';
+import { ago, type DialogSubmit, type FieldCheck, type ListItem, type SelectOption, type TreeItem } from '@augur/ui-kit';
+import { ACCEPT, MAX_UPLOAD_MB, fileTypeOf, sizeWords, type FolioApi, type FolioDocument, type Folder, type Library, type OpenDocument, type OpenLibrary, type Place } from './api.js';
 
-type Dialog = 'new-library' | 'edit-library' | 'archive-library' | 'new-folder' | 'rename-folder' | 'remove-folder';
+type Dialog = 'new-library' | 'edit-library' | 'archive-library' | 'new-folder' | 'rename-folder' | 'remove-folder' | 'document' | 'edit-document' | 'delete-document';
+
+/** Rows for documents carry this before their id, so they never meet a folder's. */
+const DOC = 'doc:';
+
+/** "Version 3 · PDF · 1.2 MB": what a document is, in a line. */
+export const documentLine = (doc: Pick<FolioDocument, 'latest'>) =>
+  [`Version ${doc.latest.number}`, fileTypeOf(doc.latest.filename)?.word, sizeWords(doc.latest.size)].filter(Boolean).join(' · ');
+
+/** Saves a file the browser was handed, under its own name. */
+const save = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 
 /** The folders inside `parent` (or at the top), as tree rows with theirs inside them. */
 export const folderTree = (folders: readonly Folder[], parent?: string): TreeItem[] =>
@@ -53,6 +68,10 @@ export class FolioApp extends LitElement {
     error: { state: true },
     dialog: { state: true },
     target: { state: true },
+    documents: { state: true },
+    uploading: { state: true },
+    note: { state: true },
+    doc: { state: true },
   };
 
   declare api: FolioApi;
@@ -70,6 +89,14 @@ export class FolioApp extends LitElement {
   declare dialog: Dialog | undefined;
   /** The folder a folder dialog is about. */
   declare target: Folder | undefined;
+  /** The documents where the person is: in the open folder, or at the top of the library. */
+  declare documents: FolioDocument[];
+  /** How many files are still going up. */
+  declare uploading: number;
+  /** What happened with the last files: "Added 2 documents.", or what was turned away. */
+  declare note: string;
+  /** The document open in its dialog, with its versions. */
+  declare doc: OpenDocument | undefined;
 
   constructor() {
     super();
@@ -81,6 +108,9 @@ export class FolioApp extends LitElement {
     this.loading = true;
     this.opening = false;
     this.error = '';
+    this.documents = [];
+    this.uploading = 0;
+    this.note = '';
   }
 
   override createRenderRoot() {
@@ -114,6 +144,7 @@ export class FolioApp extends LitElement {
     try {
       this.open = await this.api.library(id);
       this.folder = folder && this.open.folders.some((f) => f.id === folder) ? folder : undefined;
+      this.documents = (await this.api.documents(id, this.folder)).documents;
       if (tell) this.tell();
     } catch (err) {
       this.error = (err as Error).message;
@@ -122,9 +153,115 @@ export class FolioApp extends LitElement {
     }
   }
 
-  private goToFolder(folder: string | undefined) {
+  private async goToFolder(folder: string | undefined) {
     this.folder = folder;
+    this.note = '';
     this.tell();
+    await this.loadDocuments();
+  }
+
+  private async loadDocuments() {
+    const open = this.open;
+    if (!open) return;
+    const folder = this.folder;
+    try {
+      const { documents } = await this.api.documents(open.id, folder);
+      // Only if the person is still where they were when asked.
+      if (this.open?.id === open.id && this.folder === folder) this.documents = documents;
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  /** Uploads the files one after another into where the person is, and says how it went. */
+  private async upload(files: File[]) {
+    const open = this.open;
+    if (!open) return;
+    const folder = this.folder;
+    this.uploading = files.length;
+    this.note = '';
+    const failed: string[] = [];
+    let added = 0;
+    for (const file of files) {
+      try {
+        await this.api.upload(open.id, file, folder);
+        added++;
+      } catch (err) {
+        failed.push(`${file.name}: ${(err as Error).message}`);
+      }
+      this.uploading--;
+    }
+    this.note = [added ? `Added ${added} ${added === 1 ? 'document' : 'documents'}.` : '', ...failed.map((f) => `Couldn’t add ${f}`)].filter(Boolean).join(' ');
+    await this.loadDocuments();
+  }
+
+  private rejected(files: File[]) {
+    this.note = `Folio can’t take ${files.map((f) => f.name).join(', ')}: it takes PDF, Word (.docx), HTML, Markdown and plain text.`;
+  }
+
+  private async openDocument(id: string) {
+    const open = this.open;
+    if (!open) return;
+    try {
+      this.doc = await this.api.document(open.id, id);
+      this.dialog = 'document';
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  private async download(version: number) {
+    const doc = this.doc;
+    if (!doc) return;
+    try {
+      const v = doc.versions.find((x) => x.number === version)!;
+      save(await this.api.original(doc.library, doc.id, version), v.filename);
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  private async newVersion(files: File[]) {
+    const doc = this.doc;
+    if (!doc || !files[0]) return;
+    this.uploading = 1;
+    try {
+      await this.api.addVersion(doc.library, doc.id, files[0]);
+      this.doc = await this.api.document(doc.library, doc.id);
+      this.note = `Added version ${this.doc.latest.number} of ${this.doc.title}.`;
+      await this.loadDocuments();
+    } catch (err) {
+      this.note = `Couldn’t add ${files[0].name}: ${(err as Error).message}`;
+    } finally {
+      this.uploading = 0;
+    }
+  }
+
+  private submitEditDocument: DialogSubmit = async (values) => {
+    const doc = this.doc!;
+    const folder = values.folder || null;
+    await this.api.updateDocument(doc.library, doc.id, { title: values.title.trim(), folder });
+    this.doc = undefined;
+    await this.loadDocuments();
+  };
+
+  private submitDeleteDocument: DialogSubmit = async () => {
+    const doc = this.doc!;
+    await this.api.deleteDocument(doc.library, doc.id);
+    this.doc = undefined;
+    this.documents = this.documents.filter((d) => d.id !== doc.id);
+  };
+
+  /** Every folder in the open library, by where it is, for moving a document. */
+  private folderOptions(): SelectOption[] {
+    const open = this.open;
+    if (!open) return [];
+    return [
+      { value: '', label: `${open.name} (the top)` },
+      ...open.folders
+        .map((f) => ({ value: f.id, label: folderTrail(open.folders, f.id).map((t) => t.name).join(' / ') }))
+        .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
+    ];
   }
 
   private tell() {
@@ -224,15 +361,27 @@ export class FolioApp extends LitElement {
         : html`<ui-state kind="empty" heading="No libraries here yet" body="A lead on this floor can start one."></ui-state>`;
     const trail = folderTrail(open.folders, this.folder);
     const here = trail.at(-1);
-    const inside: ListItem[] = open.folders
-      .filter((f) => f.parent === this.folder)
-      .map((f) => ({
+    const folders = open.folders.filter((f) => f.parent === this.folder);
+    const both = folders.length > 0 && this.documents.length > 0;
+    const inside: ListItem[] = [
+      ...folders.map((f) => ({
         id: f.id,
         title: f.name,
         icon: 'folder',
         meta: String(open.folders.filter((c) => c.parent === f.id).length || ''),
+        ...(both ? { group: 'Folders' } : {}),
         ...(this.mayChange(f) ? { actions: [{ id: 'rename', label: 'Rename' }, { id: 'remove', label: 'Remove' }] } : {}),
-      }));
+      })),
+      ...this.documents.map((d) => ({
+        id: `${DOC}${d.id}`,
+        title: d.title,
+        icon: 'document',
+        detail: documentLine(d),
+        meta: ago(d.updatedAt),
+        ...(both ? { group: 'Documents' } : {}),
+      })),
+    ];
+    const where = here?.name ?? open.name;
     return html`<div class="folio-main-inner" aria-busy=${this.opening ? 'true' : 'false'}>
       ${here
         ? html`<ol class="folio-trail" aria-label="Where you are">
@@ -254,15 +403,31 @@ export class FolioApp extends LitElement {
       </div>
       <ui-surface>
         <ui-list
-          label=${`In ${here?.name ?? open.name}`}
+          label=${`In ${where}`}
           density="compact"
-          .noun=${['folder', 'folders']}
+          .noun=${folders.length && !this.documents.length ? ['folder', 'folders'] : this.documents.length && !folders.length ? ['document', 'documents'] : ['item', 'items']}
           .items=${inside}
           empty=${here ? 'This folder is empty.' : 'This library is empty.'}
-          @ui-open=${(e: CustomEvent<{ item: ListItem }>) => this.goToFolder(e.detail.item.id)}
+          @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
+            const id = e.detail.item.id;
+            void (id.startsWith(DOC) ? this.openDocument(id.slice(DOC.length)) : this.goToFolder(id));
+          }}
           @ui-action=${this.onFolderAction}
         ></ui-list>
       </ui-surface>
+      ${open.can.addDocuments
+        ? html`<ui-drop-zone
+            heading=${`Drop files to add them to ${where}`}
+            hint=${`PDF, Word, HTML, Markdown or text, up to ${MAX_UPLOAD_MB} MB each`}
+            action="Choose files"
+            accept=${ACCEPT}
+            multiple
+            ?busy=${this.uploading > 0}
+            @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.upload(e.detail.files)}
+            @ui-reject=${(e: CustomEvent<{ files: File[] }>) => this.rejected(e.detail.files)}
+          ></ui-drop-zone>`
+        : nothing}
+      <p class="folio-note" role="status">${this.uploading ? `Adding ${this.uploading} ${this.uploading === 1 ? 'file' : 'files'}…` : this.note}</p>
     </div>`;
   }
 
@@ -313,6 +478,57 @@ export class FolioApp extends LitElement {
               <p>Only an empty folder can be removed.</p>
             </ui-dialog>`
           : nothing;
+      case 'document': {
+        const doc = this.doc;
+        if (!doc) return nothing;
+        const versions: ListItem[] = doc.versions.map((v) => ({
+          id: String(v.number),
+          title: `Version ${v.number}`,
+          icon: 'document',
+          detail: `${v.filename} · ${sizeWords(v.size)}`,
+          meta: ago(v.createdAt),
+          actions: [{ id: 'download', label: 'Download' }],
+        }));
+        return html`<ui-dialog open size="read" light eyebrow=${folderTrail(open?.folders ?? [], doc.folder).at(-1)?.name ?? open?.name ?? 'Document'}
+          heading=${doc.title} summary=${documentLine(doc)} cancel-label="Close" @ui-close=${() => {
+            close();
+            this.doc = undefined;
+          }}>
+          <ui-list label="Versions" density="compact" .noun=${['version', 'versions']} .items=${versions}
+            @ui-action=${(e: CustomEvent<{ item: ListItem }>) => void this.download(Number(e.detail.item.id))}></ui-list>
+          ${doc.can.change
+            ? html`<ui-drop-zone compact heading="Drop the next version here: it becomes the newest" action="Choose a file" accept=${ACCEPT}
+                  .multiple=${false} ?busy=${this.uploading > 0} @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.newVersion(e.detail.files)}
+                  @ui-reject=${(e: CustomEvent<{ files: File[] }>) => this.rejected(e.detail.files)}></ui-drop-zone>
+                <p class="folio-note" role="status">${this.uploading ? 'Adding the new version…' : this.note}</p>
+                <div class="folio-actions">
+                  <ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'edit-document')}>Rename or move</ui-button>
+                  <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-document')}>Delete</ui-button>
+                </div>`
+            : nothing}
+        </ui-dialog>`;
+      }
+      case 'edit-document':
+        return this.doc
+          ? html`<ui-dialog open eyebrow="Document" heading=${`Rename or move ${this.doc.title}`} action-label="Save" busy-label="Saving…" .submit=${this.submitEditDocument}
+              @ui-close=${() => {
+                close();
+                this.doc = undefined;
+              }}>
+              <ui-text-field slot="fields" name="title" label="Title" required maxlength="200" .value=${this.doc.title}></ui-text-field>
+              <ui-select slot="fields" name="folder" label="Folder" .options=${this.folderOptions()} .value=${this.doc.folder ?? ''}></ui-select>
+            </ui-dialog>`
+          : nothing;
+      case 'delete-document':
+        return this.doc
+          ? html`<ui-dialog open danger eyebrow="Document" heading=${`Delete ${this.doc.title}?`} action-label="Delete" busy-label="Deleting…" .submit=${this.submitDeleteDocument}
+              @ui-close=${() => {
+                close();
+                this.doc = undefined;
+              }}>
+              <p>It leaves this library, with all ${this.doc.versions.length} ${this.doc.versions.length === 1 ? 'version' : 'versions'}. The record of it stays in the audit log.</p>
+            </ui-dialog>`
+          : nothing;
       default:
         return nothing;
     }
@@ -335,6 +551,7 @@ export class FolioApp extends LitElement {
         folio-app .folio-crumb[aria-current] { color: var(--ink); }
         folio-app .folio-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
         folio-app .folio-actions { display: flex; gap: var(--space-2); }
+        folio-app .folio-note { margin: 0; min-height: 1.5em; font-size: var(--type-small); color: var(--ink-muted); }
       </style>
       ${this.rail()}
       <main class="folio-main">${this.main()}</main>

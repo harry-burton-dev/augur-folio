@@ -1,5 +1,8 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, signedCallers, type Caller, type CallerCheck, type CallerWorkspace } from '@augur/service-kit';
+import { auditFromEnv, type Audit } from './audit.ts';
+import { documentRoutes } from './documents.ts';
+import { MemoryObjectStore, type ObjectStore } from './objects.ts';
 import { BadParentError, MemoryFolioStore, NameTakenError, NotEmptyError, type FolioStore, type Library } from './store.ts';
 
 /** The major version of the API this service serves. Its routes go under /v1, as the platform's do. */
@@ -10,6 +13,12 @@ export interface Options {
   /** Checks the caller the gateway signed for Folio. In production it is on by default; in dev `x-user-*` headers are believed. */
   callers?: CallerCheck;
   store?: FolioStore;
+  /** Where uploaded files go: Folio's bucket. */
+  objects?: ObjectStore;
+  /** The platform's audit log. */
+  audit?: Audit;
+  /** The most one upload may be, in bytes. */
+  maxUploadBytes?: number;
 }
 
 /** What the caller may do with a library, so the app only offers what will work. */
@@ -18,9 +27,11 @@ export interface LibraryRights {
   manage: boolean;
   /** Make folders: anyone on the floor. */
   addFolders: boolean;
+  /** Upload documents: anyone on the floor. */
+  addDocuments: boolean;
 }
 
-type OnFloor = Caller & { workspace: CallerWorkspace };
+export type OnFloor = Caller & { workspace: CallerWorkspace };
 
 const NAME = { type: 'string', minLength: 1, maxLength: 80, pattern: '\\S' } as const;
 const FOLDER_NAME = { type: 'string', minLength: 1, maxLength: 80, pattern: '^(?=.*\\S)[^/\\\\]+$' } as const;
@@ -28,10 +39,13 @@ const DESCRIPTION = { type: 'string', maxLength: 500 } as const;
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] } as const;
 const FOLDER_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, folder: { type: 'string', maxLength: 64 } }, required: ['id', 'folder'] } as const;
 
-export const rightsOn = (caller: OnFloor): LibraryRights => ({ manage: caller.workspace.role === 'lead', addFolders: true });
+export const rightsOn = (caller: OnFloor): LibraryRights => ({ manage: caller.workspace.role === 'lead', addFolders: true, addDocuments: true });
 
-export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore() }: Options = {}) => {
+export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes }: Options = {}) => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+  const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
+  const recorded = (entry: Parameters<Audit>[0]) =>
+    record(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
   // Only the gateway's signed word says who is calling: headers anyone could send are dropped.
   app.addHook('onRequest', signedCallers(callers));
   app.get('/healthz', async () => health('folio', version, API_VERSION));
@@ -89,6 +103,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
           if (!caller || !leadsOnly(caller, reply)) return reply;
           try {
             const library = await store.createLibrary({ workspace: caller.workspace.id, name: req.body.name.trim(), description: req.body.description?.trim(), createdBy: caller.id });
+            await recorded({ actor: caller.id, action: 'library.created', target: library.id, workspace: library.workspace, detail: { name: library.name } });
             return reply.code(201).send(library);
           } catch (err) {
             return refused(err, reply);
@@ -126,6 +141,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         const library = await libraryFor(caller, req.params.id, reply);
         if (!library || !leadsOnly(caller, reply)) return reply;
         await store.archiveLibrary(library.id, caller.id);
+        await recorded({ actor: caller.id, action: 'library.archived', target: library.id, workspace: library.workspace, detail: { name: library.name } });
         return reply.code(204).send();
       });
 
@@ -187,6 +203,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
           return refused(err, reply);
         }
       });
+
+      await documentRoutes(app, { store, objects, audit: record, onFloor, libraryFor, refused, log: app.log, maxUploadBytes });
     },
     { prefix: `/${API_VERSION}` },
   );
