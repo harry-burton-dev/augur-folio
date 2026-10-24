@@ -5,9 +5,55 @@ export interface Library {
   workspace: string;
   name: string;
   description: string;
+  /** Anyone who may tag a document here may make new tags too. */
+  freeTags: boolean;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A tag: the org's when it has no library, else that library's own. */
+export interface Tag {
+  id: string;
+  workspace: string;
+  library?: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export type DocumentSort = 'title' | 'newest' | 'updated';
+export type Since = 'week' | 'month' | 'quarter' | 'year';
+
+/** A set of filters, as a saved view keeps it. */
+export interface ViewQuery {
+  folder?: string;
+  tags?: string[];
+  types?: string[];
+  authors?: string[];
+  since?: Since;
+  sort?: DocumentSort;
+}
+
+export interface SavedView {
+  id: string;
+  library: string;
+  name: string;
+  query: ViewQuery;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Person {
+  id: string;
+  name: string;
+}
+
+/** Which documents to list: a view's filters, whether to look in every folder below, and the page. */
+export interface ListQuery extends ViewQuery {
+  below?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
 export interface Folder {
@@ -23,6 +69,8 @@ export interface LibraryRights {
   manage: boolean;
   addFolders: boolean;
   addDocuments: boolean;
+  /** Make new tags: leads, or anyone when the library takes free tags. */
+  addTags: boolean;
 }
 
 export interface DocumentVersion {
@@ -47,7 +95,9 @@ export interface FolioDocument {
   createdAt: string;
   updatedAt: string;
   latest: DocumentVersion;
-  /** Whether the caller may add versions, retitle, move or delete it. */
+  /** Tag ids: the org's or its library's. */
+  tags: string[];
+  /** Whether the caller may add versions, retag, retitle, move or delete it. */
   can: { change: boolean };
 }
 
@@ -67,6 +117,15 @@ export const FILE_TYPES: Record<string, { type: string; word: string }> = {
   '.txt': { type: 'text/plain', word: 'Text' },
 };
 
+/** File kinds as the list filters by them. */
+export const KINDS: { value: string; label: string }[] = [
+  { value: 'pdf', label: 'PDF' },
+  { value: 'word', label: 'Word' },
+  { value: 'html', label: 'HTML' },
+  { value: 'markdown', label: 'Markdown' },
+  { value: 'text', label: 'Text' },
+];
+
 /** For a drop zone's or file input's `accept`. */
 export const ACCEPT = Object.keys(FILE_TYPES).join(',');
 export const MAX_UPLOAD_MB = 200;
@@ -80,8 +139,28 @@ export const sizeWords = (bytes: number) =>
 
 export interface OpenLibrary extends Library {
   folders: Folder[];
+  /** The org's tags and the library's own, by name. */
+  tags: Tag[];
+  /** Who added its documents. */
+  authors: Person[];
+  views: SavedView[];
   can: LibraryRights;
 }
+
+/** The address a list of documents is asked for at: each value of a filter once. */
+export const listParams = (q: ListQuery) => {
+  const params = new URLSearchParams();
+  if (q.folder) params.set('folder', q.folder);
+  if (q.below) params.set('below', 'true');
+  for (const t of q.tags ?? []) params.append('tag', t);
+  for (const t of q.types ?? []) params.append('type', t);
+  for (const a of q.authors ?? []) params.append('author', a);
+  if (q.since) params.set('since', q.since);
+  if (q.sort && q.sort !== 'title') params.set('sort', q.sort);
+  if (q.limit) params.set('limit', String(q.limit));
+  if (q.offset) params.set('offset', String(q.offset));
+  return params;
+};
 
 /** Folio's service said no; `message` is meant for people. */
 export class FolioError extends Error {
@@ -119,10 +198,11 @@ export class FolioApi {
   }
 
   /** Sends a file as it is, streamed, typed by its ending. */
-  private async sendFile<T>(path: string, file: File, query: Record<string, string | undefined>): Promise<T> {
+  private async sendFile<T>(path: string, file: File, query: Record<string, string | undefined>, tags: readonly string[] = []): Promise<T> {
     const kind = fileTypeOf(file.name);
     if (!kind) throw new FolioError('Folio takes PDF, Word (.docx), HTML, Markdown and plain text files.', 415, 'unsupported-type');
     const params = new URLSearchParams(Object.entries({ filename: file.name, ...query }).filter((e): e is [string, string] => Boolean(e[1])));
+    for (const t of tags) params.append('tag', t);
     return this.answer<T>(await this.fetchOnFloor(`/api/folio/v1${path}?${params}`, { method: 'POST', headers: { 'content-type': kind.type }, body: file }));
   }
 
@@ -138,7 +218,7 @@ export class FolioApi {
     return this.call<Library>('POST', '/libraries', { name, ...(description ? { description } : {}) });
   }
 
-  updateLibrary(id: string, change: { name?: string; description?: string }) {
+  updateLibrary(id: string, change: { name?: string; description?: string; freeTags?: boolean }) {
     return this.call<Library>('PATCH', `/libraries/${encodeURIComponent(id)}`, change);
   }
 
@@ -158,16 +238,51 @@ export class FolioApi {
     return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/folders/${encodeURIComponent(id)}`);
   }
 
-  documents(library: string, folder?: string) {
-    return this.call<{ documents: FolioDocument[] }>('GET', `/libraries/${encodeURIComponent(library)}/documents${folder ? `?folder=${encodeURIComponent(folder)}` : ''}`);
+  documents(library: string, query: ListQuery = {}) {
+    const params = listParams(query).toString();
+    return this.call<{ documents: FolioDocument[]; total: number }>('GET', `/libraries/${encodeURIComponent(library)}/documents${params ? `?${params}` : ''}`);
   }
 
   document(library: string, id: string) {
     return this.call<OpenDocument>('GET', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(id)}`);
   }
 
-  upload(library: string, file: File, folder?: string) {
-    return this.sendFile<FolioDocument>(`/libraries/${encodeURIComponent(library)}/documents`, file, { folder });
+  upload(library: string, file: File, folder?: string, tags: readonly string[] = []) {
+    return this.sendFile<FolioDocument>(`/libraries/${encodeURIComponent(library)}/documents`, file, { folder }, tags);
+  }
+
+  setTags(library: string, document: string, tags: string[]) {
+    return this.call<FolioDocument>('PUT', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/tags`, { tags });
+  }
+
+  /** The org's tags, and whether the caller keeps them (a lead on the org's floor). */
+  orgTags() {
+    return this.call<{ tags: Tag[]; can: { manage: boolean } }>('GET', '/tags');
+  }
+
+  /** A tag for the library, or for the org when `library` is undefined. */
+  createTag(library: string | undefined, name: string) {
+    return this.call<Tag>('POST', library ? `/libraries/${encodeURIComponent(library)}/tags` : '/tags', { name });
+  }
+
+  renameTag(tag: Tag, name: string) {
+    return this.call<Tag>('PATCH', `${tag.library ? `/libraries/${encodeURIComponent(tag.library)}` : ''}/tags/${encodeURIComponent(tag.id)}`, { name });
+  }
+
+  deleteTag(tag: Tag) {
+    return this.call<void>('DELETE', `${tag.library ? `/libraries/${encodeURIComponent(tag.library)}` : ''}/tags/${encodeURIComponent(tag.id)}`);
+  }
+
+  createView(library: string, name: string, query: ViewQuery) {
+    return this.call<SavedView>('POST', `/libraries/${encodeURIComponent(library)}/views`, { name, query });
+  }
+
+  updateView(library: string, id: string, change: { name?: string; query?: ViewQuery }) {
+    return this.call<SavedView>('PATCH', `/libraries/${encodeURIComponent(library)}/views/${encodeURIComponent(id)}`, change);
+  }
+
+  deleteView(library: string, id: string) {
+    return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/views/${encodeURIComponent(id)}`);
   }
 
   addVersion(library: string, document: string, file: File) {
@@ -190,20 +305,28 @@ export class FolioApi {
   }
 }
 
-/** Where a path inside Folio points: `/libraries`, `/libraries/new`, `/libraries/<id>`, `/libraries/<id>/<folder>`. */
+/**
+ * Where a path inside Folio points: `/libraries`, `/libraries/new`, `/libraries/<id>`,
+ * `/libraries/<id>/<folder>`, or a saved view, `/libraries/<id>/views/<view>`.
+ */
 export interface Place {
   library?: string;
   folder?: string;
+  view?: string;
   /** Open "New library" straight away (the menu's item). */
   adding: boolean;
 }
 
 export const placeFor = (path: string): Place => {
-  const [first, second, third] = path.split('/').filter(Boolean).map(decodeURIComponent);
+  const [first, second, third, fourth] = path.split('/').filter(Boolean).map(decodeURIComponent);
   if (first !== 'libraries' || !second) return { adding: false };
   if (second === 'new') return { adding: true };
+  if (third === 'views') return { library: second, ...(fourth ? { view: fourth } : {}), adding: false };
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder }: Omit<Place, 'adding'>) =>
-  library ? `/libraries/${encodeURIComponent(library)}${folder ? `/${encodeURIComponent(folder)}` : ''}` : '/libraries';
+export const pathFor = ({ library, folder, view }: Omit<Place, 'adding'>) => {
+  if (!library) return '/libraries';
+  const at = `/libraries/${encodeURIComponent(library)}`;
+  return view ? `${at}/views/${encodeURIComponent(view)}` : folder ? `${at}/${encodeURIComponent(folder)}` : at;
+};

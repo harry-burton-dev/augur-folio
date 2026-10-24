@@ -1,8 +1,10 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BadParentError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, type FolioStore, type NewVersion } from './store.ts';
+import { BadParentError, BadTagError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, type FolioStore, type NewVersion } from './store.ts';
 
-const file = (doc: string, id: string, size = 10, by = 'u-1'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType: 'application/pdf', size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
+const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
+const titles = async (store: FolioStore, library: string, query = {}) => (await store.documents(library, query)).documents.map((d) => d.title);
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 /** The same behaviour from every store. */
 const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = async () => {}) => {
@@ -73,8 +75,8 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(travel.folder).toBeUndefined();
     expect(travel.latest).not.toHaveProperty('objectKey');
     await store.createDocument({ id: 'd-leave', library: lib.id, folder: hr.id, title: 'Annual leave', createdBy: 'u-2' }, file('d-leave', 'v-2'));
-    expect((await store.documents(lib.id)).map((d) => d.title)).toEqual(['Travel policy']);
-    expect((await store.documents(lib.id, hr.id)).map((d) => d.title)).toEqual(['Annual leave']);
+    expect(await titles(store, lib.id)).toEqual(['Travel policy']);
+    expect(await titles(store, lib.id, { folder: hr.id })).toEqual(['Annual leave']);
     const [second, third] = await Promise.all([store.addVersion('d-travel', file('d-travel', 'v-3', 20, 'u-2')), store.addVersion('d-travel', file('d-travel', 'v-4', 30))]);
     expect([second?.number, third?.number].sort()).toEqual([2, 3]);
     expect((await store.versions('d-travel')).map((v) => v.number)).toEqual([3, 2, 1]);
@@ -104,9 +106,133 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.deleteDocument('d-1', 'u-1')).toBe(true);
     expect(await store.deleteDocument('d-1', 'u-1')).toBe(false);
     expect(await store.document('d-1')).toBeUndefined();
-    expect(await store.documents(lib.id)).toEqual([]);
+    expect(await store.documents(lib.id)).toEqual({ documents: [], total: 0 });
     expect(await store.updateDocument('d-1', { title: 'Back' })).toBeUndefined();
     expect(await store.deleteFolder(lib.id, hr.id)).toBe(true);
+  });
+
+  it('keeps the org’s tags and each library’s, one of each name, and takes free tags only when asked', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', name: 'Reports', createdBy: 'u-1' });
+    expect(lib.freeTags).toBe(false);
+    expect((await store.updateLibrary(lib.id, { freeTags: true }))?.freeTags).toBe(true);
+    expect((await store.library(lib.id))?.freeTags).toBe(true);
+    const policy = await store.createTag({ workspace: 'w-org', name: 'Policy', createdBy: 'u-1' });
+    const travel = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Travel', createdBy: 'u-1' });
+    await store.createTag({ workspace: 'w-fin', library: other.id, name: 'Travel', createdBy: 'u-1' });
+    await expect(store.createTag({ workspace: 'w-fin', library: lib.id, name: 'travel', createdBy: 'u-1' })).rejects.toBeInstanceOf(NameTakenError);
+    await expect(store.createTag({ workspace: 'w-fin', library: lib.id, name: 'POLICY', createdBy: 'u-1' })).rejects.toThrow('Policy is already one of the org’s tags.');
+    await expect(store.createTag({ workspace: 'w-org', name: 'policy', createdBy: 'u-1' })).rejects.toBeInstanceOf(NameTakenError);
+    expect((await store.tags(lib.id)).map((t) => [t.name, t.library ?? 'org'])).toEqual([['Policy', 'org'], ['Travel', lib.id]]);
+    expect((await store.orgTags()).map((t) => t.id)).toEqual([policy.id]);
+    expect(await store.renameTag(travel.id, 'Travel and expenses')).toMatchObject({ name: 'Travel and expenses', library: lib.id });
+    await expect(store.renameTag(travel.id, 'Policy')).rejects.toBeInstanceOf(NameTakenError);
+    expect(await store.renameTag('nope', 'X')).toBeUndefined();
+  });
+
+  it('tags documents with the org’s and their library’s tags only', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', name: 'Reports', createdBy: 'u-1' });
+    const policy = await store.createTag({ workspace: 'w-org', name: 'Policy', createdBy: 'u-1' });
+    const travel = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Travel', createdBy: 'u-1' });
+    const theirs = await store.createTag({ workspace: 'w-fin', library: other.id, name: 'Weekly', createdBy: 'u-1' });
+    const doc = await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel policy', createdBy: 'u-1', tags: [travel.id] }, file('d-1', 'v-1'));
+    expect(doc.tags).toEqual([travel.id]);
+    await expect(store.createDocument({ id: 'd-2', library: lib.id, title: 'X', createdBy: 'u-1', tags: [theirs.id] }, file('d-2', 'v-2'))).rejects.toBeInstanceOf(BadTagError);
+    expect(await store.document('d-2')).toBeUndefined();
+    expect((await store.setDocumentTags('d-1', [policy.id, travel.id, policy.id]))?.tags).toEqual([policy.id, travel.id].sort());
+    await expect(store.setDocumentTags('d-1', [theirs.id])).rejects.toBeInstanceOf(BadTagError);
+    expect((await store.document('d-1'))?.tags).toEqual([policy.id, travel.id].sort());
+    expect(await store.setDocumentTags('nope', [])).toBeUndefined();
+    expect(await store.deleteTag(travel.id)).toBe(true);
+    expect(await store.deleteTag(travel.id)).toBe(false);
+    expect((await store.document('d-1'))?.tags).toEqual([policy.id]);
+  });
+
+  it('takes a library’s tags into a new org tag of the same name, documents and views too', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', name: 'Reports', createdBy: 'u-1' });
+    const mine = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'finance', createdBy: 'u-1' });
+    const theirs = await store.createTag({ workspace: 'w-fin', library: other.id, name: 'Finance', createdBy: 'u-1' });
+    const keep = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Budget', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Budget', createdBy: 'u-1', tags: [mine.id, keep.id] }, file('d-1', 'v-1'));
+    await store.createDocument({ id: 'd-2', library: other.id, title: 'Q3', createdBy: 'u-1', tags: [theirs.id] }, file('d-2', 'v-2'));
+    const view = await store.createView({ library: lib.id, name: 'Money', query: { tags: [mine.id, keep.id], sort: 'newest' }, createdBy: 'u-1' });
+    const org = await store.createTag({ workspace: 'w-org', name: 'Finance', createdBy: 'u-9' });
+    expect((await store.tags(lib.id)).map((t) => t.name)).toEqual(['Budget', 'Finance']);
+    expect(await store.tag(mine.id)).toBeUndefined();
+    expect((await store.document('d-1'))?.tags).toEqual([org.id, keep.id].sort());
+    expect((await store.document('d-2'))?.tags).toEqual([org.id]);
+    expect((await store.view(view.id))?.query).toEqual({ tags: [org.id, keep.id], sort: 'newest' });
+    // And renaming an org tag onto a library's takes that one in too.
+    const tax = await store.createTag({ workspace: 'w-org', name: 'Tax', createdBy: 'u-9' });
+    expect(await store.renameTag(tax.id, 'budget')).toMatchObject({ name: 'budget' });
+    expect((await store.document('d-1'))?.tags).toEqual([org.id, tax.id].sort());
+    expect((await store.view(view.id))?.query.tags).toEqual([org.id, tax.id]);
+    await store.deleteTag(org.id);
+    expect((await store.view(view.id))?.query.tags).toEqual([tax.id]);
+  });
+
+  it('filters by tags, kinds, authors and time, inside a folder and below it, sorted and paged', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    const leave = await store.createFolder({ library: lib.id, parent: hr.id, name: 'Leave', createdBy: 'u-1' });
+    const policy = await store.createTag({ workspace: 'w-org', name: 'Policy', createdBy: 'u-1' });
+    const draft = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Draft', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Code of conduct', createdBy: 'u-1', tags: [policy.id] }, file('d-1', 'v-1'));
+    await tick();
+    await store.createDocument({ id: 'd-2', library: lib.id, folder: hr.id, title: 'Hiring', createdBy: 'u-2', tags: [policy.id, draft.id] }, file('d-2', 'v-2', 10, 'u-2', 'text/markdown'));
+    await tick();
+    await store.createDocument({ id: 'd-3', library: lib.id, folder: leave.id, title: 'Annual leave', createdBy: 'u-1', tags: [draft.id] }, file('d-3', 'v-3'));
+    await tick();
+    const mid = new Date().toISOString();
+    await tick();
+    await store.updateDocument('d-1', { title: 'Conduct' });
+
+    expect(await titles(store, lib.id, { below: true })).toEqual(['Annual leave', 'Conduct', 'Hiring']);
+    expect(await titles(store, lib.id, { folder: hr.id, below: true })).toEqual(['Annual leave', 'Hiring']);
+    expect(await titles(store, lib.id, { folder: hr.id })).toEqual(['Hiring']);
+    expect(await titles(store, lib.id, { below: true, tags: [policy.id] })).toEqual(['Conduct', 'Hiring']);
+    expect(await titles(store, lib.id, { below: true, tags: [policy.id, draft.id] })).toEqual(['Hiring']);
+    expect(await titles(store, lib.id, { below: true, mediaTypes: ['text/markdown'] })).toEqual(['Hiring']);
+    expect(await titles(store, lib.id, { below: true, authors: ['u-1'] })).toEqual(['Annual leave', 'Conduct']);
+    expect(await titles(store, lib.id, { below: true, from: mid })).toEqual(['Conduct']);
+    expect(await titles(store, lib.id, { below: true, to: mid })).toEqual(['Annual leave', 'Hiring']);
+    expect(await titles(store, lib.id, { below: true, sort: 'newest' })).toEqual(['Annual leave', 'Hiring', 'Conduct']);
+    expect(await titles(store, lib.id, { below: true, sort: 'updated' })).toEqual(['Conduct', 'Annual leave', 'Hiring']);
+    const page = await store.documents(lib.id, { below: true, sort: 'newest', limit: 2, offset: 1 });
+    expect([page.documents.map((d) => d.title), page.total]).toEqual([['Hiring', 'Conduct'], 3]);
+    expect((await store.documents(lib.id, { below: true, offset: 5 })).total).toBe(3);
+    expect(await titles(store, lib.id, { folder: 'elsewhere', below: true })).toEqual([]);
+  });
+
+  it('names authors by the name Folio last saw', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    await store.notePerson({ id: 'u-2', name: 'Sam' });
+    await store.notePerson({ id: 'u-1', name: 'Alex' });
+    await store.notePerson({ id: 'u-1', name: 'Alex Rivera' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'A', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'B', createdBy: 'u-2' }, file('d-2', 'v-2'));
+    await store.createDocument({ id: 'd-3', library: lib.id, title: 'C', createdBy: 'u-3' }, file('d-3', 'v-3'));
+    await store.deleteDocument('d-3', 'u-1');
+    expect(await store.authors(lib.id)).toEqual([{ id: 'u-1', name: 'Alex Rivera' }, { id: 'u-2', name: 'Sam' }]);
+  });
+
+  it('saves views in a library, one of each name', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', name: 'Reports', createdBy: 'u-1' });
+    const view = await store.createView({ library: lib.id, name: 'Recent PDFs', query: { types: ['pdf'], since: 'month', sort: 'updated' }, createdBy: 'u-2' });
+    await store.createView({ library: other.id, name: 'Recent PDFs', query: {}, createdBy: 'u-2' });
+    await store.createView({ library: lib.id, name: 'All', query: {}, createdBy: 'u-2' });
+    await expect(store.createView({ library: lib.id, name: 'recent pdfs', query: {}, createdBy: 'u-1' })).rejects.toBeInstanceOf(NameTakenError);
+    expect((await store.views(lib.id)).map((v) => v.name)).toEqual(['All', 'Recent PDFs']);
+    expect(await store.view(view.id)).toMatchObject({ library: lib.id, createdBy: 'u-2', query: { types: ['pdf'], since: 'month', sort: 'updated' } });
+    expect(await store.updateView(view.id, { name: 'PDFs this month' })).toMatchObject({ name: 'PDFs this month', query: { since: 'month' } });
+    expect(await store.updateView(view.id, { query: { sort: 'title' } })).toMatchObject({ name: 'PDFs this month', query: { sort: 'title' } });
+    await expect(store.updateView(view.id, { name: 'all' })).rejects.toBeInstanceOf(NameTakenError);
+    expect(await store.deleteView(view.id)).toBe(true);
+    expect(await store.deleteView(view.id)).toBe(false);
+    expect(await store.updateView(view.id, { name: 'X' })).toBeUndefined();
   });
 };
 
@@ -129,13 +255,13 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
   );
 
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views']);
   });
 });
