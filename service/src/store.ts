@@ -111,6 +111,58 @@ export interface FolioDocument {
   latest: DocumentVersion;
   /** Its tags, by id: the org's or its library's. */
   tags: string[];
+  /** Where it is in being published. */
+  state: DocumentState;
+  /** The version out now, when it's published. */
+  published?: Publication;
+}
+
+/** Where a document is in being published: never yet, out to an audience now, or taken back. */
+export type DocumentState = 'draft' | 'published' | 'withdrawn';
+export const DOCUMENT_STATES: readonly DocumentState[] = ['draft', 'published', 'withdrawn'];
+
+/**
+ * One version put out to an audience, who may then read that version (and only
+ * that one) from wherever they are, and are told it's there. Publishing a
+ * document again ends the publication before it; so does withdrawing it.
+ */
+export interface Publication {
+  id: string;
+  document: string;
+  library: string;
+  /** The version's number. */
+  version: number;
+  /** Who it went to: `team:<id>`, `tree:<id>` or `org`. */
+  audience: string[];
+  /** What the publisher said about it, shown with it. */
+  note?: string;
+  publishedBy: string;
+  publishedAt: string;
+  /** How it ended, if it has: withdrawn, or replaced by a later publication. */
+  ended?: { as: 'withdrawn' | 'replaced'; by: string; at: string; reason?: string };
+}
+
+/** Who a version can be published to: teams, a team and those below it, or the org. People are let in by sharing. */
+export const AUDIENCE = /^(?:(?:team|tree):[A-Za-z0-9._@-]{1,100}|org)$/;
+
+/**
+ * What Folio tells other apps has happened, through the platform's events
+ * (docs/domain-events.md). Payloads carry ids, never titles or text: a
+ * follower that needs more asks Folio's API, as someone who may see it.
+ */
+export const TOPICS = {
+  versionCreated: 'folio.document.version.created',
+  published: 'folio.document.published',
+  withdrawn: 'folio.document.withdrawn',
+  deleted: 'folio.document.deleted',
+  readersChanged: 'folio.document.readers.changed',
+} as const;
+
+/** An event waiting in the outbox. */
+export interface OutboxEvent {
+  topic: string;
+  workspace: string;
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -152,6 +204,8 @@ export interface DocumentQuery {
   /** Changed before this time (ISO). */
   to?: string;
   sort?: DocumentSort;
+  /** Is in one of these states. */
+  states?: DocumentState[];
   limit?: number;
   offset?: number;
   /** Only documents someone who stands for these principals may read. */
@@ -175,6 +229,7 @@ export interface ViewQuery {
   from?: string;
   to?: string;
   sort?: DocumentSort;
+  states?: DocumentState[];
 }
 
 /** A filter set saved in a library, for everyone there, in its side rail. */
@@ -330,6 +385,20 @@ export interface FolioStore {
   readers(document: string): Promise<string[]>;
   /** What has been shared with these principals, in libraries on floors other than `except`. */
   shared(principals: readonly string[], except: string): Promise<Shared>;
+  /** Publishes a version to an audience, ending the publication before it. Undefined when there's no such document or version. */
+  publish(input: { document: string; version: number; audience: string[]; note?: string; by: string }): Promise<Publication | undefined>;
+  /** Ends the document's publication; undefined when nothing was out. */
+  withdraw(input: { document: string; by: string; reason?: string }): Promise<Publication | undefined>;
+  /** A document's publications, newest first. */
+  publications(document: string): Promise<Publication[]>;
+  /** What is out now to anyone who stands for these principals, newest first, with each one's library's name. */
+  publishedTo(principals: readonly string[], page?: { limit?: number; offset?: number }): Promise<PublishedPage>;
+}
+
+/** Documents published to someone, newest first, and how many there are in all. */
+export interface PublishedPage {
+  documents: (FolioDocument & { published: Publication; libraryName: string })[];
+  total: number;
 }
 
 const sameName = (a: string, b: string) => a.toLocaleLowerCase() === b.toLocaleLowerCase();
@@ -353,6 +422,9 @@ const byTitle = (a: FolioDocument, b: FolioDocument) => a.title.localeCompare(b.
 const newestFirst = (key: 'createdAt' | 'updatedAt') => (a: FolioDocument, b: FolioDocument) => b[key].localeCompare(a[key]) || b.id.localeCompare(a.id);
 const ORDER: Record<DocumentSort, (a: FolioDocument, b: FolioDocument) => number> = { title: byTitle, newest: newestFirst('createdAt'), updated: newestFirst('updatedAt') };
 const publicVersion = ({ objectKey: _, ...version }: StoredVersion): DocumentVersion => version;
+const copyPublication = (p: Publication): Publication => ({ ...p, audience: [...p.audience], ...(p.ended ? { ended: { ...p.ended } } : {}) });
+/** A document's state, from its newest publication. A replaced one always has a newer one. */
+const stateOf = (last: Publication | undefined): DocumentState => (!last ? 'draft' : last.ended ? 'withdrawn' : 'published');
 
 /** What a document's versions show of a rendition. */
 const readerOf = (r: Pick<Rendition, 'state' | 'error' | 'pages' | 'thumbnailKey' | 'engine'>): ReaderState => ({
@@ -392,7 +464,7 @@ const pageOf = (query: DocumentQuery) => ({ limit: Math.min(query.limit ?? MAX_P
 export class MemoryFolioStore implements FolioStore {
   private readonly shelves = new Map<string, Library & { archivedAt?: string }>();
   private readonly folderList: Folder[] = [];
-  private readonly docs = new Map<string, Omit<FolioDocument, 'latest' | 'tags'> & { deletedAt?: string }>();
+  private readonly docs = new Map<string, Omit<FolioDocument, 'latest' | 'tags' | 'state' | 'published'> & { deletedAt?: string }>();
   private readonly versionList: Omit<StoredVersion, 'reader'>[] = [];
   private readonly renditions = new Map<string, Rendition>();
   private readonly tagList: Tag[] = [];
@@ -400,6 +472,9 @@ export class MemoryFolioStore implements FolioStore {
   private readonly viewList: SavedView[] = [];
   private readonly seen = new Map<string, string>();
   private readonly grantList: Grant[] = [];
+  private readonly pubs: Publication[] = [];
+  /** What Folio would have told other apps, oldest first: there's no relay without Postgres. */
+  readonly outbox: OutboxEvent[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
   onQueued?: (version: StoredVersion) => Promise<void>;
 
@@ -471,10 +546,21 @@ export class MemoryFolioStore implements FolioStore {
     return true;
   }
 
-  private withLatest(doc: Omit<FolioDocument, 'latest' | 'tags'> & { deletedAt?: string }): FolioDocument {
+  private withLatest(doc: Omit<FolioDocument, 'latest' | 'tags' | 'state' | 'published'> & { deletedAt?: string }): FolioDocument {
     const { deletedAt: _, ...rest } = doc;
     const latest = this.versionList.filter((v) => v.document === doc.id).reduce((a, b) => (b.number > a.number ? b : a));
-    return { ...rest, latest: publicVersion(this.withReader(latest)), tags: [...(this.docTags.get(doc.id) ?? [])].sort() };
+    const [last] = this.publicationsOf(doc.id);
+    const published = last && !last.ended ? { published: copyPublication(last) } : {};
+    return { ...rest, latest: publicVersion(this.withReader(latest)), tags: [...(this.docTags.get(doc.id) ?? [])].sort(), state: stateOf(last), ...published };
+  }
+
+  /** A document's publications, newest first, as kept. */
+  private publicationsOf(document: string) {
+    return this.pubs.filter((p) => p.document === document).reverse();
+  }
+
+  private tell(topic: string, workspace: string, payload: Record<string, unknown>) {
+    this.outbox.push({ topic, workspace, payload });
   }
 
   private withReader(version: Omit<StoredVersion, 'reader'>): StoredVersion {
@@ -513,7 +599,8 @@ export class MemoryFolioStore implements FolioStore {
           (!query.mediaTypes?.length || query.mediaTypes.includes(d.latest.mediaType)) &&
           (!query.authors?.length || query.authors.includes(d.createdBy)) &&
           (!query.from || d.updatedAt >= new Date(query.from).toISOString()) &&
-          (!query.to || d.updatedAt < new Date(query.to).toISOString()),
+          (!query.to || d.updatedAt < new Date(query.to).toISOString()) &&
+          (!query.states?.length || query.states.includes(d.state)),
       )
       .sort(ORDER[query.sort ?? 'title']);
     const { limit, offset } = pageOf(query);
@@ -547,6 +634,7 @@ export class MemoryFolioStore implements FolioStore {
     this.versionList.push({ ...first, document: id, number: 1, createdAt: now });
     this.queue(first.id, now);
     if (tags.length) this.docTags.set(id, new Set(tags));
+    this.tell(TOPICS.versionCreated, shelf.workspace, { document: id, library, version: 1 });
     return this.withLatest(this.docs.get(id)!);
   }
 
@@ -558,6 +646,7 @@ export class MemoryFolioStore implements FolioStore {
     this.versionList.push(stored);
     this.queue(stored.id, stored.createdAt);
     doc.updatedAt = stored.createdAt;
+    this.tell(TOPICS.versionCreated, doc.workspace, { document, library: doc.library, version: number });
     return publicVersion(this.withReader(stored));
   }
 
@@ -578,6 +667,7 @@ export class MemoryFolioStore implements FolioStore {
     const doc = this.docs.get(id);
     if (!doc || doc.deletedAt) return false;
     doc.deletedAt = new Date().toISOString();
+    this.tell(TOPICS.deleted, doc.workspace, { document: id, library: doc.library });
     return true;
   }
 
@@ -726,10 +816,12 @@ export class MemoryFolioStore implements FolioStore {
   }
 
   async setGrant({ library, document, principal, level, by }: { library: string; document?: string; principal: string; level: Level | null; by: string }) {
+    const shelf = await this.library(library);
+    if (level && (!shelf || (document && this.docs.get(document)?.library !== library))) throw new BadParentError('There’s no such library or document.');
     const at = this.grantList.findIndex((g) => g.library === library && g.document === document && g.principal === principal);
     if (at >= 0) this.grantList.splice(at, 1);
+    if (shelf) this.tell(TOPICS.readersChanged, shelf.workspace, { library, ...(document ? { document } : {}) });
     if (!level) return undefined;
-    if (!(await this.library(library)) || (document && this.docs.get(document)?.library !== library)) throw new BadParentError('There’s no such library or document.');
     const grant: Grant = { library, ...(document ? { document } : {}), principal, level, createdBy: by, createdAt: new Date().toISOString() };
     this.grantList.push(grant);
     return { ...grant };
@@ -758,6 +850,46 @@ export class MemoryFolioStore implements FolioStore {
       })
       .sort(byTitle);
     return { libraries, documents };
+  }
+
+  async publish({ document, version, audience, note, by }: { document: string; version: number; audience: string[]; note?: string; by: string }) {
+    const doc = this.docs.get(document);
+    if (!doc || doc.deletedAt || !this.versionList.some((v) => v.document === document && v.number === version)) return undefined;
+    const at = new Date().toISOString();
+    const [last] = this.publicationsOf(document);
+    if (last && !last.ended) last.ended = { as: 'replaced', by, at };
+    const publication: Publication = { id: randomUUID(), document, library: doc.library, version, audience: [...new Set(audience)].sort(), ...(note ? { note } : {}), publishedBy: by, publishedAt: at };
+    this.pubs.push(publication);
+    this.tell(TOPICS.published, doc.workspace, { document, library: doc.library, version, publication: publication.id, audience: publication.audience });
+    this.tell(TOPICS.readersChanged, doc.workspace, { library: doc.library, document });
+    return copyPublication(publication);
+  }
+
+  async withdraw({ document, by, reason }: { document: string; by: string; reason?: string }) {
+    const doc = this.docs.get(document);
+    const [last] = this.publicationsOf(document);
+    if (!doc || doc.deletedAt || !last || last.ended) return undefined;
+    last.ended = { as: 'withdrawn', by, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
+    this.tell(TOPICS.withdrawn, doc.workspace, { document, library: doc.library, version: last.version, publication: last.id });
+    this.tell(TOPICS.readersChanged, doc.workspace, { library: doc.library, document });
+    return copyPublication(last);
+  }
+
+  async publications(document: string) {
+    return this.publicationsOf(document).map(copyPublication);
+  }
+
+  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number } = {}): Promise<PublishedPage> {
+    const live = this.pubs
+      .filter((p) => !p.ended && p.audience.some((a) => principals.includes(a)))
+      .flatMap((p) => {
+        const doc = this.docs.get(p.document);
+        const shelf = this.shelves.get(p.library);
+        return doc && !doc.deletedAt && shelf && !shelf.archivedAt ? [{ ...this.withLatest(doc), published: copyPublication(p), libraryName: shelf.name }] : [];
+      })
+      .sort((a, b) => b.published.publishedAt.localeCompare(a.published.publishedAt) || b.id.localeCompare(a.id));
+    const { limit, offset } = pageOf(page);
+    return { documents: live.slice(offset, offset + limit), total: live.length };
   }
 }
 
@@ -925,6 +1057,43 @@ export const migrations: { id: string; sql: string }[] = [
       insert into folio.readers (document_id, workspace_id, library_id, principals)
         select d.id, d.workspace_id, d.library_id, array[l.floor_principal] from folio.documents d join folio.libraries l on l.id = d.library_id;`,
   },
+  {
+    id: '006_publishing',
+    sql: `
+      -- A version put out to an audience. At most one is out at a time for each document;
+      -- publishing again ends it as replaced, withdrawing ends it as withdrawn. Rows are never removed.
+      create table folio.publications (
+        id text primary key,
+        seq bigint generated always as identity,
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        document_id text not null references folio.documents (id),
+        version_id text not null references folio.document_versions (id),
+        version_number integer not null,
+        audience text[] not null check (cardinality(audience) > 0),
+        note text,
+        published_by text not null,
+        published_at timestamptz not null default now(),
+        ended_as text check (ended_as in ('withdrawn', 'replaced')),
+        ended_by text,
+        ended_at timestamptz,
+        end_reason text
+      );
+      create unique index publications_live on folio.publications (document_id) where ended_at is null;
+      create index publications_audience on folio.publications using gin (audience) where ended_at is null;
+      create index publications_document on folio.publications (document_id, seq desc);
+      -- What Folio tells other apps, sent by the outbox relay once the change commits (docs/domain-events.md).
+      create table folio.outbox (
+        id bigint generated always as identity primary key,
+        event_id text not null unique default gen_random_uuid()::text,
+        topic text not null,
+        workspace_id text,
+        payload jsonb not null,
+        created_at timestamptz not null default now(),
+        sent_at timestamptz
+      );
+      create index outbox_unsent on folio.outbox (id) where sent_at is null;`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
@@ -984,8 +1153,37 @@ type DocumentRow = {
   updated_at: Date;
   latest: Omit<VersionRow, 'created_at' | 'size_bytes'> & { created_at: string; size_bytes: number };
   tags: string[];
+  /** Its newest publication, as JSON. */
+  publication: PublicationRow | null;
   total?: string;
 };
+type PublicationRow = {
+  id: string;
+  library_id: string;
+  document_id: string;
+  version_number: number;
+  audience: string[];
+  note: string | null;
+  published_by: string;
+  published_at: Date | string;
+  ended_as: 'withdrawn' | 'replaced' | null;
+  ended_by: string | null;
+  ended_at: Date | string | null;
+  end_reason: string | null;
+};
+const PUBLICATION_COLUMNS = 'id, library_id, document_id, version_number, audience, note, published_by, published_at, ended_as, ended_by, ended_at, end_reason';
+const isoOf = (t: Date | string) => new Date(t).toISOString();
+const fromPublicationRow = (r: PublicationRow): Publication => ({
+  id: r.id,
+  document: r.document_id,
+  library: r.library_id,
+  version: r.version_number,
+  audience: r.audience,
+  ...(r.note ? { note: r.note } : {}),
+  publishedBy: r.published_by,
+  publishedAt: isoOf(r.published_at),
+  ...(r.ended_as && r.ended_at ? { ended: { as: r.ended_as, by: r.ended_by ?? '', at: isoOf(r.ended_at), ...(r.end_reason ? { reason: r.end_reason } : {}) } } : {}),
+});
 type TagRow = { id: string; workspace_id: string; library_id: string | null; name: string; created_by: string; created_at: Date };
 type ViewRow = { id: string; library_id: string; name: string; query: ViewQuery; created_by: string; created_at: Date };
 
@@ -1047,7 +1245,11 @@ const fromDocumentRow = (r: DocumentRow): FolioDocument => ({
   updatedAt: r.updated_at.toISOString(),
   latest: publicVersion(fromVersionRow({ ...r.latest, size_bytes: String(r.latest.size_bytes), created_at: new Date(r.latest.created_at) })),
   tags: r.tags,
+  ...publishing(r.publication ? fromPublicationRow(r.publication) : undefined),
 });
+
+/** A document's state and, while it's out, the publication, from its newest one. */
+const publishing = (last: Publication | undefined) => ({ state: stateOf(last), ...(last && !last.ended ? { published: last } : {}) });
 
 /** What a version shows of its rendition (`r`). */
 const READER_COLUMNS = `r.state as reader_state, r.error as reader_error, r.pages as reader_pages, r.thumbnail_key is not null as reader_thumbnail,
@@ -1058,6 +1260,7 @@ const DOCUMENT_SELECT = `
   select d.id, d.workspace_id, d.library_id, d.folder_id, d.title, d.created_by, d.created_at, d.updated_at,
     to_jsonb(v) - 'workspace_id' as latest,
     array(select dt.tag_id from folio.document_tags dt where dt.document_id = d.id order by dt.tag_id) as tags,
+    (select to_jsonb(p) from folio.publications p where p.document_id = d.id order by p.seq desc limit 1) as publication,
     count(*) over () as total
   from folio.documents d
   cross join lateral (
@@ -1081,6 +1284,13 @@ const fromFolderRow = (r: FolderRow): Folder => ({
 
 /** Postgres says a unique index refused the row. */
 const isUniqueViolation = (err: unknown) => (err as { code?: string }).code === '23505';
+
+/** The state of document `d`, in SQL, as stateOf works it out. */
+const STATE_OF_D = `coalesce((select case when p.ended_at is null then 'published' else 'withdrawn' end from folio.publications p where p.document_id = d.id order by p.seq desc limit 1), 'draft')`;
+
+/** Adds an event to Folio's outbox, inside the transaction that makes the change it tells of. */
+const tell = (client: pg.PoolClient, topic: string, workspace: string, payload: Record<string, unknown>) =>
+  client.query('insert into folio.outbox (topic, workspace_id, payload) values ($1, $2, $3)', [topic, workspace, JSON.stringify(payload)]);
 
 const LIBRARY_COLUMNS = 'id, workspace_id, floor_principal, name, description, free_tags, created_by, created_at, updated_at';
 const DOCUMENT_ORDER: Record<DocumentSort, string> = { title: 'lower(d.title), d.id', newest: 'd.created_at desc, d.id desc', updated: 'd.updated_at desc, d.id desc' };
@@ -1243,6 +1453,7 @@ export class PgFolioStore implements FolioStore {
     if (query.authors?.length) where.push(`d.created_by = any(${param(query.authors)}::text[])`);
     if (query.from) where.push(`d.updated_at >= ${param(query.from)}::timestamptz`);
     if (query.to) where.push(`d.updated_at < ${param(query.to)}::timestamptz`);
+    if (query.states?.length) where.push(`${STATE_OF_D} = any(${param(query.states)}::text[])`);
     if (query.readers) where.push(`exists (select 1 from folio.readers r where r.document_id = d.id and r.principals && ${param(query.readers)}::text[])`);
     const { limit, offset } = pageOf(query);
     const { rows } = await this.pool.query<DocumentRow>(
@@ -1278,6 +1489,8 @@ export class PgFolioStore implements FolioStore {
     // Its rendition waits for the worker, which hears of it as soon as this commits.
     await client.query('insert into folio.renditions (version_id, workspace_id) select id, workspace_id from folio.document_versions where id = $1', [v.id]);
     await client.query("select pg_notify('folio_renditions', $1)", [v.id]);
+    const { rows: doc } = await client.query<{ workspace_id: string; library_id: string }>('select workspace_id, library_id from folio.documents where id = $1', [document]);
+    await tell(client, TOPICS.versionCreated, doc[0].workspace_id, { document, library: doc[0].library_id, version: number });
     return fromVersionRow(rows[0]);
   }
 
@@ -1359,8 +1572,14 @@ export class PgFolioStore implements FolioStore {
   }
 
   async deleteDocument(id: string, by: string) {
-    const { rowCount } = await this.pool.query('update folio.documents set deleted_by = $2, deleted_at = now() where id = $1 and deleted_at is null', [id, by]);
-    return rowCount === 1;
+    return this.inTransaction(async (client) => {
+      const { rows } = await client.query<{ workspace_id: string; library_id: string }>(
+        'update folio.documents set deleted_by = $2, deleted_at = now() where id = $1 and deleted_at is null returning workspace_id, library_id',
+        [id, by],
+      );
+      if (rows[0]) await tell(client, TOPICS.deleted, rows[0].workspace_id, { document: id, library: rows[0].library_id });
+      return Boolean(rows[0]);
+    });
   }
   /** Replaces a document's tags inside `client`'s transaction; BadTagError for one that isn't the org's or its library's. */
   private async writeTags(client: pg.PoolClient, document: string, tags: readonly string[]) {
@@ -1604,6 +1823,8 @@ export class PgFolioStore implements FolioStore {
         grant = fromGrantRow(rows[0]);
       }
       await this.writeReaders(client, library, document);
+      const { rows: shelf } = await client.query<{ workspace_id: string }>('select workspace_id from folio.libraries where id = $1', [library]);
+      if (shelf[0]) await tell(client, TOPICS.readersChanged, shelf[0].workspace_id, { library, ...(document ? { document } : {}) });
       return grant;
     });
   }
@@ -1640,6 +1861,70 @@ export class PgFolioStore implements FolioStore {
       [principals, except],
     );
     return { libraries: libraries.map((r) => ({ ...fromLibraryRow(r), level: r.level })), documents: documents.map((r) => ({ ...fromDocumentRow(r), level: r.level })) };
+  }
+
+  async publish({ document, version, audience, note, by }: { document: string; version: number; audience: string[]; note?: string; by: string }) {
+    return this.inTransaction(async (client) => {
+      // The document's row is locked first, so two publishes at once end one another in turn.
+      const { rows: found } = await client.query<{ version_id: string; workspace_id: string; library_id: string }>(
+        `select dv.id as version_id, d.workspace_id, d.library_id from folio.documents d
+          join folio.document_versions dv on dv.document_id = d.id and dv.number = $2
+          where d.id = $1 and d.deleted_at is null for update of d`,
+        [document, version],
+      );
+      const doc = found[0];
+      if (!doc) return undefined;
+      await client.query("update folio.publications set ended_as = 'replaced', ended_by = $2, ended_at = now() where document_id = $1 and ended_at is null", [document, by]);
+      const { rows } = await client.query<PublicationRow>(
+        `insert into folio.publications (id, workspace_id, library_id, document_id, version_id, version_number, audience, note, published_by)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning ${PUBLICATION_COLUMNS}`,
+        [randomUUID(), doc.workspace_id, doc.library_id, document, doc.version_id, version, [...new Set(audience)].sort(), note ?? null, by],
+      );
+      const publication = fromPublicationRow(rows[0]);
+      await tell(client, TOPICS.published, doc.workspace_id, { document, library: doc.library_id, version, publication: publication.id, audience: publication.audience });
+      await tell(client, TOPICS.readersChanged, doc.workspace_id, { library: doc.library_id, document });
+      return publication;
+    });
+  }
+
+  async withdraw({ document, by, reason }: { document: string; by: string; reason?: string }) {
+    return this.inTransaction(async (client) => {
+      const { rows } = await client.query<PublicationRow & { workspace_id: string }>(
+        `update folio.publications p set ended_as = 'withdrawn', ended_by = $2, ended_at = now(), end_reason = $3
+          from folio.documents d where d.id = p.document_id and d.deleted_at is null and p.document_id = $1 and p.ended_at is null
+          returning ${PUBLICATION_COLUMNS.split(', ').map((c) => `p.${c}`).join(', ')}, p.workspace_id`,
+        [document, by, reason ?? null],
+      );
+      if (!rows[0]) return undefined;
+      const publication = fromPublicationRow(rows[0]);
+      await tell(client, TOPICS.withdrawn, rows[0].workspace_id, { document, library: publication.library, version: publication.version, publication: publication.id });
+      await tell(client, TOPICS.readersChanged, rows[0].workspace_id, { library: publication.library, document });
+      return publication;
+    });
+  }
+
+  async publications(document: string) {
+    const { rows } = await this.pool.query<PublicationRow>(`select ${PUBLICATION_COLUMNS} from folio.publications where document_id = $1 order by seq desc`, [document]);
+    return rows.map(fromPublicationRow);
+  }
+
+  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number } = {}): Promise<PublishedPage> {
+    const { limit, offset } = pageOf(page);
+    const { rows } = await this.pool.query<DocumentRow & { library_name: string }>(
+      `${DOCUMENT_SELECT}
+        join folio.libraries l on l.id = d.library_id and l.archived_at is null
+        join folio.publications live on live.document_id = d.id and live.ended_at is null and live.audience && $1::text[]
+        where d.deleted_at is null
+        order by live.published_at desc, d.id desc limit $2 offset $3`.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name'),
+      [principals, limit, offset],
+    );
+    const total = rows[0] ? Number(rows[0].total) : offset ? (await this.publishedTo(principals, { limit: 1 })).total : 0;
+    return { documents: rows.map((r) => ({ ...(fromDocumentRow(r) as FolioDocument & { published: Publication }), libraryName: r.library_name })), total };
+  }
+
+  /** A connection pool whose search path is Folio's schema, for the outbox relay, which names its table plainly. */
+  static outboxPool(connectionString: string) {
+    return new pg.Pool({ connectionString, max: 2, options: '-c search_path=folio' });
   }
 }
 

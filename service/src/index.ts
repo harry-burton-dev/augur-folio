@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { appCredentialsFromEnv, appStorageFromEnv, registerApp } from '@augur/service-kit';
+import { appCredentialsFromEnv, appStorageFromEnv, outboxRelay, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
@@ -28,4 +28,12 @@ if (REGISTRY_URL && credentials) {
     .catch((err: Error) => app.log.error(err.message));
 } else {
   app.log.info('REGISTRY_URL or the app’s sign-in (SERVICE_CLIENT_SECRET) is not set, so Folio is not in the catalogue (fine under pnpm dev:app).');
+}
+
+// Tell other apps what happened (folio.document.*), from the outbox, once each change has committed.
+const { EVENTS_URL } = process.env;
+if (databaseUrl && EVENTS_URL && credentials) {
+  outboxRelay({ pool: PgFolioStore.outboxPool(databaseUrl), eventsUrl: EVENTS_URL, credentials, onError: (err) => app.log.error({ err: (err as Error).message }, 'could not send events') }).start();
+} else if (databaseUrl) {
+  app.log.info('EVENTS_URL or the app’s sign-in is not set, so Folio’s events wait in its outbox.');
 }

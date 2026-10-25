@@ -32,6 +32,16 @@ Whoever manages a library can share it, or one document in it, with a person, a 
 
 Folio asks identity who each person stands for (`people:read`): `person:<id>`, `team:<id>` for each team they're on, `tree:<id>` for each of those teams and every team above it, and `org`. Each document's readers (its library's floor and everyone let in) are written down in `folio.readers`, and lists keep to what overlaps. While identity can't be asked, Folio lets nothing through. Under `pnpm dev:app` there's no identity: you stand for yourself, the floor you're on and the org, and you can share with the people Folio has seen.
 
+## Publishing
+
+Whoever manages a document can publish one of its versions to an audience: a team, a team and the teams below it, or the whole org. Everyone in the audience can then read that version, and only that one, from their own floor, even if they can't see the library: it's under "Published to you", and each of them is told, with a **Read** button that opens it. Publishing a document again puts the new version out in place of the old one; withdrawing it takes it back, with a reason if there is one. Every time it was published stays on the record.
+
+A team's leads publish to their team and the teams below it, and the org's leads to any team. Publishing to the whole org, to teams beyond the floor, or from your own floor needs the **publisher** role, which an admin gives in Admin, People. To let one person in, share the document with them instead.
+
+Documents are drafts until they're published, and the list can be narrowed to drafts, published or withdrawn ones.
+
+Folio tells other apps what happened through the platform's events (`events:publish`), from an outbox in its own schema, so an event goes out if and only if the change it tells of was saved: `folio.document.version.created`, `folio.document.published`, `folio.document.withdrawn`, `folio.document.deleted` and `folio.document.readers.changed`. They carry ids only, never titles or text. It handles `document.open`: another app opens one of Folio's documents with `openDocument(ctx, ref)`.
+
 A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
 
 ## Tags, filters and views
@@ -52,7 +62,7 @@ Opening a document opens its reader page: the reader copy as a page of text, set
 
 ## On the record
 
-Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
+Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
 
 ## API
 
@@ -68,10 +78,10 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `POST /libraries/:id/folders` `{name, parent?}` | A new folder, at the top or inside another, at most 6 deep |
 | `PATCH /libraries/:id/folders/:folder` `{name}` | Rename a folder |
 | `DELETE /libraries/:id/folders/:folder` | Remove an empty folder |
-| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type` and `author` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `sort` is title, newest or updated |
+| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&state=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type`, `author` and `state` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `state` is draft, published or withdrawn; `sort` is title, newest or updated |
 | `POST /libraries/:id/documents?filename=&title=&folder=&tag=` | Upload a document: the body is the file, its `Content-Type` its type; `tag` repeats |
 | `PUT /libraries/:id/documents/:doc/tags` `{tags}` | Give a document exactly these tags |
-| `GET /libraries/:id/documents/:doc` | A document with its versions, newest first |
+| `GET /libraries/:id/documents/:doc` | A document with its versions, newest first, its `state` and what's `published`. To its audience alone: only the version that's out, as `only` |
 | `PATCH /libraries/:id/documents/:doc` `{title?, folder?}` | Retitle it, or move it (`folder: null` is the top) |
 | `DELETE /libraries/:id/documents/:doc` | Take it out of the library |
 | `POST /libraries/:id/documents/:doc/versions?filename=` | Its next version, sent as above |
@@ -85,9 +95,14 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
 | `GET /people?q=` | People and teams to share with, by name |
 | `GET /shared` | Libraries and documents shared with the caller from other floors |
+| `POST /libraries/:id/documents/:doc/publish` `{version, audience, note?}` | Put a version out to `audience` (`team:<id>`, `tree:<id>` or `org`), in place of what was out, and tell them (whoever manages it) |
+| `POST /libraries/:id/documents/:doc/withdraw` `{reason?}` | Take back what's out (whoever manages it) |
+| `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
+| `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
+| `GET /documents/:doc` | Where a document is (`{id, library, title}`), for `document.open`, which gives only its id |
 | `GET /tags` | The org's tags, and whether the caller keeps them |
 | `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
 | `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |
 | `PATCH /libraries/:id/tags/:tag` `{name}`, `DELETE /libraries/:id/tags/:tag` | Rename or remove one of its tags (leads) |
-| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?}` |
+| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?}` |
 | `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |

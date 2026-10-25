@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
 import './folio-reader.js';
 import './folio-share.js';
+import './folio-publish.js';
 import {
   ACCEPT,
   KINDS,
@@ -9,6 +10,7 @@ import {
   fileTypeOf,
   sizeWords,
   type DocumentSort,
+  type DocumentState,
   type FolioApi,
   type FolioDocument,
   type Folder,
@@ -16,6 +18,7 @@ import {
   type OpenDocument,
   type OpenLibrary,
   type Place,
+  type PublishedPage,
   type ReaderState,
   type SavedView,
   type Shared,
@@ -52,7 +55,8 @@ type Dialog =
   | 'save-view'
   | 'rename-view'
   | 'delete-view'
-  | 'share';
+  | 'share'
+  | 'publish';
 
 /** How many documents come in one page of the list. */
 const PAGE = 100;
@@ -62,6 +66,16 @@ export const SORTS: SelectOption[] = [
   { value: 'newest', label: 'Newest first' },
   { value: 'updated', label: 'Recently changed' },
 ];
+
+const STATE_OPTIONS: SelectOption[] = [
+  { value: 'draft', label: 'Drafts' },
+  { value: 'published', label: 'Published' },
+  { value: 'withdrawn', label: 'Withdrawn' },
+];
+
+/** Where a document is in being published, as its row says it: nothing for a draft. */
+export const stateWords = (doc: Pick<FolioDocument, 'state' | 'published'>) =>
+  doc.state === 'published' && doc.published ? `Published, version ${doc.published.version}` : doc.state === 'withdrawn' ? 'Withdrawn' : '';
 
 const SINCE_OPTIONS: SelectOption[] = [
   { value: 'week', label: 'Past week' },
@@ -76,6 +90,7 @@ export const filtersFor = (open: Pick<OpenLibrary, 'tags' | 'authors'>): FilterD
   { id: 'type', label: 'Type', options: KINDS },
   { id: 'author', label: 'Added by', search: open.authors.length > 8, options: open.authors.map((a) => ({ value: a.id, label: a.name || 'Someone' })) },
   { id: 'since', label: 'Changed', single: true, options: SINCE_OPTIONS },
+  { id: 'state', label: 'Published', options: STATE_OPTIONS },
 ];
 
 /** Tags as a picker offers them: the org's marked as such. */
@@ -90,12 +105,13 @@ export const queryFrom = (filters: FilterValue, sort: DocumentSort, folder?: str
   ...(filters.author?.length ? { authors: filters.author } : {}),
   ...(filters.since?.length ? { since: filters.since[0] as Since } : {}),
   ...(sort !== 'title' ? { sort } : {}),
+  ...(filters.state?.length ? { states: filters.state as DocumentState[] } : {}),
 });
 
 /** A saved view's filters, back in the bar's shape. */
 export const filtersFrom = (q: ViewQuery): FilterValue =>
   Object.fromEntries(
-    Object.entries({ tag: q.tags ?? [], type: q.types ?? [], author: q.authors ?? [], since: q.since ? [q.since] : [] }).filter(([, v]) => v.length),
+    Object.entries({ tag: q.tags ?? [], type: q.types ?? [], author: q.authors ?? [], since: q.since ? [q.since] : [], state: q.states ?? [] }).filter(([, v]) => v.length),
   );
 
 const sameQuery = (a: ViewQuery, b: ViewQuery) => {
@@ -184,6 +200,7 @@ export class FolioApp extends LitElement {
     more: { state: true },
     reading: { state: true },
     shared: { state: true },
+    inbox: { state: true },
   };
 
   declare api: FolioApi;
@@ -228,6 +245,8 @@ export class FolioApp extends LitElement {
   declare reading: { library: string; document: string; version?: number } | undefined;
   /** Libraries and documents shared with the person from other floors. */
   declare shared: Shared;
+  /** What's been published to the person, while they're looking at it (`/published`), or reading from it. */
+  declare inbox: PublishedPage | undefined;
   /** What the share dialog is about: a library, or one document of it. */
   shareTarget: { library: string; document?: string; name: string } | undefined;
 
@@ -272,10 +291,15 @@ export class FolioApp extends LitElement {
       this.libraries = libraries;
       this.shared = shared;
       this.canCreate = can.create;
-      const start = this.open?.id ?? this.reading?.library ?? this.place.library ?? libraries[0]?.id;
+      // Another app opened a document by its id alone (document.open): find its library first.
+      const asked = this.place.document && !this.place.library ? await this.api.locate(this.place.document).catch(() => undefined) : undefined;
+      const start = this.open?.id ?? this.reading?.library ?? asked?.library ?? this.place.library ?? libraries[0]?.id;
       const reading = this.reading ?? (this.place.document ? { document: this.place.document, version: this.place.version } : undefined);
       if (this.place.adding && can.create) this.dialog = 'new-library';
-      if (start && [...libraries, ...shared.libraries].some((l) => l.id === start)) {
+      if (this.place.published && !reading) {
+        this.open = undefined;
+        await this.openInbox(false);
+      } else if (start && [...libraries, ...shared.libraries].some((l) => l.id === start)) {
         await this.openLibrary(start, this.open ? this.folder : this.place.folder, false, this.open ? this.view : this.place.view);
         if (reading) await this.read(reading.document, reading.version, false);
       } else if (start && reading) {
@@ -290,9 +314,22 @@ export class FolioApp extends LitElement {
     }
   }
 
+  /** What's been published to the person, newest first. */
+  private async openInbox(tell = true) {
+    this.reading = undefined;
+    this.doc = undefined;
+    try {
+      this.inbox = await this.api.published();
+      if (tell) this.tell();
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
   private async openLibrary(id: string, folder?: string, tell = true, view?: string) {
     this.opening = true;
     this.reading = undefined;
+    this.inbox = undefined;
     try {
       const switching = this.open?.id !== id;
       this.open = await this.api.library(id);
@@ -420,6 +457,7 @@ export class FolioApp extends LitElement {
   private async stopReading() {
     this.reading = undefined;
     this.doc = undefined;
+    if (this.inbox) return this.openInbox();
     if (!this.open) {
       // Read from "Shared with you", with no library to go back to: back to the floor's own.
       const first = this.libraries[0];
@@ -665,7 +703,9 @@ export class FolioApp extends LitElement {
   private tell() {
     const detail = this.reading
       ? { ...this.reading }
-      : this.view
+      : this.inbox
+        ? { published: true }
+        : this.view
         ? { library: this.open?.id, view: this.view }
         : { library: this.open?.id, folder: this.folder };
     this.dispatchEvent(new CustomEvent('folio-place', { detail, bubbles: true }));
@@ -746,6 +786,12 @@ export class FolioApp extends LitElement {
         @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openLibrary(e.detail.item.id)}
       ></ui-tree>
       ${this.canCreate ? html`<div class="folio-rail-act"><ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'new-library')}>New library</ui-button></div>` : nothing}
+      <ui-tree
+        label="For you"
+        .items=${[{ id: 'published', label: 'Published to you', icon: 'inbox' }] satisfies TreeItem[]}
+        selected=${this.inbox && !this.reading ? 'published' : ''}
+        @ui-select=${() => void this.openInbox()}
+      ></ui-tree>
       ${this.shared.libraries.length || this.shared.documents.length
         ? html`<ui-tree
             label="Shared with you from other floors"
@@ -803,10 +849,12 @@ export class FolioApp extends LitElement {
         @folio-back=${() => void this.stopReading()}
         @folio-manage=${() => (this.dialog = 'document')}
         @folio-share=${() => this.openShare({ library: doc.library, document: doc.id, name: doc.title })}
+        @folio-publish=${() => (this.dialog = 'publish')}
         @folio-download=${(e: CustomEvent<{ version: number }>) => void this.download(e.detail.version)}
         @folio-retry=${(e: CustomEvent<{ version: number }>) => void this.retryReader(e.detail.version)}
       ></folio-reader>`;
     }
+    if (this.inbox) return this.inboxPage(this.inbox);
     if (!open)
       return this.canCreate
         ? html`<ui-state kind="empty" heading="No libraries here yet" body="A library keeps documents together, with folders inside it." action="New library"
@@ -833,6 +881,7 @@ export class FolioApp extends LitElement {
         title: d.title,
         icon: 'document',
         detail: this.rowDetail(d, narrowed),
+        ...(d.state === 'published' ? { icon: 'publish' } : {}),
         meta: ago(d.updatedAt),
         ...(both ? { group: 'Documents' } : {}),
       })),
@@ -938,7 +987,34 @@ export class FolioApp extends LitElement {
     const open = this.open!;
     const names = d.tags.map((t) => open.tags.find((x) => x.id === t)?.name).filter(Boolean);
     const folder = spanning ? folderTrail(open.folders, d.folder).map((f) => f.name).join(' / ') : '';
-    return [folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
+    return [stateWords(d), folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
+  }
+
+  /** What's out to the person now, from any floor: each opens at the version that's out. */
+  private inboxPage(inbox: PublishedPage) {
+    const rows: ListItem[] = inbox.documents.map((d) => ({
+      id: `${DOC}${d.library}/${d.id}/${d.published.version}`,
+      title: d.title,
+      icon: 'publish',
+      detail: [`In ${d.libraryName}`, `Version ${d.published.version}`, d.published.note].filter(Boolean).join(' · '),
+      meta: ago(d.published.publishedAt),
+    }));
+    return html`<div class="folio-main-inner">
+      <div class="folio-head">
+        <ui-heading eyebrow="For you" heading="Published to you" summary="Put out to you, or to a team you’re on, from any floor. The newest first."></ui-heading>
+      </div>
+      <ui-surface>
+        <ui-list label="Published to you" density="compact" .noun=${['document', 'documents']} .items=${rows}
+          empty="Nothing has been published to you yet. When a team you’re on is sent something, it shows here."
+          @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
+            const [library, document, version] = e.detail.item.id.slice(DOC.length).split('/');
+            const doc = inbox.documents.find((d) => d.id === document);
+            // The version that's out is the newest they can read: open it as the newest.
+            void this.read(document, doc && doc.latest.number !== Number(version) ? Number(version) : undefined, true, library);
+          }}></ui-list>
+      </ui-surface>
+      <p class="folio-note" role="status">${this.note}</p>
+    </div>`;
   }
 
   private dialogs() {
@@ -1044,6 +1120,18 @@ export class FolioApp extends LitElement {
             this.shareTarget = undefined;
           }}>
           <folio-share .api=${this.api} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
+        </ui-dialog>`;
+      }
+      case 'publish': {
+        const doc = this.doc;
+        if (!doc) return nothing;
+        return html`<ui-dialog open size="read" light eyebrow="Publish" heading=${doc.title} summary="Put a version out to teams or the whole org, or take it back."
+          cancel-label="Done" @ui-close=${() => {
+            close();
+            void this.letGoOfDoc();
+          }}>
+          <folio-publish .api=${this.api} library=${doc.library} document=${doc.id} .versions=${doc.versions.map((v) => v.number)}
+            @folio-published=${() => void this.loadDocuments()}></folio-publish>
         </ui-dialog>`;
       }
       case 'edit-document':

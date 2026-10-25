@@ -5,7 +5,7 @@ import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import type { CallerPrincipals } from './people.ts';
 import type { ObjectStore } from './objects.ts';
-import { furthest, levelFrom, objectKeyFor, reaches, SINCE, type DocumentSort, type FolioDocument, type FolioStore, type Level, type NewVersion, type Since } from './store.ts';
+import { furthest, levelFrom, objectKeyFor, reaches, SINCE, type DocumentSort, type DocumentState, type FolioDocument, type FolioStore, type Level, type NewVersion, type Since } from './store.ts';
 import { renditionRoutes } from './renditions.ts';
 import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
 
@@ -76,6 +76,7 @@ const LIST_QUERY = {
     from: VIEW_QUERY.properties.from,
     to: VIEW_QUERY.properties.to,
     sort: VIEW_QUERY.properties.sort,
+    state: VIEW_QUERY.properties.states,
     limit: { type: 'integer', minimum: 1, maximum: 200 },
     offset: { type: 'integer', minimum: 0 },
   },
@@ -91,39 +92,52 @@ type ListQuery = {
   from?: string;
   to?: string;
   sort?: DocumentSort;
+  state?: DocumentState[];
   limit?: number;
   offset?: number;
 };
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** A document as the caller reaches it: how far they're let in, through its library or into it alone. */
-export type HeldDocument = FolioDocument & { level: Level; shelf: HeldLibrary };
+/**
+ * A document as the caller reaches it: how far they're let in, through its
+ * library or into it alone. `only` is the version they may read when they
+ * reach it only as the audience it's published to: that one, and nothing else.
+ */
+export type HeldDocument = FolioDocument & { level: Level; shelf: HeldLibrary; only?: number };
 
 /** Whoever may edit it, and whoever added it while they may still add to its library. */
 export const mayChange = (caller: OnFloor, doc: FolioDocument & { level?: Level }, shelf: HeldLibrary) =>
   reaches(furthest(doc.level, shelf.level), 'edit') || (doc.createdBy === caller.id && rightsOn(caller, shelf).addDocuments);
 
-/** What the caller may do with a document. */
-export const documentRights = (caller: OnFloor, doc: HeldDocument) => ({ change: mayChange(caller, doc, doc.shelf), share: reaches(doc.level, 'manage') });
+/** What the caller may do with a document. Its audience only reads it. */
+export const documentRights = (caller: OnFloor, doc: HeldDocument) =>
+  doc.only ? { change: false, share: false, publish: false } : { change: mayChange(caller, doc, doc.shelf), share: reaches(doc.level, 'manage'), publish: reaches(doc.level, 'manage') };
 
-export type DocumentFor = (caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply) => Promise<HeldDocument | undefined>;
+/** `audience`: let in, to the version that's out, whoever it's published to. Only for reading it. */
+export type DocumentFor = (caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply, options?: { audience?: boolean }) => Promise<HeldDocument | undefined>;
 
 /**
  * The document, when the caller may read it: through its library (its floor,
- * or a grant on the library) or a grant on the document alone.
+ * or a grant on the library) or a grant on the document alone, or, when asked,
+ * as the audience of the version that's out.
  */
 export const documentFinder =
   ({ store, reach, principalsOf }: Pick<DocumentDeps, 'store' | 'reach' | 'principalsOf'>): DocumentFor =>
-  async (caller, params, reply) => {
+  async (caller, params, reply, { audience = false } = {}) => {
     const [doc, shelf] = await Promise.all([store.document(params.doc), reach(caller, params.id)]);
-    const level = doc && shelf && doc.library === shelf.id ? furthest(shelf.level, levelFrom(await store.grants(shelf.id, doc.id), await principalsOf(caller))) : undefined;
-    if (!doc || !shelf || !level) {
+    const principals = doc && shelf && doc.library === shelf.id ? await principalsOf(caller) : undefined;
+    const level = principals ? furthest(shelf!.level, levelFrom(await store.grants(shelf!.id, doc!.id), principals)) : undefined;
+    const only = !level && audience && principals && doc!.published?.audience.some((a) => principals.includes(a)) ? doc!.published.version : undefined;
+    if (!doc || !shelf || !(level || only)) {
       reply.code(404).send({ error: 'not-found', message: 'There’s no such document, or it hasn’t been shared with you.' });
       return undefined;
     }
-    return { ...doc, level, shelf };
+    return { ...doc, level: level ?? 'read', shelf, ...(only ? { only } : {}) };
   };
+
+/** Whether the caller may read this version: any, unless they reach the document only as its audience. */
+export const mayRead = (doc: HeldDocument, number: number) => !doc.only || doc.only === number;
 
 /** A document as it's sent: without the library it was reached through. */
 export const sent = ({ shelf: _, ...doc }: HeldDocument) => doc;
@@ -221,6 +235,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         from: since && (!from || since > from) ? since : from,
         to,
         sort: q.sort,
+        states: q.state,
         limit: q.limit,
         offset: q.offset,
         readers,
@@ -272,9 +287,17 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
   app.get<{ Params: { id: string; doc: string } }>('/libraries/:id/documents/:doc', { schema: { params: DOC_PARAMS } }, async (req, reply) => {
     const caller = onFloor(req, reply);
     if (!caller) return reply;
-    const doc = await documentFor(caller, req.params, reply);
+    const doc = await documentFor(caller, req.params, reply, { audience: true });
     if (!doc) return reply;
-    return { ...sent(doc), libraryName: doc.shelf.name, versions: await store.versions(doc.id), can: documentRights(caller, doc) };
+    const versions = (await store.versions(doc.id)).filter((v) => mayRead(doc, v.number));
+    // Its audience sees the version that's out as the latest, and none of its history.
+    return {
+      ...sent(doc),
+      ...(doc.only ? { latest: versions[0] } : {}),
+      libraryName: doc.shelf.name,
+      versions,
+      can: documentRights(caller, doc),
+    };
   });
 
   app.patch<{ Params: { id: string; doc: string }; Body: { title?: string; folder?: string | null } }>(
@@ -375,9 +398,9 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     async (req, reply) => {
       const caller = onFloor(req, reply);
       if (!caller) return reply;
-      const doc = await documentFor(caller, req.params, reply);
+      const doc = await documentFor(caller, req.params, reply, { audience: true });
       if (!doc) return reply;
-      const version = await store.version(doc.id, req.params.number);
+      const version = mayRead(doc, req.params.number) ? await store.version(doc.id, req.params.number) : undefined;
       const file = version && (await objects.get(version.objectKey));
       if (!version || !file) return reply.code(404).send({ error: 'not-found', message: 'There’s no such version of this document.' });
       // A download of an original is always on the record: none is given without one.

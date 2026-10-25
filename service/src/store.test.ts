@@ -1,13 +1,13 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BadParentError, BadTagError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, type FolioStore, type NewVersion } from './store.ts';
+import { BadParentError, BadTagError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
 
 const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
 const titles = async (store: FolioStore, library: string, query = {}) => (await store.documents(library, query)).documents.map((d) => d.title);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 /** The same behaviour from every store. */
-const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = async () => {}) => {
+const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = async () => {}, told: (store: FolioStore) => Promise<OutboxEvent[]>) => {
   let store: FolioStore;
   beforeEach(async () => {
     await reset();
@@ -302,9 +302,74 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.rendition('v-2')).toMatchObject({ state: 'queued', attempts: 0 });
     expect((await store.rendition('v-2'))?.error).toBeUndefined();
   });
+
+  it('publishes one version at a time to an audience, and withdraws it', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await store.addVersion('d-1', file('d-1', 'v-2'));
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'Expenses', createdBy: 'u-1' }, file('d-2', 'v-3'));
+    expect((await store.document('d-1'))?.state).toBe('draft');
+    expect(await store.publish({ document: 'd-1', version: 9, audience: ['org'], by: 'u-1' })).toBeUndefined();
+
+    const first = await store.publish({ document: 'd-1', version: 1, audience: ['tree:w-fin', 'team:w-legal', 'tree:w-fin'], note: 'Approved by the board', by: 'u-1' });
+    expect(first).toMatchObject({ document: 'd-1', library: lib.id, version: 1, audience: ['team:w-legal', 'tree:w-fin'], note: 'Approved by the board', publishedBy: 'u-1' });
+    expect(await store.document('d-1')).toMatchObject({ state: 'published', published: { id: first!.id, version: 1 } });
+    await tick();
+    // Publishing again replaces it: one version is out at a time.
+    const second = await store.publish({ document: 'd-1', version: 2, audience: ['org'], by: 'u-2' });
+    const history = await store.publications('d-1');
+    expect(history.map((p) => [p.version, p.ended?.as])).toEqual([[2, undefined], [1, 'replaced']]);
+    expect(history[1].ended?.by).toBe('u-2');
+
+    expect((await store.publishedTo(['team:w-legal'])).documents).toEqual([]);
+    const toMe = await store.publishedTo(['person:u-5', 'org']);
+    expect(toMe.total).toBe(1);
+    expect(toMe.documents.map((d) => [d.title, d.libraryName, d.published.version])).toEqual([['Travel', 'Policies', 2]]);
+    expect(await titles(store, lib.id, { states: ['published'] })).toEqual(['Travel']);
+    expect(await titles(store, lib.id, { states: ['draft'] })).toEqual(['Expenses']);
+
+    const withdrawn = await store.withdraw({ document: 'd-1', by: 'u-1', reason: 'Out of date' });
+    expect(withdrawn).toMatchObject({ id: second!.id, ended: { as: 'withdrawn', by: 'u-1', reason: 'Out of date' } });
+    expect(await store.withdraw({ document: 'd-1', by: 'u-1' })).toBeUndefined();
+    const doc = await store.document('d-1');
+    expect(doc?.state).toBe('withdrawn');
+    expect(doc?.published).toBeUndefined();
+    expect((await store.publishedTo(['org'])).documents).toEqual([]);
+    expect(await titles(store, lib.id, { states: ['withdrawn', 'draft'] })).toEqual(['Expenses', 'Travel']);
+
+    // Deleted or archived, nothing is out.
+    await store.publish({ document: 'd-2', version: 1, audience: ['org'], by: 'u-1' });
+    await store.deleteDocument('d-2', 'u-1');
+    expect((await store.publishedTo(['org'])).total).toBe(0);
+  });
+
+  it('tells other apps what happened, with ids and no titles', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await store.addVersion('d-1', file('d-1', 'v-2'));
+    await store.setGrant({ library: lib.id, principal: 'team:w-legal', level: 'read', by: 'u-1' });
+    const out = await store.publish({ document: 'd-1', version: 2, audience: ['org'], by: 'u-1' });
+    await store.withdraw({ document: 'd-1', by: 'u-1' });
+    await store.deleteDocument('d-1', 'u-1');
+    const events = await told(store);
+    expect(events.map((e) => e.topic)).toEqual([
+      TOPICS.versionCreated,
+      TOPICS.versionCreated,
+      TOPICS.readersChanged,
+      TOPICS.published,
+      TOPICS.readersChanged,
+      TOPICS.withdrawn,
+      TOPICS.readersChanged,
+      TOPICS.deleted,
+    ]);
+    expect(events.every((e) => e.workspace === 'w-fin')).toBe(true);
+    expect(events[1].payload).toEqual({ document: 'd-1', library: lib.id, version: 2 });
+    expect(events[3].payload).toEqual({ document: 'd-1', library: lib.id, version: 2, publication: out!.id, audience: ['org'] });
+    expect(JSON.stringify(events)).not.toContain('Travel');
+  });
 };
 
-describe('MemoryFolioStore', () => behavesLikeAStore(() => new MemoryFolioStore()));
+describe('MemoryFolioStore', () => behavesLikeAStore(() => new MemoryFolioStore(), undefined, async (store) => (store as MemoryFolioStore).outbox));
 
 // Runs wherever DATABASE_URL points at a Postgres; CI starts one for it.
 describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
@@ -323,14 +388,15 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
+    async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
 
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {

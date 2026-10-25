@@ -1,4 +1,4 @@
-import { defineMicroFrontend, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, defineMicroFrontend, isDocumentRef, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
 import { FolioApi, pathFor, placeFor, type Place } from './api.js';
@@ -12,6 +12,17 @@ export const addressFor = (pathname: string, mountedAt: string, place: Omit<Plac
   const inner = mountedAt === '/' ? '' : mountedAt;
   if (!pathname.endsWith(inner)) return undefined;
   return `${pathname.slice(0, pathname.length - inner.length)}${pathFor(place)}`;
+};
+
+/**
+ * Where an intent asks Folio to start: `document.open` for one of Folio's own
+ * documents opens it to read, at the version asked for. Its library is found
+ * from the document.
+ */
+export const placeForIntent = (intent: Intent | undefined): Place | undefined => {
+  if (intent?.type !== DOCUMENT_OPEN || !isDocumentRef(intent.payload) || intent.payload.app !== 'folio') return undefined;
+  const version = /^[1-9]\d*$/.test(intent.payload.version ?? '') ? Number(intent.payload.version) : undefined;
+  return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
 /** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
@@ -30,7 +41,7 @@ export default defineMicroFrontend({
         .userId=${ctx.user.id}
         floor-name=${ctx.workspace.name}
         floor-kind=${ctx.workspace.kind}
-        .place=${placeFor(ctx.path)}
+        .place=${placeForIntent(ctx.intent) ?? placeFor(ctx.path)}
         @folio-place=${moved}
       ></folio-app>`,
       el,

@@ -1,10 +1,24 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
-import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type Caller, type CallerCheck, type CallerWorkspace, type DirectorySearch } from '@augur/service-kit';
+import {
+  callerCheckFromEnv,
+  callerFromHeaders,
+  health,
+  packageVersion,
+  PeopleUnavailable,
+  signedCallers,
+  type AudienceLookup,
+  type Caller,
+  type CallerCheck,
+  type CallerWorkspace,
+  type DirectorySearch,
+} from '@augur/service-kit';
 import { auditFromEnv, type Audit } from './audit.ts';
 import { documentRoutes } from './documents.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
 import { accessRoutes } from './access.ts';
+import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipalOf, peopleFromEnv, type CallerPrincipals } from './people.ts';
+import { publishingRoutes } from './publishing.ts';
 import { BadParentError, BadTagError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { tagRoutes } from './tags.ts';
 
@@ -26,6 +40,10 @@ export interface Options {
   principals?: CallerPrincipals;
   /** People and teams to share with. */
   directory?: DirectorySearch;
+  /** Who an audience reaches, to tell them something's published to them. */
+  audience?: AudienceLookup;
+  /** Tells people through the shell's stream. */
+  notify?: Notify;
 }
 
 /** What the caller may do with a library, so the app only offers what will work. */
@@ -65,11 +83,13 @@ export const rightsOn = (caller: OnFloor, library?: Pick<HeldLibrary, 'freeTags'
   return { manage, addFolders: add, addDocuments: add, addTags: manage || (add && Boolean(library?.freeTags)), share: manage };
 };
 
-export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, ...people }: Options = {}) => {
+export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, notify, ...people }: Options = {}) => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
   const fromEnv = peopleFromEnv(store);
   const principalsOf = people.principals ?? fromEnv.principals;
   const directory = people.directory ?? fromEnv.directory;
+  const audience = people.audience ?? fromEnv.audience;
+  const tell = notify ?? notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const recorded = (entry: Parameters<Audit>[0]) =>
     record(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
@@ -261,6 +281,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
       await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, maxUploadBytes });
       await accessRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, log: app.log });
       await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
+      await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log });
     },
     { prefix: `/${API_VERSION}` },
   );

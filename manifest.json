@@ -18,7 +18,12 @@
   },
   "scopes": [
     "audit:write",
-    "people:read"
+    "people:read",
+    "notifications:send",
+    "events:publish"
+  ],
+  "handles": [
+    "document.open"
   ],
   "maxUpload": 200,
   "menu": [
@@ -34,6 +39,14 @@
           "path": "/libraries",
           "detail": "Everything kept on this floor",
           "keywords": "documents folders shelves"
+        },
+        {
+          "id": "published",
+          "label": "Published to you",
+          "icon": "inbox",
+          "path": "/published",
+          "detail": "What’s been put out to you, newest first",
+          "keywords": "new inbox notices read"
         },
         {
           "id": "new",

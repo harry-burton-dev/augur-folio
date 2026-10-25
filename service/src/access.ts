@@ -3,7 +3,7 @@ import type { DirectorySearch } from '@augur/service-kit';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { documentFinder, documentRights, type HeldDocument } from './documents.ts';
-import type { CallerPrincipals } from './people.ts';
+import { describePrincipals, type CallerPrincipals } from './people.ts';
 import { LEVELS, PRINCIPAL, reaches, type FolioStore, type Grant, type Level } from './store.ts';
 
 export interface AccessDeps {
@@ -17,22 +17,10 @@ export interface AccessDeps {
   log: { error(obj: object, msg: string): void };
 }
 
-/** A principal as people see it: what kind it is and who, by name, when the directory knows them. */
-export interface Described {
-  principal: string;
-  kind: 'person' | 'team' | 'tree' | 'org';
-  name?: string;
-  email?: string;
-  /** For a team: the teams it sits in, from the top down. */
-  within?: string[];
-}
-
 const ID = { type: 'string', maxLength: 64 } as const;
 const PRINCIPAL_PARAM = { type: 'string', maxLength: 120 } as const;
 const LEVEL_BODY = { type: 'object', additionalProperties: false, required: ['level'], properties: { level: { type: 'string', enum: LEVELS } } } as const;
 
-const kindOf = (principal: string) => (principal === 'org' ? 'org' : (principal.split(':')[0] as Described['kind']));
-const idOf = (principal: string) => principal.slice(principal.indexOf(':') + 1);
 
 /**
  * Who may see a library or a document, and letting people and teams in: a
@@ -43,23 +31,7 @@ const idOf = (principal: string) => principal.slice(principal.indexOf(':') + 1);
 export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor, reach, libraryFor, principalsOf, directory, log }: AccessDeps) => {
   const documentFor = documentFinder({ store, reach, principalsOf });
 
-  /** Names the principals, as far as the directory knows them. */
-  const describe = async (principals: readonly string[]): Promise<Described[]> => {
-    const ids = [...new Set(principals.filter((p) => p !== 'org').map(idOf))];
-    const found = ids.length ? await directory({ ids }) : { people: [], teams: [] };
-    const people = new Map(found.people.map((p) => [p.id, p]));
-    const teams = new Map(found.teams.map((t) => [t.id, t]));
-    return principals.map((principal) => {
-      const kind = kindOf(principal);
-      if (kind === 'org') return { principal, kind };
-      if (kind === 'person') {
-        const person = people.get(idOf(principal));
-        return { principal, kind, ...(person ? { name: person.name, ...(person.email ? { email: person.email } : {}) } : {}) };
-      }
-      const team = teams.get(idOf(principal));
-      return { principal, kind, ...(team ? { name: team.name, within: team.within } : {}) };
-    });
-  };
+  const describe = describePrincipals(directory);
 
   const withNames = async (grants: Grant[]) => {
     const described = await describe(grants.map((g) => g.principal));

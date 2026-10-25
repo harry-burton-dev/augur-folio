@@ -2,7 +2,7 @@ import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sd
 import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
-import app, { addressFor } from './entry.js';
+import app, { addressFor, placeForIntent } from './entry.js';
 import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
@@ -38,6 +38,9 @@ const service = ({
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
   let retried = false;
+  /** What's out of Travel policy, if anything. */
+  let out: { id: string; version: number; audience: string[]; publishedAt: string; ended?: { as: string; at: string; by: string } } | undefined;
+  const named = (p: NonNullable<typeof out>) => ({ ...p, document: 'd-1', library: 'l-1', publishedBy: 'u1', audience: p.audience.map((a) => (a === 'tree:w-fin' ? FINANCE : { principal: a, kind: 'org' })) });
   const deleted = new Set<string>();
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
@@ -61,7 +64,30 @@ const service = ({
       if (params.get('filename') === 'big.pdf') return new Response('Payload Too Large', { status: 413 });
       return Response.json({ ...travel, id: 'd-new', title: params.get('filename'), latest: v(1, params.get('filename')!) }, { status: 201 });
     }
-    if (method === 'GET' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, versions: [v(2), v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED)] });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1')
+      return Response.json({
+        ...travel,
+        state: out ? (out.ended ? 'withdrawn' : 'published') : 'draft',
+        ...(out && !out.ended ? { published: out } : {}),
+        can: { ...travel.can, publish: lead },
+        versions: [v(2), v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED)],
+      });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1/publications') return Response.json({ publications: out ? [named(out)] : [], can: { publish: lead, publishToOrg: false } });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1/access') return Response.json({ floor: FINANCE, grants: [], library: grants, can: { share: lead } });
+    if (method === 'POST' && where === '/libraries/l-1/documents/d-1/publish') {
+      out = { id: 'p-1', version: body.version, audience: body.audience, publishedAt: new Date().toISOString() };
+      return Response.json(named(out), { status: 201 });
+    }
+    if (method === 'POST' && where === '/libraries/l-1/documents/d-1/withdraw') {
+      out = { ...out!, ended: { as: 'withdrawn', at: new Date().toISOString(), by: 'u1' } };
+      return Response.json(named(out));
+    }
+    if (method === 'GET' && where === '/published')
+      return Response.json({
+        documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', state: 'published', published: { id: 'p-9', version: 2, audience: ['team:w-fin'], publishedAt: new Date().toISOString(), note: 'For Monday' } }],
+        total: 1,
+      });
+    if (method === 'GET' && where === '/documents/d-9') return Response.json({ id: 'd-9', library: 'l-9', title: 'Shared plan', only: 2 });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader') return new Response(TRAVEL_MD, { headers: { 'content-type': 'text/markdown' } });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader/images/1.png') return new Response('png', { headers: { 'content-type': 'image/png' } });
     if (method === 'POST' && where === '/libraries/l-1/documents/d-1/versions/1/reader/retry') {
@@ -148,7 +174,8 @@ const mounted = async (fetch: MountContext['fetch'], path?: string) => {
   await settle(el);
   return el;
 };
-const trees = (el: HTMLElement) => [...el.querySelectorAll<UiTree>('ui-tree')];
+/** The rail's trees of libraries, folders and views; "For you" is always there, so it's left out. */
+const trees = (el: HTMLElement) => [...el.querySelectorAll<UiTree>('ui-tree')].filter((t) => t.label !== 'For you');
 const list = (el: HTMLElement) => el.querySelector<UiList>('ui-list')!;
 const button = (el: HTMLElement, text: string) => [...el.querySelectorAll<HTMLElement>('ui-button')].find((b) => b.textContent?.trim() === text);
 
@@ -169,6 +196,15 @@ describe('folio paths', () => {
     expect(addressFor('/@finance/folio/libraries', '/libraries', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
     expect(addressFor('/@finance/folio', '/', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
     expect(addressFor('/elsewhere', '/libraries', {})).toBeUndefined();
+    expect(placeFor('/published')).toEqual({ published: true, adding: false });
+    expect(pathFor({ published: true })).toBe('/published');
+  });
+
+  it('starts at a document another app asked to open', () => {
+    expect(placeForIntent({ type: 'document.open', payload: { app: 'folio', id: 'd-9', version: '2', title: 'Shared plan' } })).toEqual({ document: 'd-9', version: 2, adding: false });
+    expect(placeForIntent({ type: 'document.open', payload: { app: 'other', id: 'd-9', title: 'Theirs' } })).toBeUndefined();
+    expect(placeForIntent({ type: 'document.open', payload: { id: 'd-9' } })).toBeUndefined();
+    expect(placeForIntent(undefined)).toBeUndefined();
   });
 
   it('nests folders and finds the way down to one', () => {
@@ -474,6 +510,7 @@ describe('folio', () => {
       ['type', ['PDF', 'Word', 'HTML', 'Markdown', 'Text']],
       ['author', ['Alex Rivera']],
       ['since', ['Past week', 'Past month', 'Past three months', 'Past year']],
+      ['state', ['Drafts', 'Published', 'Withdrawn']],
     ]);
     bar.dispatchEvent(new CustomEvent('ui-change', { detail: { value: { tag: ['t-pol'], type: ['pdf'] }, sort: 'newest' } }));
     await settle(el);
@@ -622,6 +659,54 @@ describe('folio', () => {
     const shared = { libraries: [], documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', level: 'read' }] };
     const { fetch } = service({ shared });
     const el = await mounted(fetch, '/libraries/l-9/documents/d-9');
+    expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
+  });
+
+  it('publishes a version to the floor’s team and those below it, and withdraws it', async () => {
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    const reader = el.querySelector('folio-reader')!;
+    expect(reader.querySelector('.folio-reader-said')!.textContent).toContain('A draft');
+    button(reader, 'Publish')!.click();
+    await settle(el);
+    const publish = el.querySelector('folio-publish')!;
+    const [audience] = [...publish.querySelectorAll<UiList>('ui-list')];
+    expect(audience.items.map((i) => i.title)).toEqual(['Finance and the teams below it']);
+    button(publish, 'Publish version 2')!.click();
+    await settle(el);
+    expect(calls.find(([m, p]) => m === 'POST' && p.endsWith('/publish'))).toEqual(['POST', '/api/folio/v1/libraries/l-1/documents/d-1/publish', { version: 2, audience: ['tree:w-fin'] }]);
+    expect(publish.querySelector('.folio-note')!.textContent).toBe('Version 2 is out to Finance and the teams below it.');
+    expect(publish.querySelector('.folio-publish-lead')!.textContent).toContain('Version 2 went out to Finance and the teams below it just now');
+
+    button(publish, 'Withdraw')!.click();
+    await settle(el);
+    button(publish, 'Withdraw version 2')!.click();
+    await settle(el);
+    expect(calls.find(([m, p]) => m === 'POST' && p.endsWith('/withdraw'))).toEqual(['POST', '/api/folio/v1/libraries/l-1/documents/d-1/withdraw', {}]);
+    expect(publish.querySelector('.folio-publish-lead')!.textContent).toContain('hasn’t been published');
+  });
+
+  it('lists what’s been published to the person, and opens one at the version that’s out', async () => {
+    const { fetch, calls } = service();
+    const el = await mounted(fetch, '/published');
+    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Published to you');
+    const rows = list(el);
+    expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Shared plan', 'In Ops runbooks · Version 2 · For Monday']]);
+    rows.dispatchEvent(new CustomEvent('ui-open', { detail: { item: rows.items[0] } }));
+    await settle(el);
+    expect(calls.some(([, p]) => p === '/api/folio/v1/libraries/l-9/documents/d-9')).toBe(true);
+    expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
+  });
+
+  it('opens a document another app asked for, finding its library first', async () => {
+    const { fetch, calls } = service();
+    const el = document.createElement('div');
+    document.body.append(el);
+    await app.mount(el, { ...ctx(fetch, '/'), intent: { type: 'document.open', payload: { app: 'folio', id: 'd-9', title: 'Shared plan' } } });
+    await settle(el);
+    expect(calls.some(([, p]) => p === '/api/folio/v1/documents/d-9')).toBe(true);
     expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
   });
 });
