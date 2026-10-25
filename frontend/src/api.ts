@@ -73,6 +73,17 @@ export interface LibraryRights {
   addTags: boolean;
 }
 
+/** How a version's reader copy is coming along: the rendition worker makes it after upload. */
+export interface ReaderState {
+  state: 'queued' | 'running' | 'ready' | 'failed';
+  /** Why it failed, in words a person can act on. */
+  error?: string;
+  /** How many pages the original has, when it has pages (PDF). */
+  pages?: number;
+  thumbnail: boolean;
+  engine?: string;
+}
+
 export interface DocumentVersion {
   id: string;
   document: string;
@@ -83,6 +94,7 @@ export interface DocumentVersion {
   sha256: string;
   createdBy: string;
   createdAt: string;
+  reader: ReaderState;
 }
 
 export interface FolioDocument {
@@ -295,6 +307,11 @@ export class FolioApi {
 
   deleteDocument(library: string, id: string) {
     return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(id)}`);
+  }
+
+  /** Asks again for a reader copy that failed. */
+  retryReader(library: string, document: string, number: number) {
+    return this.call<ReaderState>('POST', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}/reader/retry`);
   }
 
   /** A version's file exactly as it was uploaded. Each download goes in the audit log. */

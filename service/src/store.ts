@@ -38,7 +38,53 @@ export interface DocumentVersion {
   sha256: string;
   createdBy: string;
   createdAt: string;
+  /** How its reader copy is coming along. */
+  reader: ReaderState;
 }
+
+/**
+ * Where a version's reader copy is: queued for the rendition worker, being made,
+ * ready to read, or failed (with why, after the worker gave up).
+ */
+export type RenditionState = 'queued' | 'running' | 'ready' | 'failed';
+export const RENDITION_STATES: readonly RenditionState[] = ['queued', 'running', 'ready', 'failed'];
+
+/** A version's reader copy, as a document's versions show it. */
+export interface ReaderState {
+  state: RenditionState;
+  /** Why it failed, in words a person can act on. */
+  error?: string;
+  /** How many pages the original has, when it has pages (PDF). */
+  pages?: number;
+  /** There's a picture of its first page. */
+  thumbnail: boolean;
+  /** What made it, such as "docling 2.14". */
+  engine?: string;
+}
+
+/**
+ * A version's renditions as the worker left them: its reader copy (Markdown) and
+ * the pictures it shows, a thumbnail, and its words as plain text for search.
+ * The files are in the bucket under `renditions/<version>/`.
+ */
+export interface Rendition extends ReaderState {
+  version: string;
+  attempts: number;
+  readerKey?: string;
+  thumbnailKey?: string;
+  /** The pictures the reader copy shows, by file name (`1.png`), under `images/`. */
+  images: string[];
+  text?: string;
+  updatedAt: string;
+}
+
+/** What a rendition came to: what the worker made, or why it couldn't. */
+export type RenditionResult =
+  | { state: 'ready'; engine: string; engineVersion: string; readerKey: string; thumbnailKey?: string; images: string[]; pages?: number; text: string }
+  | { state: 'failed'; error: string };
+
+/** A version's renditions, under its own prefix in the bucket. */
+export const renditionPrefix = (version: string) => `renditions/${version}/`;
 
 /** A version as the store keeps it: with where its file is in the bucket. */
 export interface StoredVersion extends DocumentVersion {
@@ -223,6 +269,12 @@ export interface FolioStore {
   createView(input: { library: string; name: string; query: ViewQuery; createdBy: string }): Promise<SavedView>;
   updateView(id: string, change: { name?: string; query?: ViewQuery }): Promise<SavedView | undefined>;
   deleteView(id: string): Promise<boolean>;
+  /** A version's renditions, by the version's id. */
+  rendition(version: string): Promise<Rendition | undefined>;
+  /** Queues a failed rendition again, from its first attempt; false unless it had failed. */
+  retryRendition(version: string): Promise<boolean>;
+  /** Records what a rendition came to. The worker does this itself; here for tests and `pnpm dev:app`. */
+  finishRendition(version: string, result: RenditionResult): Promise<void>;
 }
 
 const sameName = (a: string, b: string) => a.toLocaleLowerCase() === b.toLocaleLowerCase();
@@ -246,6 +298,17 @@ const byTitle = (a: FolioDocument, b: FolioDocument) => a.title.localeCompare(b.
 const newestFirst = (key: 'createdAt' | 'updatedAt') => (a: FolioDocument, b: FolioDocument) => b[key].localeCompare(a[key]) || b.id.localeCompare(a.id);
 const ORDER: Record<DocumentSort, (a: FolioDocument, b: FolioDocument) => number> = { title: byTitle, newest: newestFirst('createdAt'), updated: newestFirst('updatedAt') };
 const publicVersion = ({ objectKey: _, ...version }: StoredVersion): DocumentVersion => version;
+
+/** What a document's versions show of a rendition. */
+const readerOf = (r: Pick<Rendition, 'state' | 'error' | 'pages' | 'thumbnailKey' | 'engine'>): ReaderState => ({
+  state: r.state,
+  ...(r.error ? { error: r.error } : {}),
+  ...(r.pages ? { pages: r.pages } : {}),
+  thumbnail: Boolean(r.thumbnailKey),
+  ...(r.engine ? { engine: r.engine } : {}),
+});
+
+const QUEUED: ReaderState = { state: 'queued', thumbnail: false };
 
 /** `folder` and every folder inside it. */
 const subtree = (folders: readonly Folder[], folder: string) => {
@@ -275,11 +338,14 @@ export class MemoryFolioStore implements FolioStore {
   private readonly shelves = new Map<string, Library & { archivedAt?: string }>();
   private readonly folderList: Folder[] = [];
   private readonly docs = new Map<string, Omit<FolioDocument, 'latest' | 'tags'> & { deletedAt?: string }>();
-  private readonly versionList: StoredVersion[] = [];
+  private readonly versionList: Omit<StoredVersion, 'reader'>[] = [];
+  private readonly renditions = new Map<string, Rendition>();
   private readonly tagList: Tag[] = [];
   private readonly docTags = new Map<string, Set<string>>();
   private readonly viewList: SavedView[] = [];
   private readonly people = new Map<string, string>();
+  /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
+  onQueued?: (version: StoredVersion) => Promise<void>;
 
   async libraries(workspace: string) {
     return [...this.shelves.values()].filter((l) => l.workspace === workspace && !l.archivedAt).map(({ archivedAt: _, ...l }) => l).sort(byName);
@@ -352,7 +418,20 @@ export class MemoryFolioStore implements FolioStore {
   private withLatest(doc: Omit<FolioDocument, 'latest' | 'tags'> & { deletedAt?: string }): FolioDocument {
     const { deletedAt: _, ...rest } = doc;
     const latest = this.versionList.filter((v) => v.document === doc.id).reduce((a, b) => (b.number > a.number ? b : a));
-    return { ...rest, latest: publicVersion(latest), tags: [...(this.docTags.get(doc.id) ?? [])].sort() };
+    return { ...rest, latest: publicVersion(this.withReader(latest)), tags: [...(this.docTags.get(doc.id) ?? [])].sort() };
+  }
+
+  private withReader(version: Omit<StoredVersion, 'reader'>): StoredVersion {
+    const rendition = this.renditions.get(version.id);
+    return { ...version, reader: rendition ? readerOf(rendition) : QUEUED };
+  }
+
+  /** A new version's rendition, queued for the worker. */
+  private queue(version: string, at: string) {
+    this.renditions.set(version, { version, state: 'queued', attempts: 0, thumbnail: false, images: [], updatedAt: at });
+    const stored = this.versionList.find((v) => v.id === version);
+    const hear = this.onQueued;
+    if (stored && hear) setImmediate(() => void hear(this.withReader(stored)).catch(() => undefined));
   }
 
   private async checkFolder(library: string, folder: string | undefined) {
@@ -390,12 +469,15 @@ export class MemoryFolioStore implements FolioStore {
   }
 
   async versions(document: string) {
-    return this.versionList.filter((v) => v.document === document).sort((a, b) => b.number - a.number).map(publicVersion);
+    return this.versionList
+      .filter((v) => v.document === document)
+      .sort((a, b) => b.number - a.number)
+      .map((v) => publicVersion(this.withReader(v)));
   }
 
   async version(document: string, number: number) {
     const found = this.versionList.find((v) => v.document === document && v.number === number);
-    return found && { ...found };
+    return found && this.withReader(found);
   }
 
   async createDocument({ id, library, folder, title, createdBy, tags = [] }: { id: string; library: string; folder?: string; title: string; createdBy: string; tags?: string[] }, first: NewVersion) {
@@ -406,6 +488,7 @@ export class MemoryFolioStore implements FolioStore {
     const now = new Date().toISOString();
     this.docs.set(id, { id, workspace: shelf.workspace, library, ...(folder ? { folder } : {}), title, createdBy, createdAt: now, updatedAt: now });
     this.versionList.push({ ...first, document: id, number: 1, createdAt: now });
+    this.queue(first.id, now);
     if (tags.length) this.docTags.set(id, new Set(tags));
     return this.withLatest(this.docs.get(id)!);
   }
@@ -414,10 +497,11 @@ export class MemoryFolioStore implements FolioStore {
     const doc = this.docs.get(document);
     if (!doc || doc.deletedAt) return undefined;
     const number = Math.max(...this.versionList.filter((v) => v.document === document).map((v) => v.number)) + 1;
-    const stored: StoredVersion = { ...version, document, number, createdAt: new Date().toISOString() };
+    const stored = { ...version, document, number, createdAt: new Date().toISOString() };
     this.versionList.push(stored);
+    this.queue(stored.id, stored.createdAt);
     doc.updatedAt = stored.createdAt;
-    return publicVersion(stored);
+    return publicVersion(this.withReader(stored));
   }
 
   async updateDocument(id: string, change: { title?: string; folder?: string | null }) {
@@ -542,6 +626,29 @@ export class MemoryFolioStore implements FolioStore {
     this.viewList.splice(at, 1);
     return true;
   }
+
+  async rendition(version: string) {
+    const found = this.renditions.get(version);
+    return found && { ...found, images: [...found.images] };
+  }
+
+  async retryRendition(version: string) {
+    const found = this.renditions.get(version);
+    if (found?.state !== 'failed') return false;
+    this.queue(version, new Date().toISOString());
+    return true;
+  }
+
+  async finishRendition(version: string, result: RenditionResult) {
+    const found = this.renditions.get(version);
+    if (!found) return;
+    const updatedAt = new Date().toISOString();
+    if (result.state === 'failed') this.renditions.set(version, { ...found, state: 'failed', attempts: found.attempts + 1, error: result.error, updatedAt });
+    else {
+      const { state, engine, engineVersion, ...made } = result;
+      this.renditions.set(version, { version, state, attempts: found.attempts + 1, engine: `${engine} ${engineVersion}`, thumbnail: Boolean(made.thumbnailKey), ...made, updatedAt });
+    }
+  }
 }
 
 /**
@@ -650,6 +757,33 @@ export const migrations: { id: string; sql: string }[] = [
       );
       create index documents_updated on folio.documents (library_id, updated_at desc) where deleted_at is null;`,
   },
+  {
+    id: '004_renditions',
+    sql: `
+      -- A version's reader copy, thumbnail and text, as the rendition worker (apps/folio/worker) makes them.
+      -- The table is the worker's queue too: a row waits as queued until a worker leases it.
+      create table folio.renditions (
+        version_id text primary key references folio.document_versions (id),
+        workspace_id text not null,
+        state text not null default 'queued' check (state in ('queued', 'running', 'ready', 'failed')),
+        attempts integer not null default 0,
+        run_after timestamptz not null default now(),
+        locked_until timestamptz,
+        error text,
+        engine text,
+        engine_version text,
+        reader_key text,
+        thumbnail_key text,
+        images jsonb not null default '[]',
+        pages integer,
+        text text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create index renditions_queue on folio.renditions (run_after) where state in ('queued', 'running');
+      -- Every version uploaded before there was a worker waits for one.
+      insert into folio.renditions (version_id, workspace_id) select id, workspace_id from folio.document_versions;`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
@@ -666,7 +800,37 @@ const fromLibraryRow = (r: LibraryRow): Library => ({
   updatedAt: r.updated_at.toISOString(),
 });
 
-type VersionRow = { id: string; document_id: string; number: number; filename: string; media_type: string; size_bytes: string; sha256: string; object_key: string; created_by: string; created_at: Date };
+type VersionRow = {
+  id: string;
+  document_id: string;
+  number: number;
+  filename: string;
+  media_type: string;
+  size_bytes: string;
+  sha256: string;
+  object_key: string;
+  created_by: string;
+  created_at: Date;
+  reader_state: RenditionState | null;
+  reader_error: string | null;
+  reader_pages: number | null;
+  reader_thumbnail: boolean | null;
+  reader_engine: string | null;
+};
+type RenditionRow = {
+  version_id: string;
+  state: RenditionState;
+  attempts: number;
+  error: string | null;
+  engine: string | null;
+  engine_version: string | null;
+  reader_key: string | null;
+  thumbnail_key: string | null;
+  images: string[];
+  pages: number | null;
+  text: string | null;
+  updated_at: Date;
+};
 type DocumentRow = {
   id: string;
   workspace_id: string;
@@ -707,6 +871,27 @@ const fromVersionRow = (r: VersionRow): StoredVersion => ({
   objectKey: r.object_key,
   createdBy: r.created_by,
   createdAt: r.created_at.toISOString(),
+  // A version always has a rendition row; one made before 004 is backfilled as queued.
+  reader: {
+    state: r.reader_state ?? 'queued',
+    ...(r.reader_error ? { error: r.reader_error } : {}),
+    ...(r.reader_pages ? { pages: r.reader_pages } : {}),
+    thumbnail: Boolean(r.reader_thumbnail),
+    ...(r.reader_engine ? { engine: r.reader_engine } : {}),
+  },
+});
+
+const engineOf = (r: Pick<RenditionRow, 'engine' | 'engine_version'>) => (r.engine ? [r.engine, r.engine_version].filter(Boolean).join(' ') : null);
+
+const fromRenditionRow = (r: RenditionRow): Rendition => ({
+  version: r.version_id,
+  attempts: r.attempts,
+  ...readerOf({ state: r.state, error: r.error ?? undefined, pages: r.pages ?? undefined, thumbnailKey: r.thumbnail_key ?? undefined, engine: engineOf(r) ?? undefined }),
+  ...(r.reader_key ? { readerKey: r.reader_key } : {}),
+  ...(r.thumbnail_key ? { thumbnailKey: r.thumbnail_key } : {}),
+  images: r.images,
+  ...(r.text !== null ? { text: r.text } : {}),
+  updatedAt: r.updated_at.toISOString(),
 });
 
 const fromDocumentRow = (r: DocumentRow): FolioDocument => ({
@@ -722,6 +907,10 @@ const fromDocumentRow = (r: DocumentRow): FolioDocument => ({
   tags: r.tags,
 });
 
+/** What a version shows of its rendition (`r`). */
+const READER_COLUMNS = `r.state as reader_state, r.error as reader_error, r.pages as reader_pages, r.thumbnail_key is not null as reader_thumbnail,
+  case when r.engine is null then null else concat_ws(' ', r.engine, r.engine_version) end as reader_engine`;
+
 /** A document with its newest version (`v`) and its tags, as one row, with how many rows match in all. */
 const DOCUMENT_SELECT = `
   select d.id, d.workspace_id, d.library_id, d.folder_id, d.title, d.created_by, d.created_at, d.updated_at,
@@ -729,8 +918,15 @@ const DOCUMENT_SELECT = `
     array(select dt.tag_id from folio.document_tags dt where dt.document_id = d.id order by dt.tag_id) as tags,
     count(*) over () as total
   from folio.documents d
-  cross join lateral (select * from folio.document_versions dv where dv.document_id = d.id order by dv.number desc limit 1) v`;
+  cross join lateral (
+    select dv.*, ${READER_COLUMNS} from folio.document_versions dv left join folio.renditions r on r.version_id = dv.id
+    where dv.document_id = d.id order by dv.number desc limit 1
+  ) v`;
 const VERSION_COLUMNS = 'id, document_id, number, filename, media_type, size_bytes, sha256, object_key, created_by, created_at';
+/** Versions with how their reader copies are coming along. */
+const VERSION_SELECT = `select ${VERSION_COLUMNS.split(', ').map((c) => `dv.${c}`).join(', ')}, ${READER_COLUMNS}
+  from folio.document_versions dv left join folio.renditions r on r.version_id = dv.id`;
+const RENDITION_COLUMNS = 'version_id, state, attempts, error, engine, engine_version, reader_key, thumbnail_key, images, pages, text, updated_at';
 
 const fromFolderRow = (r: FolderRow): Folder => ({
   id: r.id,
@@ -921,12 +1117,12 @@ export class PgFolioStore implements FolioStore {
   }
 
   async versions(document: string) {
-    const { rows } = await this.pool.query<VersionRow>(`select ${VERSION_COLUMNS} from folio.document_versions where document_id = $1 order by number desc`, [document]);
+    const { rows } = await this.pool.query<VersionRow>(`${VERSION_SELECT} where dv.document_id = $1 order by dv.number desc`, [document]);
     return rows.map((r) => publicVersion(fromVersionRow(r)));
   }
 
   async version(document: string, number: number) {
-    const { rows } = await this.pool.query<VersionRow>(`select ${VERSION_COLUMNS} from folio.document_versions where document_id = $1 and number = $2`, [document, number]);
+    const { rows } = await this.pool.query<VersionRow>(`${VERSION_SELECT} where dv.document_id = $1 and dv.number = $2`, [document, number]);
     return rows[0] && fromVersionRow(rows[0]);
   }
 
@@ -936,6 +1132,9 @@ export class PgFolioStore implements FolioStore {
         select $1, workspace_id, id, $3, $4, $5, $6, $7, $8, $9 from folio.documents where id = $2 returning ${VERSION_COLUMNS}`,
       [v.id, document, number, v.filename, v.mediaType, v.size, v.sha256, v.objectKey, v.createdBy],
     );
+    // Its rendition waits for the worker, which hears of it as soon as this commits.
+    await client.query('insert into folio.renditions (version_id, workspace_id) select id, workspace_id from folio.document_versions where id = $1', [v.id]);
+    await client.query("select pg_notify('folio_renditions', $1)", [v.id]);
     return fromVersionRow(rows[0]);
   }
 
@@ -1178,5 +1377,36 @@ export class PgFolioStore implements FolioStore {
   async deleteView(id: string) {
     const { rowCount } = await this.pool.query('delete from folio.views where id = $1', [id]);
     return rowCount === 1;
+  }
+
+  async rendition(version: string) {
+    const { rows } = await this.pool.query<RenditionRow>(`select ${RENDITION_COLUMNS} from folio.renditions where version_id = $1`, [version]);
+    return rows[0] && fromRenditionRow(rows[0]);
+  }
+
+  async retryRendition(version: string) {
+    const { rowCount } = await this.pool.query(
+      `update folio.renditions set state = 'queued', attempts = 0, error = null, run_after = now(), locked_until = null, updated_at = now()
+        where version_id = $1 and state = 'failed'`,
+      [version],
+    );
+    if (rowCount) await this.pool.query("select pg_notify('folio_renditions', $1)", [version]);
+    return rowCount === 1;
+  }
+
+  async finishRendition(version: string, result: RenditionResult) {
+    if (result.state === 'failed') {
+      await this.pool.query(
+        `update folio.renditions set state = 'failed', attempts = attempts + 1, error = $2, locked_until = null, updated_at = now() where version_id = $1`,
+        [version, result.error],
+      );
+      return;
+    }
+    await this.pool.query(
+      `update folio.renditions set state = 'ready', attempts = attempts + 1, error = null, locked_until = null, updated_at = now(),
+          engine = $2, engine_version = $3, reader_key = $4, thumbnail_key = $5, images = $6, pages = $7, text = $8
+        where version_id = $1`,
+      [version, result.engine, result.engineVersion, result.readerKey, result.thumbnailKey ?? null, JSON.stringify(result.images), result.pages ?? null, result.text],
+    );
   }
 }

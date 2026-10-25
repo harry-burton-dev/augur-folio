@@ -1,0 +1,25 @@
+[project]
+name = "folio-worker"
+version = "0.1.0"
+description = "Folio's rendition worker: makes reader copies of the files people upload to Folio."
+requires-python = ">=3.12,<3.14"
+# Exact versions, so the worker and its image make the same reader copies everywhere.
+# Torch comes from its CPU-only index (see the Dockerfile and CI), not PyPI's CUDA build.
+dependencies = [
+  "docling==2.142.1",
+  "psycopg[binary]==3.3.6",
+  "boto3==1.43.118",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["folio_worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

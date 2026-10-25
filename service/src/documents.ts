@@ -5,6 +5,7 @@ import type { Audit } from './audit.ts';
 import type { OnFloor } from './app.ts';
 import type { ObjectStore } from './objects.ts';
 import { objectKeyFor, SINCE, type DocumentSort, type FolioDocument, type FolioStore, type Library, type NewVersion, type Since } from './store.ts';
+import { renditionRoutes } from './renditions.ts';
 import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
 
 /** What Folio takes, and the file endings each may have. PowerPoint waits for a later version. */
@@ -370,4 +371,6 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         .send(file);
     },
   );
+
+  await renditionRoutes(app, { store, objects, documentFor, mayChange, onFloor });
 };

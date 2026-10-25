@@ -14,11 +14,24 @@ import {
   type OpenDocument,
   type OpenLibrary,
   type Place,
+  type ReaderState,
   type SavedView,
   type Since,
   type Tag,
   type ViewQuery,
 } from './api.js';
+
+/** Where a version's reader copy is, in a few words. */
+export const readerWords = (reader: ReaderState) => {
+  switch (reader.state) {
+    case 'ready':
+      return reader.pages ? `Reader copy ready, ${reader.pages} ${reader.pages === 1 ? 'page' : 'pages'}` : 'Reader copy ready';
+    case 'failed':
+      return 'No reader copy';
+    default:
+      return 'Making the reader copy…';
+  }
+};
 
 type Dialog =
   | 'new-library'
@@ -369,6 +382,47 @@ export class FolioApp extends LitElement {
     try {
       this.doc = await this.api.document(open.id, id);
       this.dialog = 'document';
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  /** How often an open document looks again while a reader copy is on its way. */
+  static readerPollMs = 4000;
+  private readerTimer?: ReturnType<typeof setTimeout>;
+
+  override updated(changed: Map<string, unknown>) {
+    if (changed.has('doc')) this.followReaders();
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    clearTimeout(this.readerTimer);
+  }
+
+  /** While the open document has a reader copy on its way, looks again now and then. */
+  private followReaders() {
+    clearTimeout(this.readerTimer);
+    const doc = this.doc;
+    if (!doc?.versions.some((v) => v.reader.state === 'queued' || v.reader.state === 'running')) return;
+    this.readerTimer = setTimeout(async () => {
+      if (this.doc?.id !== doc.id) return;
+      try {
+        const fresh = await this.api.document(doc.library, doc.id);
+        if (this.doc?.id === doc.id) this.doc = fresh;
+      } catch {
+        // Quietly: the dialog still shows what it knew, and the next open looks again.
+      }
+    }, (this.constructor as typeof FolioApp).readerPollMs);
+  }
+
+  private async retryReader(version: number) {
+    const doc = this.doc;
+    if (!doc) return;
+    try {
+      await this.api.retryReader(doc.library, doc.id, version);
+      this.doc = await this.api.document(doc.library, doc.id);
+      this.note = `Making the reader copy of version ${version} again.`;
     } catch (err) {
       this.note = (err as Error).message;
     }
@@ -837,9 +891,9 @@ export class FolioApp extends LitElement {
           id: String(v.number),
           title: `Version ${v.number}`,
           icon: 'document',
-          detail: `${v.filename} · ${sizeWords(v.size)}`,
+          detail: `${v.filename} · ${sizeWords(v.size)} · ${readerWords(v.reader)}`,
           meta: ago(v.createdAt),
-          actions: [{ id: 'download', label: 'Download' }],
+          actions: [{ id: 'download', label: 'Download' }, ...(v.reader.state === 'failed' && doc.can.change ? [{ id: 'retry', label: 'Try again' }] : [])],
         }));
         return html`<ui-dialog open size="read" light eyebrow=${folderTrail(open?.folders ?? [], doc.folder).at(-1)?.name ?? open?.name ?? 'Document'}
           heading=${doc.title} summary=${documentLine(doc)} cancel-label="Close" @ui-close=${() => {
@@ -860,7 +914,11 @@ export class FolioApp extends LitElement {
                 })}</div>`
               : nothing}
           <ui-list label="Versions" density="compact" .noun=${['version', 'versions']} .items=${versions}
-            @ui-action=${(e: CustomEvent<{ item: ListItem }>) => void this.download(Number(e.detail.item.id))}></ui-list>
+            @ui-action=${(e: CustomEvent<{ item: ListItem; action: { id: string } }>) =>
+              void (e.detail.action.id === 'retry' ? this.retryReader(Number(e.detail.item.id)) : this.download(Number(e.detail.item.id)))}></ui-list>
+          ${doc.versions
+            .filter((v) => v.reader.state === 'failed')
+            .map((v) => html`<p class="folio-note">Version ${v.number} has no reader copy. ${v.reader.error ?? 'Folio couldn’t make one.'}</p>`)}
           ${doc.can.change
             ? html`<ui-drop-zone compact heading="Drop the next version here: it becomes the newest" action="Choose a file" accept=${ACCEPT}
                   .multiple=${false} ?busy=${this.uploading > 0} @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.newVersion(e.detail.files)}

@@ -1,7 +1,7 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
 import type { UiDialog, UiFilterBar, UiList, UiTagPicker, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pathFor, placeFor } from './api.js';
+import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor } from './entry.js';
 import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
 
@@ -11,7 +11,9 @@ const reports = { ...policies, id: 'l-2', name: 'Reports', description: '' };
 const hr = { id: 'f-hr', library: 'l-1', name: 'HR', createdBy: 'u1', createdAt: '' };
 const leave = { id: 'f-leave', library: 'l-1', parent: 'f-hr', name: 'Leave', createdBy: 'u2', createdAt: '' };
 const it_ = { id: 'f-it', library: 'l-1', name: 'IT', createdBy: 'u2', createdAt: '' };
-const v = (number: number, filename = 'travel.pdf', size = 1_234_567) => ({ id: `v-${number}`, document: 'd-1', number, filename, mediaType: 'application/pdf', size, sha256: 'ab', createdBy: 'u2', createdAt: new Date().toISOString() });
+const READY = { state: 'ready', pages: 3, thumbnail: true } as ReaderState;
+const DAMAGED = { state: 'failed', error: 'The file is damaged.', thumbnail: false } as ReaderState;
+const v = (number: number, filename = 'travel.pdf', size = 1_234_567, reader = READY) => ({ id: `v-${number}`, document: 'd-1', number, filename, mediaType: 'application/pdf', size, sha256: 'ab', createdBy: 'u2', createdAt: new Date().toISOString(), reader });
 const travel = { id: 'd-1', workspace: 'w-fin', library: 'l-1', title: 'Travel policy', createdBy: 'u2', createdAt: '', updatedAt: new Date().toISOString(), latest: v(2), tags: [] as string[], can: { change: true } };
 const tag = (id: string, name: string, library?: string) => ({ id, workspace: library ? 'w-fin' : 'w-org', ...(library ? { library } : {}), name, createdBy: 'u1', createdAt: '' });
 const policyTag = tag('t-pol', 'Policy');
@@ -22,6 +24,7 @@ const recent = { id: 'vw-1', library: 'l-1', name: 'Recent policy', query: { tag
 /** A stand-in for Folio's service, answering what the app asks through ctx.fetch. */
 const service = ({ lead = true, libraries = [policies, reports], folders = [hr, leave, it_], documents = [] as (typeof travel & { folder?: string })[], views = [recent] as (typeof recent)[] } = {}) => {
   const calls: [string, string, unknown?][] = [];
+  let retried = false;
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     const raw = init?.body;
@@ -44,7 +47,11 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
       if (params.get('filename') === 'big.pdf') return new Response('Payload Too Large', { status: 413 });
       return Response.json({ ...travel, id: 'd-new', title: params.get('filename'), latest: v(1, params.get('filename')!) }, { status: 201 });
     }
-    if (method === 'GET' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, versions: [v(2), v(1, 'travel-old.pdf', 900)] });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, versions: [v(2), v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED)] });
+    if (method === 'POST' && where === '/libraries/l-1/documents/d-1/versions/1/reader/retry') {
+      retried = true;
+      return Response.json({ state: 'queued', thumbnail: false }, { status: 202 });
+    }
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/1/original') return new Response('%PDF old', { headers: { 'content-type': 'application/pdf' } });
     if (method === 'POST' && where === '/libraries/l-1/documents/d-1/versions') return Response.json(v(3), { status: 201 });
     if (method === 'PATCH' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, ...body });
@@ -212,10 +219,11 @@ describe('folio', () => {
     const dialog = el.querySelector<UiDialog>('ui-dialog')!;
     expect(dialog.heading).toBe('Travel policy');
     const versions = dialog.querySelector<UiList>('ui-list')!;
-    expect(versions.items.map((i) => [i.title, i.detail])).toEqual([
-      ['Version 2', 'travel.pdf · 1.2 MB'],
-      ['Version 1', 'travel-old.pdf · 900 bytes'],
+    expect(versions.items.map((i) => [i.title, i.detail, i.actions?.map((a) => a.label)])).toEqual([
+      ['Version 2', 'travel.pdf · 1.2 MB · Reader copy ready, 3 pages', ['Download']],
+      ['Version 1', 'travel-old.pdf · 900 bytes · No reader copy', ['Download', 'Try again']],
     ]);
+    expect(dialog.querySelector('.folio-note')?.textContent).toBe('Version 1 has no reader copy. The file is damaged.');
     versions.dispatchEvent(new CustomEvent('ui-action', { detail: { item: { id: '1' }, action: { id: 'download' } } }));
     await settle(el);
     expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-1/versions/1/original']);
@@ -225,6 +233,26 @@ describe('folio', () => {
     expect(calls.some(([m, p]) => m === 'POST' && p === '/api/folio/v1/libraries/l-1/documents/d-1/versions?filename=travel+v3.pdf')).toBe(true);
     vi.restoreAllMocks();
   });
+
+  it('asks again for a reader copy that failed, and looks again until it is made', async () => {
+    const App = customElements.get('folio-app') as unknown as { readerPollMs: number };
+    App.readerPollMs = 10;
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    const versions = () => el.querySelector<UiDialog>('ui-dialog')!.querySelector<UiList>('ui-list')!;
+    versions().dispatchEvent(new CustomEvent('ui-action', { detail: { item: { id: '1' }, action: { id: 'retry' } } }));
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/documents/d-1/versions/1/reader/retry']);
+    expect(versions().items[1].detail).toBe('travel-old.pdf · 900 bytes · Making the reader copy…');
+    const looks = () => calls.filter(([m, p]) => m === 'GET' && p === '/api/folio/v1/libraries/l-1/documents/d-1').length;
+    const before = looks();
+    await vi.waitFor(() => expect(looks()).toBeGreaterThan(before));
+    App.readerPollMs = 4000;
+    el.remove();
+  });
+
 
   it('opens the floor’s first library, with its libraries and folders in the side rail', async () => {
     const { fetch, calls } = service();
