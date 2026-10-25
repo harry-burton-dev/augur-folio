@@ -1,9 +1,11 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
-import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, signedCallers, type Caller, type CallerCheck, type CallerWorkspace } from '@augur/service-kit';
+import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type Caller, type CallerCheck, type CallerWorkspace, type DirectorySearch } from '@augur/service-kit';
 import { auditFromEnv, type Audit } from './audit.ts';
 import { documentRoutes } from './documents.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
-import { BadParentError, BadTagError, MemoryFolioStore, NameTakenError, NotEmptyError, type FolioStore, type Library } from './store.ts';
+import { accessRoutes } from './access.ts';
+import { floorPrincipalOf, peopleFromEnv, type CallerPrincipals } from './people.ts';
+import { BadParentError, BadTagError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { tagRoutes } from './tags.ts';
 
 /** The major version of the API this service serves. Its routes go under /v1, as the platform's do. */
@@ -20,6 +22,10 @@ export interface Options {
   audit?: Audit;
   /** The most one upload may be, in bytes. */
   maxUploadBytes?: number;
+  /** Who a caller stands for. From identity by default; without it, their floor (peopleFromEnv). */
+  principals?: CallerPrincipals;
+  /** People and teams to share with. */
+  directory?: DirectorySearch;
 }
 
 /** What the caller may do with a library, so the app only offers what will work. */
@@ -32,7 +38,17 @@ export interface LibraryRights {
   addDocuments: boolean;
   /** Make new tags for the library: its leads, or anyone when it takes free tags. */
   addTags: boolean;
+  /** Let people and teams in, or take them out: whoever manages it. */
+  share: boolean;
 }
+
+/**
+ * A library as the caller reaches it. `level` is how far they're let in: the
+ * floor's leads manage it and anyone who can stand on the floor reads it, and
+ * grants add to that. `onFloor` is whether they're standing on its floor now,
+ * where anyone may add folders and documents.
+ */
+export type HeldLibrary = Library & { level?: Level; onFloor: boolean };
 
 export type OnFloor = Caller & { workspace: CallerWorkspace };
 
@@ -42,13 +58,18 @@ const DESCRIPTION = { type: 'string', maxLength: 500 } as const;
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] } as const;
 const FOLDER_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, folder: { type: 'string', maxLength: 64 } }, required: ['id', 'folder'] } as const;
 
-export const rightsOn = (caller: OnFloor, library?: Pick<Library, 'freeTags'>): LibraryRights => {
-  const manage = caller.workspace.role === 'lead';
-  return { manage, addFolders: true, addDocuments: true, addTags: manage || Boolean(library?.freeTags) };
+/** What the caller may do in a library; with none, on the floor they're standing on (making a library). */
+export const rightsOn = (caller: OnFloor, library?: Pick<HeldLibrary, 'freeTags' | 'level' | 'onFloor'>): LibraryRights => {
+  const manage = library ? reaches(library.level, 'manage') : caller.workspace.role === 'lead';
+  const add = library ? library.onFloor || reaches(library.level, 'edit') : true;
+  return { manage, addFolders: add, addDocuments: add, addTags: manage || (add && Boolean(library?.freeTags)), share: manage };
 };
 
-export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes }: Options = {}) => {
+export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, ...people }: Options = {}) => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+  const fromEnv = peopleFromEnv(store);
+  const principalsOf = people.principals ?? fromEnv.principals;
+  const directory = people.directory ?? fromEnv.directory;
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const recorded = (entry: Parameters<Audit>[0]) =>
     record(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
@@ -70,19 +91,29 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
     return caller as OnFloor;
   };
 
-  /** The library, when it is on the caller's floor. One on another floor is as good as not there. */
-  const libraryFor = async (caller: OnFloor, id: string, reply: FastifyReply): Promise<Library | undefined> => {
+  /** A library and how far the caller is let in, which may be not at all. */
+  const reach = async (caller: OnFloor, id: string): Promise<HeldLibrary | undefined> => {
     const library = await store.library(id);
-    if (!library || library.workspace !== caller.workspace.id) {
-      reply.code(404).send({ error: 'not-found', message: 'There’s no such library on this floor.' });
+    if (!library) return undefined;
+    const principals = await principalsOf(caller);
+    const onFloor = library.workspace === caller.workspace.id;
+    const floor: Level | undefined = onFloor ? (caller.workspace.role === 'lead' ? 'manage' : 'read') : principals.includes(library.floor) ? 'read' : undefined;
+    return { ...library, onFloor, level: furthest(floor, levelFrom(await store.grants(library.id), principals)) };
+  };
+
+  /** The library, when the caller may see it. One they may not is as good as not there. */
+  const libraryFor = async (caller: OnFloor, id: string, reply: FastifyReply): Promise<HeldLibrary | undefined> => {
+    const library = await reach(caller, id);
+    if (!library?.level) {
+      reply.code(404).send({ error: 'not-found', message: 'There’s no such library, or it hasn’t been shared with you.' });
       return undefined;
     }
     return library;
   };
 
-  const leadsOnly = (caller: OnFloor, reply: FastifyReply) => {
-    if (rightsOn(caller).manage) return true;
-    reply.code(403).send({ error: 'forbidden', message: 'Only the floor’s leads can do that.' });
+  const managersOnly = (caller: OnFloor, library: HeldLibrary, reply: FastifyReply) => {
+    if (rightsOn(caller, library).manage) return true;
+    reply.code(403).send({ error: 'forbidden', message: 'Only whoever manages this library can do that.' });
     return false;
   };
 
@@ -96,6 +127,13 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
 
   await app.register(
     async (app) => {
+      // Identity out of reach: who the caller stands for can't be worked out, so nothing is let through.
+      app.setErrorHandler((err, req, reply) => {
+        if (!(err instanceof PeopleUnavailable)) return reply.send(err);
+        req.log.error({ err: err.message }, 'could not ask identity who the caller is');
+        return reply.code(503).send({ error: 'unavailable', message: 'Folio can’t check who you are right now. Try again in a moment.' });
+      });
+
       app.get('/libraries', async (req, reply) => {
         const caller = onFloor(req, reply);
         if (!caller) return reply;
@@ -107,11 +145,12 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         { schema: { body: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: NAME, description: DESCRIPTION } } } },
         async (req, reply) => {
           const caller = onFloor(req, reply);
-          if (!caller || !leadsOnly(caller, reply)) return reply;
+          if (!caller) return reply;
+          if (!rightsOn(caller).manage) return reply.code(403).send({ error: 'forbidden', message: 'Only the floor’s leads can do that.' });
           try {
-            const library = await store.createLibrary({ workspace: caller.workspace.id, name: req.body.name.trim(), description: req.body.description?.trim(), createdBy: caller.id });
+            const library = await store.createLibrary({ workspace: caller.workspace.id, floor: floorPrincipalOf(caller), name: req.body.name.trim(), description: req.body.description?.trim(), createdBy: caller.id });
             await recorded({ actor: caller.id, action: 'library.created', target: library.id, workspace: library.workspace, detail: { name: library.name } });
-            return reply.code(201).send(library);
+            return reply.code(201).send({ ...library, can: rightsOn(caller, { ...library, level: 'manage', onFloor: true }) });
           } catch (err) {
             return refused(err, reply);
           }
@@ -139,7 +178,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
           const caller = onFloor(req, reply);
           if (!caller) return reply;
           const library = await libraryFor(caller, req.params.id, reply);
-          if (!library || !leadsOnly(caller, reply)) return reply;
+          if (!library || !managersOnly(caller, library, reply)) return reply;
           try {
             return await store.updateLibrary(library.id, { name: req.body.name?.trim(), description: req.body.description?.trim(), freeTags: req.body.freeTags });
           } catch (err) {
@@ -152,7 +191,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         const caller = onFloor(req, reply);
         if (!caller) return reply;
         const library = await libraryFor(caller, req.params.id, reply);
-        if (!library || !leadsOnly(caller, reply)) return reply;
+        if (!library || !managersOnly(caller, library, reply)) return reply;
         await store.archiveLibrary(library.id, caller.id);
         await recorded({ actor: caller.id, action: 'library.archived', target: library.id, workspace: library.workspace, detail: { name: library.name } });
         return reply.code(204).send();
@@ -166,6 +205,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
           if (!caller) return reply;
           const library = await libraryFor(caller, req.params.id, reply);
           if (!library) return reply;
+          if (!rightsOn(caller, library).addFolders) return reply.code(403).send({ error: 'forbidden', message: 'You can read this library, but not add to it.' });
           try {
             return reply.code(201).send(await store.createFolder({ library: library.id, parent: req.body.parent, name: req.body.name.trim(), createdBy: caller.id }));
           } catch (err) {
@@ -174,15 +214,16 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         },
       );
 
-      /** A folder may be renamed or removed by whoever made it, or by a lead. */
-      const folderFor = async (caller: OnFloor, library: Library, id: string, reply: FastifyReply) => {
+      /** A folder may be renamed or removed by whoever made it (while they may still add to the library), or by its managers. */
+      const folderFor = async (caller: OnFloor, library: HeldLibrary, id: string, reply: FastifyReply) => {
         const folder = (await store.folders(library.id)).find((f) => f.id === id);
         if (!folder) {
           reply.code(404).send({ error: 'not-found', message: 'There’s no such folder in this library.' });
           return undefined;
         }
-        if (folder.createdBy !== caller.id && !rightsOn(caller).manage) {
-          reply.code(403).send({ error: 'forbidden', message: 'Only whoever made the folder, or the floor’s leads, can change it.' });
+        const rights = rightsOn(caller, library);
+        if (!rights.manage && !(folder.createdBy === caller.id && rights.addFolders)) {
+          reply.code(403).send({ error: 'forbidden', message: 'Only whoever made the folder, or whoever manages the library, can change it.' });
           return undefined;
         }
         return folder;
@@ -217,7 +258,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         }
       });
 
-      await documentRoutes(app, { store, objects, audit: record, onFloor, libraryFor, refused, log: app.log, maxUploadBytes });
+      await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, maxUploadBytes });
+      await accessRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, log: app.log });
       await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
     },
     { prefix: `/${API_VERSION}` },

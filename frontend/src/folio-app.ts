@@ -1,6 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
 import './folio-reader.js';
+import './folio-share.js';
 import {
   ACCEPT,
   KINDS,
@@ -17,6 +18,7 @@ import {
   type Place,
   type ReaderState,
   type SavedView,
+  type Shared,
   type Since,
   type Tag,
   type ViewQuery,
@@ -49,7 +51,8 @@ type Dialog =
   | 'remove-tag'
   | 'save-view'
   | 'rename-view'
-  | 'delete-view';
+  | 'delete-view'
+  | 'share';
 
 /** How many documents come in one page of the list. */
 const PAGE = 100;
@@ -180,6 +183,7 @@ export class FolioApp extends LitElement {
     tagTarget: { state: true },
     more: { state: true },
     reading: { state: true },
+    shared: { state: true },
   };
 
   declare api: FolioApi;
@@ -221,7 +225,11 @@ export class FolioApp extends LitElement {
   /** The next page is on its way. */
   declare more: boolean;
   /** The document being read, on its own page, and which version (the newest when there's none). */
-  declare reading: { document: string; version?: number } | undefined;
+  declare reading: { library: string; document: string; version?: number } | undefined;
+  /** Libraries and documents shared with the person from other floors. */
+  declare shared: Shared;
+  /** What the share dialog is about: a library, or one document of it. */
+  shareTarget: { library: string; document?: string; name: string } | undefined;
 
   constructor() {
     super();
@@ -241,6 +249,7 @@ export class FolioApp extends LitElement {
     this.total = 0;
     this.uploadTags = [];
     this.more = false;
+    this.shared = { libraries: [], documents: [] };
   }
 
   override createRenderRoot() {
@@ -255,15 +264,24 @@ export class FolioApp extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const { libraries, can } = await this.api.libraries();
+      const [{ libraries, can }, shared] = await Promise.all([
+        this.api.libraries(),
+        // What's shared from elsewhere is a side rail's worth: Folio opens without it.
+        this.api.shared().catch(() => ({ libraries: [], documents: [] }) as Shared),
+      ]);
       this.libraries = libraries;
+      this.shared = shared;
       this.canCreate = can.create;
-      const start = this.open?.id ?? this.place.library ?? libraries[0]?.id;
-      const reading = this.open ? this.reading : this.place.document ? { document: this.place.document, version: this.place.version } : undefined;
+      const start = this.open?.id ?? this.reading?.library ?? this.place.library ?? libraries[0]?.id;
+      const reading = this.reading ?? (this.place.document ? { document: this.place.document, version: this.place.version } : undefined);
       if (this.place.adding && can.create) this.dialog = 'new-library';
-      if (start && libraries.some((l) => l.id === start)) {
+      if (start && [...libraries, ...shared.libraries].some((l) => l.id === start)) {
         await this.openLibrary(start, this.open ? this.folder : this.place.folder, false, this.open ? this.view : this.place.view);
         if (reading) await this.read(reading.document, reading.version, false);
+      } else if (start && reading) {
+        // A document shared alone: read it without its library.
+        this.open = undefined;
+        await this.read(reading.document, reading.version, false, start);
       } else this.open = undefined;
     } catch (err) {
       this.error = (err as Error).message;
@@ -387,12 +405,11 @@ export class FolioApp extends LitElement {
   }
 
   /** Opens a document on its own page to read, at a version or the newest. */
-  private async read(id: string, version?: number, tell = true) {
-    const open = this.open;
-    if (!open) return;
+  private async read(id: string, version?: number, tell = true, library = this.open?.id) {
+    if (!library) return;
     try {
-      if (this.doc?.id !== id) this.doc = await this.api.document(open.id, id);
-      this.reading = { document: id, ...(version ? { version } : {}) };
+      if (this.doc?.id !== id) this.doc = await this.api.document(library, id);
+      this.reading = { library, document: id, ...(version ? { version } : {}) };
       if (tell) this.tell();
     } catch (err) {
       this.note = (err as Error).message;
@@ -403,6 +420,13 @@ export class FolioApp extends LitElement {
   private async stopReading() {
     this.reading = undefined;
     this.doc = undefined;
+    if (!this.open) {
+      // Read from "Shared with you", with no library to go back to: back to the floor's own.
+      const first = this.libraries[0];
+      if (first) await this.openLibrary(first.id);
+      else this.tell();
+      return;
+    }
     this.tell();
     await this.loadDocuments();
   }
@@ -640,7 +664,7 @@ export class FolioApp extends LitElement {
 
   private tell() {
     const detail = this.reading
-      ? { library: this.open?.id, ...this.reading }
+      ? { ...this.reading }
       : this.view
         ? { library: this.open?.id, view: this.view }
         : { library: this.open?.id, folder: this.folder };
@@ -650,6 +674,11 @@ export class FolioApp extends LitElement {
   /** May the person rename or remove this folder: whoever made it, or a lead. */
   private mayChange(folder: Folder) {
     return Boolean(this.open?.can.manage || folder.createdBy === this.userId);
+  }
+
+  private openShare(target: { library: string; document?: string; name: string }) {
+    this.shareTarget = target;
+    this.dialog = 'share';
   }
 
   /** Set by the entry: who is signed in, so folders they made offer Rename and Remove. */
@@ -717,6 +746,24 @@ export class FolioApp extends LitElement {
         @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openLibrary(e.detail.item.id)}
       ></ui-tree>
       ${this.canCreate ? html`<div class="folio-rail-act"><ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'new-library')}>New library</ui-button></div>` : nothing}
+      ${this.shared.libraries.length || this.shared.documents.length
+        ? html`<ui-tree
+            label="Shared with you from other floors"
+            heading="Shared with you"
+            .items=${[
+              ...this.shared.libraries.map((l): TreeItem => ({ id: l.id, label: l.name, icon: 'library' })),
+              ...this.shared.documents.map((d): TreeItem => ({ id: `${DOC}${d.library}/${d.id}`, label: d.title, icon: 'document' })),
+            ]}
+            selected=${this.reading && !open ? `${DOC}${this.reading.library}/${this.reading.document}` : this.shared.libraries.some((l) => l.id === open?.id) ? open!.id : ''}
+            @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => {
+              const id = e.detail.item.id;
+              if (!id.startsWith(DOC)) return void this.openLibrary(id);
+              const [library, document] = id.slice(DOC.length).split('/');
+              this.open = undefined;
+              void this.read(document, undefined, true, library);
+            }}
+          ></ui-tree>`
+        : nothing}
       ${open && open.folders.length
         ? html`<ui-tree
             label=${`Folders in ${open.name}`}
@@ -743,11 +790,6 @@ export class FolioApp extends LitElement {
     if (this.error)
       return html`<ui-state kind="error" heading="Couldn’t open Folio" body=${this.error} action="Try again" @ui-action=${() => void this.load()}></ui-state>`;
     const open = this.open;
-    if (!open)
-      return this.canCreate
-        ? html`<ui-state kind="empty" heading="No libraries here yet" body="A library keeps documents together, with folders inside it." action="New library"
-            @ui-action=${() => (this.dialog = 'new-library')}></ui-state>`
-        : html`<ui-state kind="empty" heading="No libraries here yet" body="A lead on this floor can start one."></ui-state>`;
     if (this.reading) {
       const doc = this.doc;
       if (!doc || doc.id !== this.reading.document) return html`<ui-state kind="loading" heading="Opening the document"></ui-state>`;
@@ -755,15 +797,21 @@ export class FolioApp extends LitElement {
         .api=${this.api}
         .doc=${doc}
         .version=${this.reading.version}
-        .tags=${open.tags}
-        library-name=${[open.name, ...folderTrail(open.folders, doc.folder).map((f) => f.name)].join(' / ')}
-        @folio-read=${(e: CustomEvent<{ version?: number }>) => void this.read(doc.id, e.detail.version)}
+        .tags=${open?.tags ?? []}
+        library-name=${open ? [open.name, ...folderTrail(open.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName}
+        @folio-read=${(e: CustomEvent<{ version?: number }>) => void this.read(doc.id, e.detail.version, true, doc.library)}
         @folio-back=${() => void this.stopReading()}
         @folio-manage=${() => (this.dialog = 'document')}
+        @folio-share=${() => this.openShare({ library: doc.library, document: doc.id, name: doc.title })}
         @folio-download=${(e: CustomEvent<{ version: number }>) => void this.download(e.detail.version)}
         @folio-retry=${(e: CustomEvent<{ version: number }>) => void this.retryReader(e.detail.version)}
       ></folio-reader>`;
     }
+    if (!open)
+      return this.canCreate
+        ? html`<ui-state kind="empty" heading="No libraries here yet" body="A library keeps documents together, with folders inside it." action="New library"
+            @ui-action=${() => (this.dialog = 'new-library')}></ui-state>`
+        : html`<ui-state kind="empty" heading="No libraries here yet" body="A lead on this floor can start one."></ui-state>`;
     const trail = folderTrail(open.folders, this.folder);
     const here = trail.at(-1);
     const view = this.currentView;
@@ -811,6 +859,7 @@ export class FolioApp extends LitElement {
                 <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-view')}>Delete view</ui-button>`
             : html`${open.can.addFolders && !view ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
                 <ui-button kind="ghost" size="sm" @click=${() => void this.openTags()}>Tags</ui-button>
+                ${!here ? html`<ui-button kind="ghost" size="sm" @click=${() => this.openShare({ library: open.id, name: open.name })}>${open.can.share ? 'Share' : 'Who can see it'}</ui-button>` : nothing}
                 ${open.can.manage && !here
                   ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'edit-library')}>Rename</ui-button>
                       <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'archive-library')}>Archive</ui-button>`
@@ -984,6 +1033,17 @@ export class FolioApp extends LitElement {
                   <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-document')}>Delete</ui-button>
                 </div>`
             : nothing}
+        </ui-dialog>`;
+      }
+      case 'share': {
+        const target = this.shareTarget;
+        if (!target) return nothing;
+        return html`<ui-dialog open eyebrow=${target.document ? 'Document' : 'Library'} heading=${`Who can see ${target.name}`} cancel-label="Done"
+          @ui-close=${() => {
+            close();
+            this.shareTarget = undefined;
+          }}>
+          <folio-share .api=${this.api} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
         </ui-dialog>`;
       }
       case 'edit-document':

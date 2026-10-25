@@ -17,7 +17,8 @@
     "bucket": true
   },
   "scopes": [
-    "audit:write"
+    "audit:write",
+    "people:read"
   ],
   "maxUpload": 200,
   "menu": [

@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Audit } from './audit.ts';
-import type { OnFloor } from './app.ts';
+import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
+import type { CallerPrincipals } from './people.ts';
 import type { ObjectStore } from './objects.ts';
-import { objectKeyFor, SINCE, type DocumentSort, type FolioDocument, type FolioStore, type Library, type NewVersion, type Since } from './store.ts';
+import { furthest, levelFrom, objectKeyFor, reaches, SINCE, type DocumentSort, type FolioDocument, type FolioStore, type Level, type NewVersion, type Since } from './store.ts';
 import { renditionRoutes } from './renditions.ts';
 import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
 
@@ -39,7 +40,10 @@ export interface DocumentDeps {
   objects: ObjectStore;
   audit: Audit;
   onFloor(req: FastifyRequest, reply: FastifyReply): OnFloor | undefined;
-  libraryFor(caller: OnFloor, id: string, reply: FastifyReply): Promise<Library | undefined>;
+  /** A library and how far the caller is let in, which may be not at all. */
+  reach(caller: OnFloor, id: string): Promise<HeldLibrary | undefined>;
+  libraryFor(caller: OnFloor, id: string, reply: FastifyReply): Promise<HeldLibrary | undefined>;
+  principalsOf: CallerPrincipals;
   refused(err: unknown, reply: FastifyReply): unknown;
   log: { error(obj: object, msg: string): void };
   /** The most one upload may be; MAX_UPLOAD_BYTES unless a test says less. */
@@ -93,6 +97,37 @@ type ListQuery = {
 
 const DAY = 24 * 60 * 60 * 1000;
 
+/** A document as the caller reaches it: how far they're let in, through its library or into it alone. */
+export type HeldDocument = FolioDocument & { level: Level; shelf: HeldLibrary };
+
+/** Whoever may edit it, and whoever added it while they may still add to its library. */
+export const mayChange = (caller: OnFloor, doc: FolioDocument & { level?: Level }, shelf: HeldLibrary) =>
+  reaches(furthest(doc.level, shelf.level), 'edit') || (doc.createdBy === caller.id && rightsOn(caller, shelf).addDocuments);
+
+/** What the caller may do with a document. */
+export const documentRights = (caller: OnFloor, doc: HeldDocument) => ({ change: mayChange(caller, doc, doc.shelf), share: reaches(doc.level, 'manage') });
+
+export type DocumentFor = (caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply) => Promise<HeldDocument | undefined>;
+
+/**
+ * The document, when the caller may read it: through its library (its floor,
+ * or a grant on the library) or a grant on the document alone.
+ */
+export const documentFinder =
+  ({ store, reach, principalsOf }: Pick<DocumentDeps, 'store' | 'reach' | 'principalsOf'>): DocumentFor =>
+  async (caller, params, reply) => {
+    const [doc, shelf] = await Promise.all([store.document(params.doc), reach(caller, params.id)]);
+    const level = doc && shelf && doc.library === shelf.id ? furthest(shelf.level, levelFrom(await store.grants(shelf.id, doc.id), await principalsOf(caller))) : undefined;
+    if (!doc || !shelf || !level) {
+      reply.code(404).send({ error: 'not-found', message: 'There’s no such document, or it hasn’t been shared with you.' });
+      return undefined;
+    }
+    return { ...doc, level, shelf };
+  };
+
+/** A document as it's sent: without the library it was reached through. */
+export const sent = ({ shelf: _, ...doc }: HeldDocument) => doc;
+
 const DOC_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, doc: { type: 'string', maxLength: 64 } }, required: ['id', 'doc'] } as const;
 const VERSION_PARAMS = {
   type: 'object',
@@ -104,26 +139,14 @@ const VERSION_PARAMS = {
  * Documents: uploading them, new versions, and their original files. Uploads stream
  * straight into Folio's bucket, counted and hashed on the way; nothing is held in memory.
  */
-export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, libraryFor, refused, log, maxUploadBytes = MAX_UPLOAD_BYTES }: DocumentDeps) => {
+export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, reach, libraryFor, principalsOf, refused, log, maxUploadBytes = MAX_UPLOAD_BYTES }: DocumentDeps) => {
   // Every upload reaches its route as a stream, whatever it says it is; the route decides what it takes.
   app.removeContentTypeParser('text/plain');
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
 
-  /** Whoever added a document, or a lead, may change it. */
-  const mayChange = (caller: OnFloor, doc: FolioDocument) => doc.createdBy === caller.id || caller.workspace.role === 'lead';
+  const documentFor = documentFinder({ store, reach, principalsOf });
 
-  const documentFor = async (caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply) => {
-    const library = await libraryFor(caller, params.id, reply);
-    if (!library) return undefined;
-    const doc = await store.document(params.doc);
-    if (!doc || doc.library !== library.id) {
-      reply.code(404).send({ error: 'not-found', message: 'There’s no such document in this library.' });
-      return undefined;
-    }
-    return doc;
-  };
-
-  const forbidden = (reply: FastifyReply) => reply.code(403).send({ error: 'forbidden', message: 'Only whoever added the document, or the floor’s leads, can change it.' });
+  const forbidden = (reply: FastifyReply) => reply.code(403).send({ error: 'forbidden', message: 'Only whoever added the document, or whoever may edit it, can change it.' });
 
   /** The file's type, or a refusal already sent when Folio doesn't take it. */
   const typeOf = (req: FastifyRequest, filename: string, reply: FastifyReply) => {
@@ -184,6 +207,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!caller) return reply;
       const library = await libraryFor(caller, req.params.id, reply);
       if (!library) return reply;
+      const readers = await principalsOf(caller);
       const q = req.query;
       const [from, to] = [timeOf(q.from), timeOf(q.to)];
       if (from === null || to === null) return reply.code(400).send({ error: 'bad-time', message: 'Give “from” and “to” as dates or times.' });
@@ -199,8 +223,10 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         sort: q.sort,
         limit: q.limit,
         offset: q.offset,
+        readers,
       });
-      return { documents: documents.map((d) => ({ ...d, can: { change: mayChange(caller, d) } })), total };
+      // As the library lets them in; a grant on one document can let them further, as that document says.
+      return { documents: documents.map((d) => ({ ...d, can: { change: mayChange(caller, d, library), share: reaches(library.level, 'manage') } })), total };
     },
   );
 
@@ -212,6 +238,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!caller) return reply;
       const library = await libraryFor(caller, req.params.id, reply);
       if (!library) return reply;
+      if (!rightsOn(caller, library).addDocuments) return reply.code(403).send({ error: 'forbidden', message: 'You can read this library, but not add to it.' });
       const { filename, folder } = req.query;
       const mediaType = typeOf(req, filename, reply);
       if (!mediaType) return reply;
@@ -235,7 +262,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
           throw err;
         });
         await recorded({ actor: caller.id, action: 'document.uploaded', target: doc.id, workspace: library.workspace, detail: { library: library.id, title, version: 1, size: first.size, sha256: first.sha256 } });
-        return reply.code(201).send({ ...doc, can: { change: true } });
+        return reply.code(201).send({ ...doc, can: { change: true, share: rightsOn(caller, library).share } });
       } catch (err) {
         return uploadFailed(err, reply);
       }
@@ -247,7 +274,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     if (!caller) return reply;
     const doc = await documentFor(caller, req.params, reply);
     if (!doc) return reply;
-    return { ...doc, versions: await store.versions(doc.id), can: { change: mayChange(caller, doc) } };
+    return { ...sent(doc), libraryName: doc.shelf.name, versions: await store.versions(doc.id), can: documentRights(caller, doc) };
   });
 
   app.patch<{ Params: { id: string; doc: string }; Body: { title?: string; folder?: string | null } }>(
@@ -268,10 +295,10 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!caller) return reply;
       const doc = await documentFor(caller, req.params, reply);
       if (!doc) return reply;
-      if (!mayChange(caller, doc)) return forbidden(reply);
+      if (!mayChange(caller, doc, doc.shelf)) return forbidden(reply);
       try {
         const changed = await store.updateDocument(doc.id, { title: req.body.title?.trim(), folder: req.body.folder });
-        return { ...changed, can: { change: true } };
+        return { ...changed, can: documentRights(caller, doc) };
       } catch (err) {
         return refused(err, reply);
       }
@@ -283,7 +310,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     if (!caller) return reply;
     const doc = await documentFor(caller, req.params, reply);
     if (!doc) return reply;
-    if (!mayChange(caller, doc)) return forbidden(reply);
+    if (!mayChange(caller, doc, doc.shelf)) return forbidden(reply);
     await store.deleteDocument(doc.id, caller.id);
     await recorded({ actor: caller.id, action: 'document.deleted', target: doc.id, workspace: doc.workspace, detail: { library: doc.library, title: doc.title } });
     return reply.code(204).send();
@@ -302,10 +329,10 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!caller) return reply;
       const doc = await documentFor(caller, req.params, reply);
       if (!doc) return reply;
-      if (!mayChange(caller, doc)) return forbidden(reply);
+      if (!mayChange(caller, doc, doc.shelf)) return forbidden(reply);
       try {
         const tagged = await store.setDocumentTags(doc.id, req.body.tags);
-        return { ...tagged, can: { change: true } };
+        return { ...tagged, can: documentRights(caller, doc) };
       } catch (err) {
         return refused(err, reply);
       }
@@ -320,7 +347,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!caller) return reply;
       const doc = await documentFor(caller, req.params, reply);
       if (!doc) return reply;
-      if (!mayChange(caller, doc)) return forbidden(reply);
+      if (!mayChange(caller, doc, doc.shelf)) return forbidden(reply);
       const mediaType = typeOf(req, req.query.filename, reply);
       if (!mediaType) return reply;
       try {
@@ -372,5 +399,5 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     },
   );
 
-  await renditionRoutes(app, { store, objects, documentFor, mayChange, onFloor });
+  await renditionRoutes(app, { store, objects, documentFor, onFloor });
 };

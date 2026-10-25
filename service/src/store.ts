@@ -5,6 +5,12 @@ import pg from 'pg';
 export interface Library {
   id: string;
   workspace: string;
+  /**
+   * Who its floor lets in, as a principal: `person:<owner>` on someone's own
+   * floor, `tree:<team>` on a team's (its members and those of the teams below
+   * it), `org` on the org's.
+   */
+  floor: string;
   name: string;
   description: string;
   /** Anyone who may tag a document here may also make new tags, not only pick the library's. */
@@ -148,6 +154,8 @@ export interface DocumentQuery {
   sort?: DocumentSort;
   limit?: number;
   offset?: number;
+  /** Only documents someone who stands for these principals may read. */
+  readers?: readonly string[];
 }
 
 /** A page of documents, and how many there are in all. */
@@ -185,6 +193,43 @@ export interface Person {
   name: string;
 }
 
+/** How far a grant lets someone in: read; edit (add and change documents); manage (also share, rename and archive). */
+export type Level = 'read' | 'edit' | 'manage';
+export const LEVELS: readonly Level[] = ['read', 'edit', 'manage'];
+
+/**
+ * Who may see something: `person:<id>`, `team:<id>` (that team's members),
+ * `tree:<id>` (that team and every team below it), or `org`.
+ */
+export const PRINCIPAL = /^(?:(?:person|team|tree):[A-Za-z0-9._@-]{1,100}|org)$/;
+
+/** Someone let into a library, or into one document of it. */
+export interface Grant {
+  library: string;
+  /** Just this document; the whole library when there's none. */
+  document?: string;
+  principal: string;
+  level: Level;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** What has been shared with someone from libraries they can't otherwise reach. */
+export interface Shared {
+  libraries: (Library & { level: Level })[];
+  documents: (FolioDocument & { level: Level })[];
+}
+
+const RANK: Record<Level, number> = { read: 1, edit: 2, manage: 3 };
+/** The furthest of these levels, or none. */
+export const furthest = (...levels: (Level | undefined)[]) =>
+  levels.reduce<Level | undefined>((best, l) => (l && (!best || RANK[l] > RANK[best]) ? l : best), undefined);
+/** How far these grants let in someone who stands for `principals`. */
+export const levelFrom = (grants: readonly Pick<Grant, 'principal' | 'level'>[], principals: readonly string[]) =>
+  furthest(...grants.filter((g) => principals.includes(g.principal)).map((g) => g.level));
+/** At least `want`. */
+export const reaches = (level: Level | undefined, want: Level) => Boolean(level && RANK[level] >= RANK[want]);
+
 /** The most documents in one page of a list. */
 export const MAX_PAGE = 200;
 
@@ -219,7 +264,7 @@ export interface FolioStore {
   libraries(workspace: string): Promise<Library[]>;
   /** A library, unless it is archived. */
   library(id: string): Promise<Library | undefined>;
-  createLibrary(input: { workspace: string; name: string; description?: string; createdBy: string }): Promise<Library>;
+  createLibrary(input: { workspace: string; floor: string; name: string; description?: string; createdBy: string }): Promise<Library>;
   updateLibrary(id: string, change: { name?: string; description?: string; freeTags?: boolean }): Promise<Library | undefined>;
   /** Takes a library off its floor's list, keeping everything in it. */
   archiveLibrary(id: string, by: string): Promise<boolean>;
@@ -264,6 +309,8 @@ export interface FolioStore {
   authors(library: string): Promise<Person[]>;
   /** Remembers the name someone has now, to show them by. */
   notePerson(person: Person): Promise<void>;
+  /** The people Folio has seen, by name or by id: who to share with when identity can't say. */
+  people(query: { q?: string; ids?: readonly string[] }): Promise<Person[]>;
   views(library: string): Promise<SavedView[]>;
   view(id: string): Promise<SavedView | undefined>;
   createView(input: { library: string; name: string; query: ViewQuery; createdBy: string }): Promise<SavedView>;
@@ -275,6 +322,14 @@ export interface FolioStore {
   retryRendition(version: string): Promise<boolean>;
   /** Records what a rendition came to. The worker does this itself; here for tests and `pnpm dev:app`. */
   finishRendition(version: string, result: RenditionResult): Promise<void>;
+  /** Who has been let into a library (no document), or into one of its documents. */
+  grants(library: string, document?: string): Promise<Grant[]>;
+  /** Lets a principal in that far, or with `level: null` takes them out. Each document's readers follow. */
+  setGrant(input: { library: string; document?: string; principal: string; level: Level | null; by: string }): Promise<Grant | undefined>;
+  /** Everyone who may read a document: its library's floor, and whoever has been let into the library or the document. */
+  readers(document: string): Promise<string[]>;
+  /** What has been shared with these principals, in libraries on floors other than `except`. */
+  shared(principals: readonly string[], except: string): Promise<Shared>;
 }
 
 const sameName = (a: string, b: string) => a.toLocaleLowerCase() === b.toLocaleLowerCase();
@@ -343,7 +398,8 @@ export class MemoryFolioStore implements FolioStore {
   private readonly tagList: Tag[] = [];
   private readonly docTags = new Map<string, Set<string>>();
   private readonly viewList: SavedView[] = [];
-  private readonly people = new Map<string, string>();
+  private readonly seen = new Map<string, string>();
+  private readonly grantList: Grant[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
   onQueued?: (version: StoredVersion) => Promise<void>;
 
@@ -358,10 +414,10 @@ export class MemoryFolioStore implements FolioStore {
     return library;
   }
 
-  async createLibrary({ workspace, name, description = '', createdBy }: { workspace: string; name: string; description?: string; createdBy: string }) {
+  async createLibrary({ workspace, floor, name, description = '', createdBy }: { workspace: string; floor: string; name: string; description?: string; createdBy: string }) {
     if ((await this.libraries(workspace)).some((l) => sameName(l.name, name))) throw new NameTakenError(`There’s already a library called ${name} here.`);
     const now = new Date().toISOString();
-    const library: Library = { id: randomUUID(), workspace, name, description, freeTags: false, createdBy, createdAt: now, updatedAt: now };
+    const library: Library = { id: randomUUID(), workspace, floor, name, description, freeTags: false, createdBy, createdAt: now, updatedAt: now };
     this.shelves.set(library.id, { ...library });
     return library;
   }
@@ -449,6 +505,7 @@ export class MemoryFolioStore implements FolioStore {
     const places: ReadonlySet<string | undefined> | undefined = query.below ? (query.folder ? subtree(await this.folders(library), query.folder) : undefined) : new Set([query.folder]);
     const matching = [...this.docs.values()]
       .filter((d) => d.library === library && !d.deletedAt && (!places || places.has(d.folder)))
+      .filter((d) => !query.readers || this.readersOf(d.library, d.id).some((p) => query.readers!.includes(p)))
       .map((d) => this.withLatest(d))
       .filter(
         (d) =>
@@ -587,11 +644,19 @@ export class MemoryFolioStore implements FolioStore {
 
   async authors(library: string) {
     const ids = new Set([...this.docs.values()].filter((d) => d.library === library && !d.deletedAt).map((d) => d.createdBy));
-    return [...ids].map((id) => ({ id, name: this.people.get(id) ?? '' })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    return [...ids].map((id) => ({ id, name: this.seen.get(id) ?? '' })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
 
   async notePerson({ id, name }: Person) {
-    this.people.set(id, name);
+    this.seen.set(id, name);
+  }
+
+  async people({ q, ids }: { q?: string; ids?: readonly string[] }) {
+    const word = q?.trim().toLocaleLowerCase();
+    return [...this.seen]
+      .filter(([id, name]) => (ids ? ids.includes(id) : !word || name.toLocaleLowerCase().includes(word)))
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async views(library: string) {
@@ -648,6 +713,51 @@ export class MemoryFolioStore implements FolioStore {
       const { state, engine, engineVersion, ...made } = result;
       this.renditions.set(version, { version, state, attempts: found.attempts + 1, engine: `${engine} ${engineVersion}`, thumbnail: Boolean(made.thumbnailKey), ...made, updatedAt });
     }
+  }
+
+  private readersOf(library: string, document: string) {
+    const floor = this.shelves.get(library)?.floor;
+    const granted = this.grantList.filter((g) => g.library === library && (!g.document || g.document === document)).map((g) => g.principal);
+    return [...new Set([...(floor ? [floor] : []), ...granted])].sort();
+  }
+
+  async grants(library: string, document?: string) {
+    return this.grantList.filter((g) => g.library === library && g.document === document).map((g) => ({ ...g })).sort((a, b) => a.principal.localeCompare(b.principal));
+  }
+
+  async setGrant({ library, document, principal, level, by }: { library: string; document?: string; principal: string; level: Level | null; by: string }) {
+    const at = this.grantList.findIndex((g) => g.library === library && g.document === document && g.principal === principal);
+    if (at >= 0) this.grantList.splice(at, 1);
+    if (!level) return undefined;
+    if (!(await this.library(library)) || (document && this.docs.get(document)?.library !== library)) throw new BadParentError('There’s no such library or document.');
+    const grant: Grant = { library, ...(document ? { document } : {}), principal, level, createdBy: by, createdAt: new Date().toISOString() };
+    this.grantList.push(grant);
+    return { ...grant };
+  }
+
+  async readers(document: string) {
+    const doc = this.docs.get(document);
+    return doc && !doc.deletedAt ? this.readersOf(doc.library, doc.id) : [];
+  }
+
+  async shared(principals: readonly string[], except: string): Promise<Shared> {
+    const mine = this.grantList.filter((g) => principals.includes(g.principal));
+    const libraries = [...this.shelves.values()]
+      .filter((l) => !l.archivedAt && l.workspace !== except)
+      .flatMap(({ archivedAt: _, ...l }) => {
+        const level = levelFrom(mine.filter((g) => g.library === l.id && !g.document), principals);
+        return level ? [{ ...l, level }] : [];
+      })
+      .sort(byName);
+    const reached = new Set(libraries.map((l) => l.id));
+    const documents = [...this.docs.values()]
+      .filter((d) => !d.deletedAt && d.workspace !== except && !reached.has(d.library) && !this.shelves.get(d.library)?.archivedAt)
+      .flatMap((d) => {
+        const level = levelFrom(mine.filter((g) => g.document === d.id), principals);
+        return level ? [{ ...this.withLatest(d), level }] : [];
+      })
+      .sort(byTitle);
+    return { libraries, documents };
   }
 }
 
@@ -784,14 +894,46 @@ export const migrations: { id: string; sql: string }[] = [
       -- Every version uploaded before there was a worker waits for one.
       insert into folio.renditions (version_id, workspace_id) select id, workspace_id from folio.document_versions;`,
   },
+  {
+    id: '005_access',
+    sql: `
+      -- Who a library's floor lets in. Folio hadn't shipped before this, so a library made
+      -- before it (or by a release before it) is taken to be a team's.
+      alter table folio.libraries add column floor_principal text;
+      update folio.libraries set floor_principal = 'tree:' || workspace_id;
+      -- People and teams let into a library, or into one document of it.
+      create table folio.grants (
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        document_id text references folio.documents (id),
+        principal text not null check (principal ~ '^((person|team|tree):.+|org)$'),
+        level text not null check (level in ('read', 'edit', 'manage')),
+        created_by text not null,
+        created_at timestamptz not null default now()
+      );
+      create unique index grants_one on folio.grants (library_id, coalesce(document_id, ''), principal);
+      create index grants_principal on folio.grants (principal);
+      -- Everyone who may read each document, written down once so every list can filter by it.
+      create table folio.readers (
+        document_id text primary key references folio.documents (id),
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        principals text[] not null
+      );
+      create index readers_principals on folio.readers using gin (principals);
+      create index readers_library on folio.readers (library_id);
+      insert into folio.readers (document_id, workspace_id, library_id, principals)
+        select d.id, d.workspace_id, d.library_id, array[l.floor_principal] from folio.documents d join folio.libraries l on l.id = d.library_id;`,
+  },
 ];
 
-type LibraryRow = { id: string; workspace_id: string; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
+type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
 type FolderRow = { id: string; library_id: string; parent_id: string | null; name: string; created_by: string; created_at: Date };
 
 const fromLibraryRow = (r: LibraryRow): Library => ({
   id: r.id,
   workspace: r.workspace_id,
+  floor: r.floor_principal ?? `tree:${r.workspace_id}`,
   name: r.name,
   description: r.description,
   freeTags: r.free_tags,
@@ -940,7 +1082,7 @@ const fromFolderRow = (r: FolderRow): Folder => ({
 /** Postgres says a unique index refused the row. */
 const isUniqueViolation = (err: unknown) => (err as { code?: string }).code === '23505';
 
-const LIBRARY_COLUMNS = 'id, workspace_id, name, description, free_tags, created_by, created_at, updated_at';
+const LIBRARY_COLUMNS = 'id, workspace_id, floor_principal, name, description, free_tags, created_by, created_at, updated_at';
 const DOCUMENT_ORDER: Record<DocumentSort, string> = { title: 'lower(d.title), d.id', newest: 'd.created_at desc, d.id desc', updated: 'd.updated_at desc, d.id desc' };
 const FOLDER_COLUMNS = 'id, library_id, parent_id, name, created_by, created_at';
 
@@ -1001,11 +1143,11 @@ export class PgFolioStore implements FolioStore {
     return rows[0] && fromLibraryRow(rows[0]);
   }
 
-  async createLibrary({ workspace, name, description = '', createdBy }: { workspace: string; name: string; description?: string; createdBy: string }) {
+  async createLibrary({ workspace, floor, name, description = '', createdBy }: { workspace: string; floor: string; name: string; description?: string; createdBy: string }) {
     try {
       const { rows } = await this.pool.query<LibraryRow>(
-        `insert into folio.libraries (id, workspace_id, name, description, created_by) values ($1, $2, $3, $4, $5) returning ${LIBRARY_COLUMNS}`,
-        [randomUUID(), workspace, name, description, createdBy],
+        `insert into folio.libraries (id, workspace_id, floor_principal, name, description, created_by) values ($1, $2, $3, $4, $5, $6) returning ${LIBRARY_COLUMNS}`,
+        [randomUUID(), workspace, floor, name, description, createdBy],
       );
       return fromLibraryRow(rows[0]);
     } catch (err) {
@@ -1101,6 +1243,7 @@ export class PgFolioStore implements FolioStore {
     if (query.authors?.length) where.push(`d.created_by = any(${param(query.authors)}::text[])`);
     if (query.from) where.push(`d.updated_at >= ${param(query.from)}::timestamptz`);
     if (query.to) where.push(`d.updated_at < ${param(query.to)}::timestamptz`);
+    if (query.readers) where.push(`exists (select 1 from folio.readers r where r.document_id = d.id and r.principals && ${param(query.readers)}::text[])`);
     const { limit, offset } = pageOf(query);
     const { rows } = await this.pool.query<DocumentRow>(
       `${place} ${DOCUMENT_SELECT} where ${where.join(' and ')} order by ${DOCUMENT_ORDER[query.sort ?? 'title']} limit ${param(limit)} offset ${param(offset)}`,
@@ -1138,6 +1281,22 @@ export class PgFolioStore implements FolioStore {
     return fromVersionRow(rows[0]);
   }
 
+  /** Writes down who may read each of a library's documents (or just `document`): its floor, and whoever has been let in. */
+  private async writeReaders(client: pg.PoolClient, library: string, document?: string) {
+    await client.query(
+      `insert into folio.readers (document_id, workspace_id, library_id, principals)
+        select d.id, d.workspace_id, d.library_id, array(
+            select distinct p from (
+              select coalesce(l.floor_principal, 'tree:' || l.workspace_id) as p
+              union all select g.principal from folio.grants g where g.library_id = d.library_id and (g.document_id is null or g.document_id = d.id)
+            ) x order by p)
+          from folio.documents d join folio.libraries l on l.id = d.library_id
+          where d.library_id = $1 and ($2::text is null or d.id = $2)
+        on conflict (document_id) do update set principals = excluded.principals`,
+      [library, document ?? null],
+    );
+  }
+
   /** Runs `work` in one transaction. */
   private async inTransaction<T>(work: (client: pg.PoolClient) => Promise<T>) {
     const client = await this.pool.connect();
@@ -1165,6 +1324,7 @@ export class PgFolioStore implements FolioStore {
       if (!rowCount) throw new BadParentError(folder ? 'That folder isn’t in this library.' : 'There’s no such library.');
       await this.insertVersion(client, id, 1, first);
       await this.writeTags(client, id, tags);
+      await this.writeReaders(client, library, id);
     });
     return (await this.document(id))!;
   }
@@ -1336,6 +1496,13 @@ export class PgFolioStore implements FolioStore {
     await this.pool.query('insert into folio.people (id, name) values ($1, $2) on conflict (id) do update set name = excluded.name, seen_at = now()', [id, name]);
   }
 
+  async people({ q, ids }: { q?: string; ids?: readonly string[] }) {
+    const { rows } = ids
+      ? await this.pool.query<Person>('select id, name from folio.people where id = any($1::text[]) order by name, id', [ids])
+      : await this.pool.query<Person>("select id, name from folio.people where $1::text is null or name ilike '%' || $1 || '%' order by name, id limit 50", [q?.trim().replace(/[\\%_]/g, '\\$&') || null]);
+    return rows;
+  }
+
   async views(library: string) {
     const { rows } = await this.pool.query<ViewRow>(`select ${VIEW_COLUMNS} from folio.views where library_id = $1 order by lower(name), id`, [library]);
     return rows.map(fromViewRow);
@@ -1409,4 +1576,80 @@ export class PgFolioStore implements FolioStore {
       [version, result.engine, result.engineVersion, result.readerKey, result.thumbnailKey ?? null, JSON.stringify(result.images), result.pages ?? null, result.text],
     );
   }
+
+  async grants(library: string, document?: string) {
+    const { rows } = await this.pool.query<GrantRow>(
+      `select ${GRANT_COLUMNS} from folio.grants where library_id = $1 and document_id is not distinct from $2::text order by principal`,
+      [library, document ?? null],
+    );
+    return rows.map(fromGrantRow);
+  }
+
+  async setGrant({ library, document, principal, level, by }: { library: string; document?: string; principal: string; level: Level | null; by: string }) {
+    return this.inTransaction(async (client) => {
+      // One change to a library's grants at a time, so its readers are written from the grants as they end up.
+      await client.query("select pg_advisory_xact_lock(hashtext('folio.grants'), hashtext($1))", [library]);
+      await client.query('delete from folio.grants where library_id = $1 and document_id is not distinct from $2::text and principal = $3', [library, document ?? null, principal]);
+      let grant: Grant | undefined;
+      if (level) {
+        const { rows } = await client.query<GrantRow>(
+          `insert into folio.grants (workspace_id, library_id, document_id, principal, level, created_by)
+            select l.workspace_id, l.id, $2, $3, $4, $5 from folio.libraries l
+            where l.id = $1 and l.archived_at is null
+              and ($2::text is null or exists (select 1 from folio.documents d where d.id = $2 and d.library_id = l.id and d.deleted_at is null))
+            returning ${GRANT_COLUMNS}`,
+          [library, document ?? null, principal, level, by],
+        );
+        if (!rows[0]) throw new BadParentError('There’s no such library or document.');
+        grant = fromGrantRow(rows[0]);
+      }
+      await this.writeReaders(client, library, document);
+      return grant;
+    });
+  }
+
+  async readers(document: string) {
+    const { rows } = await this.pool.query<{ principals: string[] }>(
+      'select r.principals from folio.readers r join folio.documents d on d.id = r.document_id where r.document_id = $1 and d.deleted_at is null',
+      [document],
+    );
+    return rows[0]?.principals ?? [];
+  }
+
+  async shared(principals: readonly string[], except: string): Promise<Shared> {
+    const { rows: libraries } = await this.pool.query<LibraryRow & { level: Level }>(
+      `select ${LIBRARY_COLUMNS.split(', ').map((c) => `l.${c}`).join(', ')}, g.level from folio.libraries l
+        cross join lateral (
+          select level from folio.grants g where g.library_id = l.id and g.document_id is null and g.principal = any($1::text[])
+          order by array_position(array['read', 'edit', 'manage'], level) desc limit 1
+        ) g
+        where l.archived_at is null and l.workspace_id <> $2
+        order by lower(l.name), l.id`,
+      [principals, except],
+    );
+    const { rows: documents } = await this.pool.query<DocumentRow & { level: Level }>(
+      `${DOCUMENT_SELECT}
+        join folio.libraries l on l.id = d.library_id and l.archived_at is null
+        cross join lateral (
+          select level from folio.grants g where g.document_id = d.id and g.principal = any($1::text[])
+          order by array_position(array['read', 'edit', 'manage'], level) desc limit 1
+        ) g
+        where d.deleted_at is null and d.workspace_id <> $2
+          and not exists (select 1 from folio.grants lg where lg.library_id = d.library_id and lg.document_id is null and lg.principal = any($1::text[]))
+        order by lower(d.title), d.id`.replace('count(*) over () as total', 'count(*) over () as total, g.level'),
+      [principals, except],
+    );
+    return { libraries: libraries.map((r) => ({ ...fromLibraryRow(r), level: r.level })), documents: documents.map((r) => ({ ...fromDocumentRow(r), level: r.level })) };
+  }
 }
+
+type GrantRow = { library_id: string; document_id: string | null; principal: string; level: Level; created_by: string; created_at: Date };
+const GRANT_COLUMNS = 'library_id, document_id, principal, level, created_by, created_at';
+const fromGrantRow = (r: GrantRow): Grant => ({
+  library: r.library_id,
+  ...(r.document_id ? { document: r.document_id } : {}),
+  principal: r.principal,
+  level: r.level,
+  createdBy: r.created_by,
+  createdAt: r.created_at.toISOString(),
+});

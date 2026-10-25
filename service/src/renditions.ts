@@ -1,14 +1,14 @@
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { OnFloor } from './app.ts';
+import { mayChange, type HeldDocument } from './documents.ts';
 import type { ObjectStore } from './objects.ts';
-import { renditionPrefix, type FolioDocument, type FolioStore, type StoredVersion } from './store.ts';
+import { renditionPrefix, type FolioStore, type StoredVersion } from './store.ts';
 
 export interface RenditionDeps {
   store: FolioStore;
   objects: ObjectStore;
-  documentFor(caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply): Promise<FolioDocument | undefined>;
-  mayChange(caller: OnFloor, doc: FolioDocument): boolean;
+  documentFor(caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply): Promise<HeldDocument | undefined>;
   onFloor(req: FastifyRequest, reply: FastifyReply): OnFloor | undefined;
 }
 
@@ -32,7 +32,7 @@ const contained = (reply: FastifyReply, contentType: string) =>
  * page, and its words as plain text. Anyone who may see the document may read them;
  * whoever may change it may ask for a failed one again.
  */
-export const renditionRoutes = async (app: FastifyInstance, { store, objects, documentFor, mayChange, onFloor }: RenditionDeps) => {
+export const renditionRoutes = async (app: FastifyInstance, { store, objects, documentFor, onFloor }: RenditionDeps) => {
   const noVersion = (reply: FastifyReply) => reply.code(404).send({ error: 'not-found', message: 'There’s no such version of this document.' });
 
   /** The version and its rendition, or a refusal already sent. */
@@ -97,7 +97,7 @@ export const renditionRoutes = async (app: FastifyInstance, { store, objects, do
   app.post<{ Params: VersionParams }>('/libraries/:id/documents/:doc/versions/:number/reader/retry', { schema: { params: VERSION_PARAMS } }, async (req, reply) => {
     const found = await renditionFor(req.params, reply);
     if (!found) return reply;
-    if (!mayChange(found.caller, found.doc)) return reply.code(403).send({ error: 'forbidden', message: 'Only whoever added the document, or the floor’s leads, can ask for its reader copy again.' });
+    if (!mayChange(found.caller, found.doc, found.doc.shelf)) return reply.code(403).send({ error: 'forbidden', message: 'Only whoever added the document, or whoever may edit it, can ask for its reader copy again.' });
     if (!(await store.retryRendition(found.version.id))) return reply.code(409).send({ error: 'not-failed', message: 'Only a reader copy that failed can be asked for again.', reader: found.version.reader });
     return reply.code(202).send((await store.version(found.doc.id, found.version.number))!.reader);
   });

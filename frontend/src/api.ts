@@ -3,6 +3,8 @@ import type { MountContext } from '@augur/mfe-sdk';
 export interface Library {
   id: string;
   workspace: string;
+  /** Who its floor lets in: `person:<owner>`, `tree:<team>` or `org`. */
+  floor: string;
   name: string;
   description: string;
   /** Anyone who may tag a document here may make new tags too. */
@@ -71,6 +73,52 @@ export interface LibraryRights {
   addDocuments: boolean;
   /** Make new tags: leads, or anyone when the library takes free tags. */
   addTags: boolean;
+  /** Let people and teams in, or take them out. */
+  share: boolean;
+}
+
+/** How far someone is let in: read; edit (add and change documents); manage (also share). */
+export type Level = 'read' | 'edit' | 'manage';
+
+/** Who may see something, as people see them. */
+export interface Principal {
+  /** `person:<id>`, `team:<id>` (that team), `tree:<id>` (that team and the teams below it) or `org`. */
+  principal: string;
+  kind: 'person' | 'team' | 'tree' | 'org';
+  /** Missing when the directory no longer knows them. */
+  name?: string;
+  email?: string;
+  /** For a team: the teams it sits in, from the top down. */
+  within?: string[];
+}
+
+export interface Grant extends Principal {
+  level: Level;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Who may see a library, or one of its documents. */
+export interface Access {
+  /** Everyone its floor lets in. */
+  floor: Principal;
+  /** Who has been let into this library, or into this document. */
+  grants: Grant[];
+  /** For a document: who has been let into its whole library. */
+  library?: Grant[];
+  can: { share: boolean };
+}
+
+/** People and teams found to share with. */
+export interface Found {
+  people: { id: string; name: string; email?: string }[];
+  teams: { id: string; name: string; within: string[] }[];
+}
+
+/** Shared with the caller from other floors. */
+export interface Shared {
+  libraries: (Library & { level: Level })[];
+  documents: (FolioDocument & { level: Level; libraryName: string })[];
 }
 
 /** How a version's reader copy is coming along: the rendition worker makes it after upload. */
@@ -109,13 +157,15 @@ export interface FolioDocument {
   latest: DocumentVersion;
   /** Tag ids: the org's or its library's. */
   tags: string[];
-  /** Whether the caller may add versions, retag, retitle, move or delete it. */
-  can: { change: boolean };
+  /** Whether the caller may add versions, retag, retitle, move or delete it, and share it. */
+  can: { change: boolean; share: boolean };
 }
 
 export interface OpenDocument extends FolioDocument {
   /** Newest first. */
   versions: DocumentVersion[];
+  /** The name of its library, which the caller may not otherwise see. */
+  libraryName: string;
 }
 
 /** What Folio takes, by file ending, and the media type each is sent as. */
@@ -307,6 +357,31 @@ export class FolioApi {
 
   deleteDocument(library: string, id: string) {
     return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(id)}`);
+  }
+
+  /** Who may see a library, or with `document` one of its documents. */
+  access(library: string, document?: string) {
+    return this.call<Access>('GET', `${this.accessPath(library, document)}`);
+  }
+
+  /** Lets someone in that far, or with `null` takes them out; answers who may see it now. */
+  share(library: string, document: string | undefined, principal: string, level: Level | null) {
+    const path = `${this.accessPath(library, document)}/${encodeURIComponent(principal)}`;
+    return level ? this.call<Access>('PUT', path, { level }) : this.call<Access>('DELETE', path);
+  }
+
+  private accessPath(library: string, document?: string) {
+    return `/libraries/${encodeURIComponent(library)}${document ? `/documents/${encodeURIComponent(document)}` : ''}/access`;
+  }
+
+  /** People and teams whose names have `q` in them, to share with. */
+  people(q: string) {
+    return this.call<Found>('GET', `/people?q=${encodeURIComponent(q)}`);
+  }
+
+  /** Libraries and documents shared with the caller from other floors. */
+  shared() {
+    return this.call<Shared>('GET', '/shared');
   }
 
   /** Asks again for a reader copy that failed. */

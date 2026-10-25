@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { LibraryRights, OnFloor } from './app.ts';
-import { DOCUMENT_SORTS, SINCE, type FolioStore, type Library, type SavedView, type Tag } from './store.ts';
+import type { HeldLibrary, LibraryRights, OnFloor } from './app.ts';
+import { DOCUMENT_SORTS, SINCE, type FolioStore, type SavedView, type Tag } from './store.ts';
 
 /** File kinds as people filter by them, and the media type each is kept as. */
 export const KINDS: Record<string, string> = {
@@ -34,9 +34,9 @@ export const VIEW_QUERY = {
 export interface TagDeps {
   store: FolioStore;
   onFloor(req: FastifyRequest, reply: FastifyReply): OnFloor | undefined;
-  libraryFor(caller: OnFloor, id: string, reply: FastifyReply): Promise<Library | undefined>;
+  libraryFor(caller: OnFloor, id: string, reply: FastifyReply): Promise<HeldLibrary | undefined>;
   refused(err: unknown, reply: FastifyReply): unknown;
-  rightsOn(caller: OnFloor, library?: Library): LibraryRights;
+  rightsOn(caller: OnFloor, library?: HeldLibrary): LibraryRights;
 }
 
 /** The org's tags are kept by the leads on the org's own floor. */
@@ -136,7 +136,7 @@ export const tagRoutes = async (app: FastifyInstance, { store, onFloor, libraryF
     if (!library) return undefined;
     const tag = await store.tag(params.tag);
     if (!tag || tag.library !== library.id) return void notFound(reply, 'tag in this library');
-    if (!rightsOn(caller, library).manage) return void forbidden(reply, 'Only the floor’s leads can change this library’s tags.');
+    if (!rightsOn(caller, library).manage) return void forbidden(reply, 'Only whoever manages this library can change its tags.');
     return tag;
   };
 
@@ -169,6 +169,8 @@ export const tagRoutes = async (app: FastifyInstance, { store, onFloor, libraryF
       if (!caller) return reply;
       const library = await libraryFor(caller, req.params.id, reply);
       if (!library) return reply;
+      // A saved view is for everyone there, so only those who may add to the library save one.
+      if (!rightsOn(caller, library).addDocuments) return forbidden(reply, 'You can read this library, but not add views to it.');
       try {
         return reply.code(201).send(await store.createView({ library: library.id, name: req.body.name.trim(), query: req.body.query, createdBy: caller.id }));
       } catch (err) {
@@ -183,7 +185,7 @@ export const tagRoutes = async (app: FastifyInstance, { store, onFloor, libraryF
     if (!library) return undefined;
     const view = await store.view(params.view);
     if (!view || view.library !== library.id) return void notFound(reply, 'view in this library');
-    if (view.createdBy !== caller.id && !rightsOn(caller, library).manage) return void forbidden(reply, 'Only whoever saved the view, or the floor’s leads, can change it.');
+    if (view.createdBy !== caller.id && !rightsOn(caller, library).manage) return void forbidden(reply, 'Only whoever saved the view, or whoever manages the library, can change it.');
     return view;
   };
 

@@ -51,7 +51,7 @@ describe('folio documents', () => {
     expect([...objects.files.keys()]).toEqual([`documents/${doc.id}/${doc.latest.id}`]);
     expect(audited.at(-1)).toMatchObject({ actor: 'u-alex', action: 'document.uploaded', target: doc.id, workspace: 'w-fin', detail: { version: 1, size: 15 } });
     const listed = (await json(member(kim), 'GET', `/v1/libraries/${library}/documents`)).json();
-    expect(listed.documents.map((d: { title: string; can: object }) => [d.title, d.can])).toEqual([['Travel policy', { change: false }]]);
+    expect(listed.documents.map((d: { title: string; can: object }) => [d.title, d.can])).toEqual([['Travel policy', { change: false, share: false }]]);
   });
 
   it('puts a document in a folder of the library, with the title given', async () => {
@@ -85,7 +85,7 @@ describe('folio documents', () => {
     const opened = (await json(member(kim), 'GET', at)).json();
     expect(opened.latest.number).toBe(3);
     expect(opened.versions.map((v: { number: number }) => v.number)).toEqual([3, 2, 1]);
-    expect(opened.can).toEqual({ change: false });
+    expect(opened.can).toEqual({ change: false, share: false });
     const original = await app.inject({ method: 'GET', url: `${at}/versions/2/original`, headers: callerHeaders(member(kim)) });
     expect(original.statusCode).toBe(200);
     expect(original.body).toBe('version two');
