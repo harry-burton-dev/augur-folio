@@ -9,6 +9,7 @@ Folio keeps every file exactly as it was uploaded, as numbered versions in its o
 | `manifest.json` | How the registry lists Folio: its route, menu, floors and the storage it keeps |
 | `frontend/` | The micro frontend the shell mounts at `/folio` (`@apps/folio-frontend`) |
 | `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
+| `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |
 
 Run it in a stand-in shell with `pnpm dev:app folio`. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](../../docs/app-storage.md) to keep it. In production it won't start without both.
 
@@ -25,6 +26,8 @@ A library belongs to the floor it was made on, and is seen only there.
 | Upload a document | yes | yes |
 | Add a version, retitle, move or delete a document | the ones they added | any |
 | Download any version's original | yes | yes |
+| Read a version's reader copy, thumbnail and text | yes | yes |
+| Ask again for a reader copy that failed | the ones they added | any |
 | Tag a document | the ones they added | any |
 | Add a tag to the library | when it takes free tags | yes |
 | Rename or remove the library's tags, or let it take free tags | | yes |
@@ -38,6 +41,12 @@ On your own floor you are its lead. A folder can be removed only once it is empt
 Each library has its own tags, and the org has tags every library shares (such as Policy or Finance). The org's tags are kept by the leads on the org's floor. A library's tag can't take an org tag's name, and a new org tag takes in the libraries' tags of its name: their documents and saved views carry the org's tag from then on. Removing a tag takes it off every document and view that had it.
 
 The list can be narrowed by tags (all of those chosen), file type, who added it and when it last changed, and sorted by title, newest or most recently changed. Once a filter is on, the list looks in every folder below where you are. A set of filters can be saved as a view, which goes in the library's side rail for everyone there; "the past month" stays the past month, not the month it was saved.
+
+## Reader copies
+
+Every version gets a reader copy: the rendition worker turns its file into Markdown with [Docling](https://github.com/docling-project/docling), with the pictures it shows, a thumbnail of a PDF's first page, and its words as plain text for search. The original stays as it was; the reader copy is what Folio shows people to read. Each version says how its copy is coming along (`reader.state`: queued, running, ready or failed). A file Docling can't read fails at once with why; anything else (the bucket down, say) is tried again after a minute, then four, then sixteen, and then fails. Whoever may change the document can ask for a failed copy again.
+
+The worker leases one version at a time from Folio's `renditions` table, so any number can run side by side, and hears of new versions straight away (Postgres `LISTEN`). Under `pnpm dev:app` there's no worker: Markdown and plain text are their own reader copies, and other files say the worker isn't running.
 
 ## On the record
 
@@ -65,6 +74,10 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `DELETE /libraries/:id/documents/:doc` | Take it out of the library |
 | `POST /libraries/:id/documents/:doc/versions?filename=` | Its next version, sent as above |
 | `GET /libraries/:id/documents/:doc/versions/:n/original` | Version n's file as it was uploaded |
+| `GET /libraries/:id/documents/:doc/versions/:n/reader` | Its reader copy, as Markdown (409 `not-ready` until it's made) |
+| `GET /libraries/:id/documents/:doc/versions/:n/reader/images/:name` | A picture the reader copy shows (`images/1.png`) |
+| `GET /libraries/:id/documents/:doc/versions/:n/thumbnail`, `…/text` | Its first page as a PNG (PDFs), and its words as plain text |
+| `POST /libraries/:id/documents/:doc/versions/:n/reader/retry` | Ask again for a reader copy that failed |
 | `GET /tags` | The org's tags, and whether the caller keeps them |
 | `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
 | `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |

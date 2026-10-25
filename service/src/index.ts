@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { appCredentialsFromEnv, appStorageFromEnv, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
+import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
 
@@ -11,6 +12,8 @@ const { databaseUrl, bucket } = appStorageFromEnv();
 if ((!databaseUrl || !bucket) && process.env.NODE_ENV === 'production') throw new Error('Folio needs DATABASE_URL and its bucket (S3_*): give it its storage (docs/app-storage.md).');
 const store = databaseUrl ? await PgFolioStore.connect(databaseUrl) : new MemoryFolioStore();
 const objects = bucket ? new S3ObjectStore(bucket) : new MemoryObjectStore();
+// With Postgres the rendition worker (apps/folio/worker) makes reader copies; without it, a stand-in does.
+if (store instanceof MemoryFolioStore) store.onQueued = devRenderer(store, objects);
 const app = await buildApp({ store, objects });
 await app.listen({ port, host: '0.0.0.0' });
 

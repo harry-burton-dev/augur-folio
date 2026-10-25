@@ -234,6 +234,29 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.deleteView(view.id)).toBe(false);
     expect(await store.updateView(view.id, { name: 'X' })).toBeUndefined();
   });
+
+  it('queues a rendition for every version, and keeps what the worker made of it', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Policies', createdBy: 'u-1' });
+    const doc = await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    expect(doc.latest.reader).toEqual({ state: 'queued', thumbnail: false });
+    expect(await store.rendition('v-1')).toMatchObject({ version: 'v-1', state: 'queued', attempts: 0, images: [] });
+    expect(await store.rendition('v-nope')).toBeUndefined();
+    expect(await store.retryRendition('v-1')).toBe(false);
+
+    await store.finishRendition('v-1', { state: 'ready', engine: 'docling', engineVersion: '2.14.0', readerKey: 'renditions/v-1/reader.md', thumbnailKey: 'renditions/v-1/thumbnail.png', images: ['1.png'], pages: 3, text: 'Travel policy' });
+    const reader = { state: 'ready', pages: 3, thumbnail: true, engine: 'docling 2.14.0' };
+    expect((await store.document('d-1'))?.latest.reader).toEqual(reader);
+    expect((await store.version('d-1', 1))?.reader).toEqual(reader);
+    expect(await store.rendition('v-1')).toMatchObject({ ...reader, attempts: 1, readerKey: 'renditions/v-1/reader.md', images: ['1.png'], text: 'Travel policy' });
+
+    const next = await store.addVersion('d-1', file('d-1', 'v-2'));
+    expect(next?.reader.state).toBe('queued');
+    await store.finishRendition('v-2', { state: 'failed', error: 'The file is damaged.' });
+    expect((await store.versions('d-1')).map((v) => v.reader)).toEqual([{ state: 'failed', error: 'The file is damaged.', thumbnail: false }, reader]);
+    expect(await store.retryRendition('v-2')).toBe(true);
+    expect(await store.rendition('v-2')).toMatchObject({ state: 'queued', attempts: 0 });
+    expect((await store.rendition('v-2'))?.error).toBeUndefined();
+  });
 };
 
 describe('MemoryFolioStore', () => behavesLikeAStore(() => new MemoryFolioStore()));
@@ -255,13 +278,28 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
   );
 
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions']);
+  });
+
+  it('tells the rendition worker of each new version once it is saved', async () => {
+    const listener = await admin.connect();
+    try {
+      const heard: string[] = [];
+      listener.on('notification', (n) => heard.push(n.payload ?? ''));
+      await listener.query('listen folio_renditions');
+      const lib = await store.createLibrary({ workspace: 'w-fin', name: 'Heard', createdBy: 'u-1' });
+      await store.createDocument({ id: 'd-heard', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-heard', 'v-heard'));
+      await store.addVersion('d-heard', file('d-heard', 'v-heard-2'));
+      await expect.poll(() => heard).toEqual(['v-heard', 'v-heard-2']);
+    } finally {
+      listener.release();
+    }
   });
 });
