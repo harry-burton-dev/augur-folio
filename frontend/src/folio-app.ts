@@ -27,7 +27,7 @@ export const readerWords = (reader: ReaderState) => {
     case 'ready':
       return reader.pages ? `Reader copy ready, ${reader.pages} ${reader.pages === 1 ? 'page' : 'pages'}` : 'Reader copy ready';
     case 'failed':
-      return `No reader copy: ${reader.error ?? 'Folio couldn’t make one.'}`;
+      return 'No reader copy';
     default:
       return 'Making the reader copy…';
   }
@@ -916,6 +916,9 @@ export class FolioApp extends LitElement {
           <ui-list label="Versions" density="compact" .noun=${['version', 'versions']} .items=${versions}
             @ui-action=${(e: CustomEvent<{ item: ListItem; action: { id: string } }>) =>
               void (e.detail.action.id === 'retry' ? this.retryReader(Number(e.detail.item.id)) : this.download(Number(e.detail.item.id)))}></ui-list>
+          ${doc.versions
+            .filter((v) => v.reader.state === 'failed')
+            .map((v) => html`<p class="folio-note">Version ${v.number} has no reader copy. ${v.reader.error ?? 'Folio couldn’t make one.'}</p>`)}
           ${doc.can.change
             ? html`<ui-drop-zone compact heading="Drop the next version here: it becomes the newest" action="Choose a file" accept=${ACCEPT}
                   .multiple=${false} ?busy=${this.uploading > 0} @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.newVersion(e.detail.files)}

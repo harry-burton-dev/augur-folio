@@ -221,8 +221,9 @@ describe('folio', () => {
     const versions = dialog.querySelector<UiList>('ui-list')!;
     expect(versions.items.map((i) => [i.title, i.detail, i.actions?.map((a) => a.label)])).toEqual([
       ['Version 2', 'travel.pdf · 1.2 MB · Reader copy ready, 3 pages', ['Download']],
-      ['Version 1', 'travel-old.pdf · 900 bytes · No reader copy: The file is damaged.', ['Download', 'Try again']],
+      ['Version 1', 'travel-old.pdf · 900 bytes · No reader copy', ['Download', 'Try again']],
     ]);
+    expect(dialog.querySelector('.folio-note')?.textContent).toBe('Version 1 has no reader copy. The file is damaged.');
     versions.dispatchEvent(new CustomEvent('ui-action', { detail: { item: { id: '1' }, action: { id: 'download' } } }));
     await settle(el);
     expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-1/versions/1/original']);
