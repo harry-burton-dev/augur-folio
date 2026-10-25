@@ -1,5 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
+import './folio-reader.js';
 import {
   ACCEPT,
   KINDS,
@@ -149,7 +150,7 @@ const nameCheck =
  * A side rail with the floor's libraries and the open library's folders, and a
  * main area with where you are, what you can do there, and what's inside.
  *
- * @fires folio-place - detail `{ library?, folder? }`, when the person moves somewhere else in Folio
+ * @fires folio-place - detail `{ library?, folder?, view?, document?, version? }`, when the person moves somewhere else in Folio
  */
 export class FolioApp extends LitElement {
   static override properties = {
@@ -178,6 +179,7 @@ export class FolioApp extends LitElement {
     orgTags: { state: true },
     tagTarget: { state: true },
     more: { state: true },
+    reading: { state: true },
   };
 
   declare api: FolioApi;
@@ -218,6 +220,8 @@ export class FolioApp extends LitElement {
   declare tagTarget: Tag | undefined;
   /** The next page is on its way. */
   declare more: boolean;
+  /** The document being read, on its own page, and which version (the newest when there's none). */
+  declare reading: { document: string; version?: number } | undefined;
 
   constructor() {
     super();
@@ -255,9 +259,12 @@ export class FolioApp extends LitElement {
       this.libraries = libraries;
       this.canCreate = can.create;
       const start = this.open?.id ?? this.place.library ?? libraries[0]?.id;
+      const reading = this.open ? this.reading : this.place.document ? { document: this.place.document, version: this.place.version } : undefined;
       if (this.place.adding && can.create) this.dialog = 'new-library';
-      if (start && libraries.some((l) => l.id === start)) await this.openLibrary(start, this.open ? this.folder : this.place.folder, false, this.open ? this.view : this.place.view);
-      else this.open = undefined;
+      if (start && libraries.some((l) => l.id === start)) {
+        await this.openLibrary(start, this.open ? this.folder : this.place.folder, false, this.open ? this.view : this.place.view);
+        if (reading) await this.read(reading.document, reading.version, false);
+      } else this.open = undefined;
     } catch (err) {
       this.error = (err as Error).message;
     } finally {
@@ -267,6 +274,7 @@ export class FolioApp extends LitElement {
 
   private async openLibrary(id: string, folder?: string, tell = true, view?: string) {
     this.opening = true;
+    this.reading = undefined;
     try {
       const switching = this.open?.id !== id;
       this.open = await this.api.library(id);
@@ -289,6 +297,7 @@ export class FolioApp extends LitElement {
   }
 
   private async goToFolder(folder: string | undefined) {
+    this.reading = undefined;
     this.folder = folder;
     this.view = undefined;
     this.note = '';
@@ -299,6 +308,7 @@ export class FolioApp extends LitElement {
   /** Puts a saved view's folder, filters and sort in place, dropping any tag that's gone. */
   private applyView(view: SavedView) {
     const open = this.open!;
+    this.reading = undefined;
     this.view = view.id;
     this.folder = view.query.folder && open.folders.some((f) => f.id === view.query.folder) ? view.query.folder : undefined;
     this.filters = filterValue(filtersFor(open), filtersFrom(view.query));
@@ -376,12 +386,36 @@ export class FolioApp extends LitElement {
     this.note = `Folio can’t take ${files.map((f) => f.name).join(', ')}: it takes PDF, Word (.docx), HTML, Markdown and plain text.`;
   }
 
-  private async openDocument(id: string) {
+  /** Opens a document on its own page to read, at a version or the newest. */
+  private async read(id: string, version?: number, tell = true) {
     const open = this.open;
     if (!open) return;
     try {
-      this.doc = await this.api.document(open.id, id);
-      this.dialog = 'document';
+      if (this.doc?.id !== id) this.doc = await this.api.document(open.id, id);
+      this.reading = { document: id, ...(version ? { version } : {}) };
+      if (tell) this.tell();
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  /** Leaves the document being read, back to where it is in its library. */
+  private async stopReading() {
+    this.reading = undefined;
+    this.doc = undefined;
+    this.tell();
+    await this.loadDocuments();
+  }
+
+  /** A document dialog closed: the document page keeps its document, up to date; the list lets it go. */
+  private async letGoOfDoc() {
+    const doc = this.doc;
+    if (!this.reading || !doc) {
+      this.doc = undefined;
+      return;
+    }
+    try {
+      this.doc = await this.api.document(doc.library, doc.id);
     } catch (err) {
       this.note = (err as Error).message;
     }
@@ -459,7 +493,7 @@ export class FolioApp extends LitElement {
     const doc = this.doc!;
     const folder = values.folder || null;
     await this.api.updateDocument(doc.library, doc.id, { title: values.title.trim(), folder });
-    this.doc = undefined;
+    await this.letGoOfDoc();
     await this.loadDocuments();
   };
 
@@ -468,6 +502,7 @@ export class FolioApp extends LitElement {
     await this.api.deleteDocument(doc.library, doc.id);
     this.doc = undefined;
     this.documents = this.documents.filter((d) => d.id !== doc.id);
+    if (this.reading) await this.stopReading();
   };
 
   /** A new tag for the open library, from a picker's "Add …", or a word typed in the tags dialog. */
@@ -604,7 +639,11 @@ export class FolioApp extends LitElement {
   }
 
   private tell() {
-    const detail = this.view ? { library: this.open?.id, view: this.view } : { library: this.open?.id, folder: this.folder };
+    const detail = this.reading
+      ? { library: this.open?.id, ...this.reading }
+      : this.view
+        ? { library: this.open?.id, view: this.view }
+        : { library: this.open?.id, folder: this.folder };
     this.dispatchEvent(new CustomEvent('folio-place', { detail, bubbles: true }));
   }
 
@@ -709,6 +748,22 @@ export class FolioApp extends LitElement {
         ? html`<ui-state kind="empty" heading="No libraries here yet" body="A library keeps documents together, with folders inside it." action="New library"
             @ui-action=${() => (this.dialog = 'new-library')}></ui-state>`
         : html`<ui-state kind="empty" heading="No libraries here yet" body="A lead on this floor can start one."></ui-state>`;
+    if (this.reading) {
+      const doc = this.doc;
+      if (!doc || doc.id !== this.reading.document) return html`<ui-state kind="loading" heading="Opening the document"></ui-state>`;
+      return html`<folio-reader
+        .api=${this.api}
+        .doc=${doc}
+        .version=${this.reading.version}
+        .tags=${open.tags}
+        library-name=${[open.name, ...folderTrail(open.folders, doc.folder).map((f) => f.name)].join(' / ')}
+        @folio-read=${(e: CustomEvent<{ version?: number }>) => void this.read(doc.id, e.detail.version)}
+        @folio-back=${() => void this.stopReading()}
+        @folio-manage=${() => (this.dialog = 'document')}
+        @folio-download=${(e: CustomEvent<{ version: number }>) => void this.download(e.detail.version)}
+        @folio-retry=${(e: CustomEvent<{ version: number }>) => void this.retryReader(e.detail.version)}
+      ></folio-reader>`;
+    }
     const trail = folderTrail(open.folders, this.folder);
     const here = trail.at(-1);
     const view = this.currentView;
@@ -788,7 +843,7 @@ export class FolioApp extends LitElement {
           empty=${narrowed ? `Nothing in ${where} matches these filters.` : here ? 'This folder is empty.' : 'This library is empty.'}
           @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
             const id = e.detail.item.id;
-            void (id.startsWith(DOC) ? this.openDocument(id.slice(DOC.length)) : this.goToFolder(id));
+            void (id.startsWith(DOC) ? this.read(id.slice(DOC.length)) : this.goToFolder(id));
           }}
           @ui-action=${this.onFolderAction}
         ></ui-list>
@@ -898,7 +953,7 @@ export class FolioApp extends LitElement {
         return html`<ui-dialog open size="read" light eyebrow=${folderTrail(open?.folders ?? [], doc.folder).at(-1)?.name ?? open?.name ?? 'Document'}
           heading=${doc.title} summary=${documentLine(doc)} cancel-label="Close" @ui-close=${() => {
             close();
-            this.doc = undefined;
+            void this.letGoOfDoc();
           }}>
           ${doc.can.change
             ? html`<ui-tag-picker label="Tags" placeholder="Add a tag" .options=${tagOptions(open?.tags ?? [])} .values=${doc.tags} ?creatable=${Boolean(open?.can.addTags)}
@@ -936,7 +991,7 @@ export class FolioApp extends LitElement {
           ? html`<ui-dialog open eyebrow="Document" heading=${`Rename or move ${this.doc.title}`} action-label="Save" busy-label="Saving…" .submit=${this.submitEditDocument}
               @ui-close=${() => {
                 close();
-                this.doc = undefined;
+                void this.letGoOfDoc();
               }}>
               <ui-text-field slot="fields" name="title" label="Title" required maxlength="200" .value=${this.doc.title}></ui-text-field>
               <ui-select slot="fields" name="folder" label="Folder" .options=${this.folderOptions()} .value=${this.doc.folder ?? ''}></ui-select>
@@ -947,7 +1002,7 @@ export class FolioApp extends LitElement {
           ? html`<ui-dialog open danger eyebrow="Document" heading=${`Delete ${this.doc.title}?`} action-label="Delete" busy-label="Deleting…" .submit=${this.submitDeleteDocument}
               @ui-close=${() => {
                 close();
-                this.doc = undefined;
+                void this.letGoOfDoc();
               }}>
               <p>It leaves this library, with all ${this.doc.versions.length} ${this.doc.versions.length === 1 ? 'version' : 'versions'}. The record of it stays in the audit log.</p>
             </ui-dialog>`
