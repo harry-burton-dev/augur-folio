@@ -1,5 +1,5 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
-import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTree } from '@augur/ui-kit';
+import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor } from './entry.js';
@@ -15,7 +15,7 @@ const TRAVEL_MD = '# Travel policy\n\nBook through the travel desk.\n\n## Claims
 const READY = { state: 'ready', pages: 3, thumbnail: true } as ReaderState;
 const DAMAGED = { state: 'failed', error: 'The file is damaged.', thumbnail: false } as ReaderState;
 const v = (number: number, filename = 'travel.pdf', size = 1_234_567, reader = READY) => ({ id: `v-${number}`, document: 'd-1', number, filename, mediaType: 'application/pdf', size, sha256: 'ab', createdBy: 'u2', createdAt: new Date().toISOString(), reader });
-const travel = { id: 'd-1', workspace: 'w-fin', library: 'l-1', title: 'Travel policy', createdBy: 'u2', createdAt: '', updatedAt: new Date().toISOString(), latest: v(2), tags: [] as string[], can: { change: true } };
+const travel = { id: 'd-1', workspace: 'w-fin', library: 'l-1', title: 'Travel policy', createdBy: 'u2', createdAt: '', updatedAt: new Date().toISOString(), latest: v(2), tags: [] as string[], can: { change: true, share: true } };
 const tag = (id: string, name: string, library?: string) => ({ id, workspace: library ? 'w-fin' : 'w-org', ...(library ? { library } : {}), name, createdBy: 'u1', createdAt: '' });
 const policyTag = tag('t-pol', 'Policy');
 const travelTag = tag('t-trv', 'Travel', 'l-1');
@@ -23,8 +23,20 @@ const leaveDoc = { ...travel, id: 'd-2', title: 'Annual leave', folder: 'f-leave
 const recent = { id: 'vw-1', library: 'l-1', name: 'Recent policy', query: { tags: ['t-pol'], sort: 'updated' }, createdBy: 'u1', createdAt: '' };
 
 /** A stand-in for Folio's service, answering what the app asks through ctx.fetch. */
-const service = ({ lead = true, libraries = [policies, reports], folders = [hr, leave, it_], documents = [] as (typeof travel & { folder?: string })[], views = [recent] as (typeof recent)[] } = {}) => {
+const FINANCE = { principal: 'tree:w-fin', kind: 'tree', name: 'Finance', within: [] };
+const KIM = { principal: 'person:u3', kind: 'person', name: 'Kim Lee', email: 'kim@example.org', level: 'read', createdBy: 'u1', createdAt: new Date().toISOString() };
+const NO_SHARED = { libraries: [] as unknown[], documents: [] as unknown[] };
+
+const service = ({
+  lead = true,
+  libraries = [policies, reports],
+  folders = [hr, leave, it_],
+  documents = [] as (typeof travel & { folder?: string })[],
+  views = [recent] as (typeof recent)[],
+  shared = NO_SHARED,
+} = {}) => {
   const calls: [string, string, unknown?][] = [];
+  let grants: (typeof KIM)[] = [KIM];
   let retried = false;
   const deleted = new Set<string>();
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
@@ -64,6 +76,19 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
       return new Response(null, { status: 204 });
     }
     if (method === 'GET' && route === '/libraries') return Response.json({ libraries, can: { create: lead } });
+    if (method === 'GET' && route === '/shared') return Response.json(shared);
+    if (method === 'GET' && where === '/people') return Response.json({ people: [{ id: 'u4', name: 'Ola Bello', email: 'ola@example.org' }], teams: [{ id: 'w-legal', name: 'Legal', within: [] }] });
+    if (where === '/libraries/l-1/access') return Response.json({ floor: FINANCE, grants, can: { share: lead } });
+    const sharing = where.match(/^\/libraries\/l-1\/access\/(.+)$/);
+    if (sharing) {
+      const principal = decodeURIComponent(sharing[1]);
+      grants = grants.filter((g) => g.principal !== principal);
+      if (method === 'PUT') grants = [...grants, { ...KIM, principal, kind: principal.split(':')[0], name: principal === 'person:u4' ? 'Ola Bello' : 'Legal', level: body.level }];
+      return Response.json({ floor: FINANCE, grants, can: { share: true } });
+    }
+    if (method === 'GET' && where === '/libraries/l-9/documents/d-9')
+      return Response.json({ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', can: { change: false, share: false }, versions: [v(2)] });
+    if (method === 'GET' && where === '/libraries/l-9/documents/d-9/versions/2/reader') return new Response('# Shared plan\n\nHello.', { headers: { 'content-type': 'text/markdown' } });
     const one = route.match(/^\/libraries\/([^/]+)$/);
     if (method === 'GET' && one) {
       const lib = libraries.find((l) => l.id === one[1]);
@@ -75,7 +100,7 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
             tags: mine ? [policyTag, travelTag] : [policyTag],
             authors: [{ id: 'u2', name: 'Alex Rivera' }],
             views: mine ? views : [],
-            can: { manage: lead, addFolders: true, addDocuments: true, addTags: lead },
+            can: { manage: lead, addFolders: true, addDocuments: true, addTags: lead, share: lead },
           })
         : Response.json({ message: 'Not here' }, { status: 404 });
     }
@@ -334,7 +359,7 @@ describe('folio', () => {
   it('opens the floor’s first library, with its libraries and folders in the side rail', async () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch);
-    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /api/folio/v1/libraries', 'GET /api/folio/v1/libraries/l-1', 'GET /api/folio/v1/libraries/l-1/documents?limit=100']);
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /api/folio/v1/libraries', 'GET /api/folio/v1/shared', 'GET /api/folio/v1/libraries/l-1', 'GET /api/folio/v1/libraries/l-1/documents?limit=100']);
     const [libs, folders, views] = trees(el);
     expect(views.items.map((i) => i.label)).toEqual(['Recent policy']);
     expect(libs.heading).toBe('Libraries on Finance');
@@ -512,5 +537,91 @@ describe('folio', () => {
     button(dialog, 'Add')!.click();
     await settle(el);
     expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/tags', { name: 'Expenses' }]);
+  });
+
+  it('shows who can see a library, and shares it with someone found by name', async () => {
+    const { fetch, calls } = service();
+    const el = await mounted(fetch);
+    button(el, 'Share')!.click();
+    await settle(el);
+    const share = el.querySelector('folio-share')!;
+    expect(el.querySelector('ui-dialog')!.getAttribute('heading')).toBe('Who can see Policies');
+    expect(share.querySelector('.folio-share-floor')!.textContent).toContain('Everyone on Finance, and the teams below it, can read it');
+    const shared = () => [...share.querySelectorAll<UiList>('ui-list')].at(-1)!.items;
+    expect(shared().map((i) => [i.title, i.meta])).toEqual([['Kim Lee', 'Can read']]);
+
+    share.querySelector<UiTextField>('ui-text-field')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'ol' } }));
+    await new Promise((r) => setTimeout(r, 250));
+    await settle(el);
+    const found = share.querySelector<UiList>('ui-list')!;
+    expect(found.items.map((i) => i.title)).toEqual(['Ola Bello', 'Legal']);
+    found.dispatchEvent(new CustomEvent('ui-open', { detail: { item: found.items[0] } }));
+    await settle(el);
+    share.querySelector('ui-select')!.dispatchEvent(new CustomEvent('ui-change', { detail: { value: 'edit' } }));
+    await settle(el);
+    button(share, 'Share')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/access/person%3Au4', { level: 'edit' }]);
+    expect(shared().map((i) => [i.title, i.meta])).toEqual([['Kim Lee', 'Can read'], ['Ola Bello', 'Can edit']]);
+    expect(share.querySelector('[role=status]')!.textContent).toBe('Ola Bello: can edit.');
+
+    // A team goes with the teams below it, unless that's switched off.
+    share.querySelector<UiTextField>('ui-text-field')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'leg' } }));
+    await new Promise((r) => setTimeout(r, 250));
+    await settle(el);
+    const teams = share.querySelector<UiList>('ui-list')!;
+    teams.dispatchEvent(new CustomEvent('ui-open', { detail: { item: teams.items[1] } }));
+    await settle(el);
+    share.querySelector('ui-toggle')!.dispatchEvent(new CustomEvent('ui-change', { detail: { checked: false } }));
+    await settle(el);
+    button(share, 'Share')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/access/team%3Aw-legal', { level: 'read' }]);
+
+    const list = [...share.querySelectorAll<UiList>('ui-list')].at(-1)!;
+    list.dispatchEvent(new CustomEvent('ui-action', { detail: { item: list.items[0], action: { id: 'remove' } } }));
+    await settle(el);
+    expect(calls).toContainEqual(['DELETE', '/api/folio/v1/libraries/l-1/access/person%3Au3']);
+    expect(shared().map((i) => i.title)).toEqual(['Ola Bello', 'Legal (just that team)']);
+  });
+
+  it('lets someone who only reads see who can, without changing it', async () => {
+    const { fetch } = service({ lead: false });
+    const el = await mounted(fetch);
+    expect(button(el, 'Share')).toBeUndefined();
+    button(el, 'Who can see it')!.click();
+    await settle(el);
+    const share = el.querySelector('folio-share')!;
+    expect(share.querySelector('ui-text-field')).toBeNull();
+    expect(share.querySelector<UiList>('ui-list')!.items[0].actions).toBeUndefined();
+  });
+
+  it('lists what was shared from other floors, and reads a document shared alone', async () => {
+    const shared = {
+      libraries: [{ ...reports, id: 'l-8', name: 'Board papers', level: 'read' }],
+      documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', level: 'read' }],
+    };
+    window.history.replaceState(null, '', '/@finance/folio/libraries');
+    const { fetch } = service({ shared });
+    const el = await mounted(fetch);
+    const rail = trees(el).find((t) => t.heading === 'Shared with you')!;
+    expect(rail.items.map((i) => i.label)).toEqual(['Board papers', 'Shared plan']);
+    rail.dispatchEvent(new CustomEvent('ui-select', { detail: { item: rail.items[1] } }));
+    await settle(el);
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-9/documents/d-9');
+    const reader = el.querySelector('folio-reader')!;
+    expect(reader.querySelector('.folio-crumb')!.textContent).toContain('Ops runbooks');
+    expect(button(reader, 'Who can see it')).toBeDefined();
+    // Back has no library to go to: the floor's own first one.
+    reader.querySelector<HTMLButtonElement>('.folio-crumb')!.click();
+    await settle(el);
+    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Policies');
+  });
+
+  it('opens a document shared alone straight from its path', async () => {
+    const shared = { libraries: [], documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', level: 'read' }] };
+    const { fetch } = service({ shared });
+    const el = await mounted(fetch, '/libraries/l-9/documents/d-9');
+    expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
   });
 });

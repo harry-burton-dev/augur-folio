@@ -15,26 +15,24 @@ Run it in a stand-in shell with `pnpm dev:app folio`. Without `DATABASE_URL` and
 
 ## Who can do what
 
-A library belongs to the floor it was made on, and is seen only there.
+A library belongs to the floor it was made on. Everyone who can stand on that floor can read it, from wherever they are: on a team's floor that's its members and those of the teams below it, on the org's everyone, and on your own floor only you. Standing on its floor, they can add to it too, and the floor's leads manage it. Anyone else sees a library or a document only once it has been shared with them.
 
-| | Anyone on the floor | The floor's leads |
-| --- | --- | --- |
-| See its libraries and folders | yes | yes |
-| Make a folder | yes | yes |
-| Rename or remove a folder | the ones they made | any |
-| Make, rename or archive a library | | yes |
-| Upload a document | yes | yes |
-| Add a version, retitle, move or delete a document | the ones they added | any |
-| Download any version's original | yes | yes |
-| Read a version's reader copy, thumbnail and text | yes | yes |
-| Ask again for a reader copy that failed | the ones they added | any |
-| Tag a document | the ones they added | any |
-| Add a tag to the library | when it takes free tags | yes |
-| Rename or remove the library's tags, or let it take free tags | | yes |
-| Save a view | yes | yes |
-| Rename or delete a view | the ones they saved | any |
+Whoever manages a library can share it, or one document in it, with a person, a team, a team and the teams below it, or the whole org, and say how far: **read** (read it, download the original), **edit** (also add documents and folders, and change any document; for one document, add versions, retitle and tag it), or **manage** (also share it, and for a library rename and archive it). What's shared appears under "Shared with you" on every floor of theirs. Anyone who can see something can see who else can.
 
-On your own floor you are its lead. A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
+| | Can read | On its floor, or can edit | Can manage (the floor's leads) |
+| --- | --- | --- | --- |
+| See the library, its folders and documents | yes | yes | yes |
+| Download any version's original; read its reader copy | yes | yes | yes |
+| See who else can see it | yes | yes | yes |
+| Make a folder, upload a document, save a view | | yes | yes |
+| Rename or remove a folder | | the ones they made (any, with edit) | any |
+| Add a version, retitle, move, tag or delete a document; ask again for a failed reader copy | | the ones they added (any, with edit) | any |
+| Add a tag to the library | | when it takes free tags | yes |
+| Share it, rename or archive it, keep its tags, rename or delete anyone's views | | | yes |
+
+Folio asks identity who each person stands for (`people:read`): `person:<id>`, `team:<id>` for each team they're on, `tree:<id>` for each of those teams and every team above it, and `org`. Each document's readers (its library's floor and everyone let in) are written down in `folio.readers`, and lists keep to what overlaps. While identity can't be asked, Folio lets nothing through. Under `pnpm dev:app` there's no identity: you stand for yourself, the floor you're on and the org, and you can share with the people Folio has seen.
+
+A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
 
 ## Tags, filters and views
 
@@ -54,7 +52,7 @@ Opening a document opens its reader page: the reader copy as a page of text, set
 
 ## On the record
 
-Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
+Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
 
 ## API
 
@@ -63,7 +61,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | | |
 | --- | --- |
 | `GET /libraries` | The floor's libraries, and whether the caller can make one |
-| `POST /libraries` `{name, description?}` | A new library (leads) |
+| `POST /libraries` `{name, description?}` | A new library (the floor's leads) |
 | `GET /libraries/:id` | A library with its folders, tags (the org's and its own), authors, saved views, and what the caller may do there |
 | `PATCH /libraries/:id` `{name?, description?, freeTags?}` | Rename or describe it, or let anyone add tags (leads) |
 | `POST /libraries/:id/archive` | Take it off the floor's list (leads) |
@@ -82,6 +80,11 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `GET /libraries/:id/documents/:doc/versions/:n/reader/images/:name` | A picture the reader copy shows (`images/1.png`) |
 | `GET /libraries/:id/documents/:doc/versions/:n/thumbnail`, `…/text` | Its first page as a PNG (PDFs), and its words as plain text |
 | `POST /libraries/:id/documents/:doc/versions/:n/reader/retry` | Ask again for a reader copy that failed |
+| `GET /libraries/:id/access`, `GET /libraries/:id/documents/:doc/access` | Who may see it: its floor, who has been let in (for a document, into it and into its library), and whether the caller may share it |
+| `PUT /libraries/:id/access/:principal` `{level}`, `DELETE …` | Let a person or team into the library that far (read, edit or manage), or take them out (managers). `:principal` is `person:<id>`, `team:<id>`, `tree:<id>` or `org` |
+| `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
+| `GET /people?q=` | People and teams to share with, by name |
+| `GET /shared` | Libraries and documents shared with the caller from other floors |
 | `GET /tags` | The org's tags, and whether the caller keeps them |
 | `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
 | `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |

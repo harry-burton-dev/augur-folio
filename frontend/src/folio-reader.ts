@@ -53,6 +53,7 @@ const PICTURE = /^images\/(\d{1,5}\.png)$/;
  * @fires folio-read - detail `{ version? }`, to read another version (none: the newest)
  * @fires folio-back - back to the library
  * @fires folio-manage - open the document's details, to change it
+ * @fires folio-share - see who can see it, and share it when the person manages it
  * @fires folio-download - detail `{ version }`, the original of a version
  * @fires folio-retry - detail `{ version }`, ask again for a reader copy that failed
  */
@@ -226,6 +227,7 @@ export class FolioReader extends LitElement {
       <div class="folio-reader-row">
         <ui-button kind="secondary" size="sm" @click=${() => this.emit('folio-download', { version: v.number })}>Download the original</ui-button>
         ${doc.can.change ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-manage')}>Change it</ui-button>` : nothing}
+        <ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-share')}>${doc.can.share ? 'Share' : 'Who can see it'}</ui-button>
       </div>
       ${doc.tags.length
         ? html`<div class="folio-tags" aria-label="Tags">${doc.tags.map((t) => {
