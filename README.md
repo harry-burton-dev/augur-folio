@@ -13,6 +13,10 @@ Folio keeps every file exactly as it was uploaded, as numbered versions in its o
 
 Run it in a stand-in shell with `pnpm dev:app folio`. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](../../docs/app-storage.md) to keep it. In production it won't start without both.
 
+## Shipped with AUGUR
+
+Every deployment runs Folio: the platform release builds its images (`folio`, `folio-worker`), serves its frontend from the front door, and pins its version. It's still an ordinary app. It signs in as itself (`app-folio`, from `FOLIO_CLIENT_SECRET`, which identity makes in Keycloak), keeps its own schema and bucket (from `FOLIO_DATABASE_PASSWORD` and `FOLIO_BUCKET_SECRET`, which the storage container sets up), and registers its manifest each time its service starts, so it's in Admin, Apps with no admin step. The registry knows it as one of `PILLAR_APPS`: it gets the scopes each release asks for, its version comes with the release, and an admin can turn it off, org-wide or floor by floor, but not remove it. The contract tests run with Folio on and off (`platform/contract`).
+
 ## Who can do what
 
 A library belongs to the floor it was made on. Everyone who can stand on that floor can read it, from wherever they are: on a team's floor that's its members and those of the teams below it, on the org's everyone, and on your own floor only you. Standing on its floor, they can add to it too, and the floor's leads manage it. Anyone else sees a library or a document only once it has been shared with them.

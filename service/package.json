@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Folio's service: its API behind the gateway at /api/folio.",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp ../manifest.json dist/manifest.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "node --watch --experimental-strip-types src/index.ts",
     "start": "node dist/index.js",

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { appCredentialsFromEnv, appStorageFromEnv, outboxRelay, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
 import { notifyFromEnv } from './notices.ts';
@@ -25,12 +25,14 @@ const remind = () => remindLate({ store, notify, log: app.log }).catch((err: Err
 setInterval(remind, 15 * 60 * 1000).unref();
 void remind();
 
-// Put Folio in the platform's catalogue, so the shell can offer it.
-// It signs in as itself with SERVICE_CLIENT_SECRET (issued for it by an admin in Admin, Apps).
+// Put Folio in the platform's catalogue on every start, so the shell can offer it, with no admin step.
+// It signs in as itself with SERVICE_CLIENT_SECRET: in a deployment, FOLIO_CLIENT_SECRET, which identity
+// makes its sign-in from. The build puts the manifest beside the code; from source it's in apps/folio.
 const { REGISTRY_URL, APP_MANIFEST } = process.env;
 const credentials = appCredentialsFromEnv('folio');
 if (REGISTRY_URL && credentials) {
-  const manifest = JSON.parse(readFileSync(APP_MANIFEST ?? new URL('../../manifest.json', import.meta.url), 'utf8'));
+  const built = new URL('./manifest.json', import.meta.url);
+  const manifest = JSON.parse(readFileSync(APP_MANIFEST ?? (existsSync(built) ? built : new URL('../../manifest.json', import.meta.url)), 'utf8'));
   registerApp({ registryUrl: REGISTRY_URL, credentials, manifest })
     .then(() => app.log.info({ app: manifest.id, version: manifest.version }, 'registered with the platform'))
     .catch((err: Error) => app.log.error(err.message));
