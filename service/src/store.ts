@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { nextIssue, type Cadence, type IssuePlace } from './cadence.ts';
 
 /** A library: a shelf of documents that belongs to one floor (someone's own, a team's, or the org's). */
 export interface Library {
@@ -115,6 +116,48 @@ export interface FolioDocument {
   state: DocumentState;
   /** The version out now, when it's published. */
   published?: Publication;
+  /** Where it comes in its series, when it's an issue of one. */
+  issue?: Issue;
+}
+
+/**
+ * A named run of documents in one library that comes out on a cadence, such
+ * as a weekly report. Each issue is a document with a number and a period;
+ * the series gives the next one its title, tags and audience.
+ */
+export interface Series {
+  id: string;
+  workspace: string;
+  library: string;
+  name: string;
+  description: string;
+  cadence: Cadence;
+  /** Who each issue is published to when it's added, if anyone: as a publication's audience. */
+  audience: string[];
+  /** The tags each issue starts with, by id. */
+  tags: string[];
+  /** Its owner, who is reminded when an issue is late. */
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  /** How many issues it has. */
+  issues: number;
+  /** Its newest issue. */
+  last?: IssuePlace & { document: string };
+}
+
+/** A document's place in its series. */
+export interface Issue extends IssuePlace {
+  series: string;
+}
+
+/** An issue as the reader's previous and next show it. */
+export interface IssueLink {
+  id: string;
+  library: string;
+  title: string;
+  number: number;
+  period: string;
 }
 
 /** Where a document is in being published: never yet, out to an audience now, or taken back. */
@@ -180,8 +223,8 @@ export interface Tag {
 }
 
 /** How a list of documents is ordered. */
-export type DocumentSort = 'title' | 'newest' | 'updated';
-export const DOCUMENT_SORTS: readonly DocumentSort[] = ['title', 'newest', 'updated'];
+export type DocumentSort = 'title' | 'newest' | 'updated' | 'period';
+export const DOCUMENT_SORTS: readonly DocumentSort[] = ['title', 'newest', 'updated', 'period'];
 
 /** "Changed in the past …", in days, so a saved view keeps meaning the past week, not one week. */
 export const SINCE = { week: 7, month: 31, quarter: 92, year: 366 } as const;
@@ -206,10 +249,14 @@ export interface DocumentQuery {
   sort?: DocumentSort;
   /** Is in one of these states. */
   states?: DocumentState[];
+  /** Is an issue of this series. */
+  series?: string;
   limit?: number;
   offset?: number;
   /** Only documents someone who stands for these principals may read. */
   readers?: readonly string[];
+  /** With `readers`: also those published to them. */
+  audience?: boolean;
 }
 
 /** A page of documents, and how many there are in all. */
@@ -230,6 +277,7 @@ export interface ViewQuery {
   to?: string;
   sort?: DocumentSort;
   states?: DocumentState[];
+  series?: string;
 }
 
 /** A filter set saved in a library, for everyone there, in its side rail. */
@@ -336,8 +384,11 @@ export interface FolioStore {
   /** A document's versions, newest first. */
   versions(document: string): Promise<DocumentVersion[]>;
   version(document: string, number: number): Promise<StoredVersion | undefined>;
-  /** A new document with its first version. The folder must be in the library. */
-  createDocument(input: { id: string; library: string; folder?: string; title: string; createdBy: string; tags?: string[] }, first: NewVersion): Promise<FolioDocument>;
+  /**
+   * A new document with its first version. The folder must be in the library.
+   * With `series` (one of the library's) it is that series' next issue.
+   */
+  createDocument(input: NewDocument, first: NewVersion): Promise<FolioDocument>;
   /** The next version of a document, or undefined when there is no such document. */
   addVersion(document: string, version: NewVersion): Promise<DocumentVersion | undefined>;
   /** Retitles a document, or moves it: `folder: null` moves it to the top of its library. */
@@ -393,6 +444,36 @@ export interface FolioStore {
   publications(document: string): Promise<Publication[]>;
   /** What is out now to anyone who stands for these principals, newest first, with each one's library's name. */
   publishedTo(principals: readonly string[], page?: { limit?: number; offset?: number }): Promise<PublishedPage>;
+  /** A library's series, by name. */
+  seriesIn(library: string): Promise<Series[]>;
+  series(id: string): Promise<Series | undefined>;
+  /** Each tag must be the org's or the library's. */
+  createSeries(input: { library: string; name: string; description?: string; cadence: Cadence; audience?: string[]; tags?: string[]; createdBy: string }): Promise<Series>;
+  updateSeries(id: string, change: { name?: string; description?: string; cadence?: Cadence; audience?: string[]; tags?: string[] }): Promise<Series | undefined>;
+  /** Removes a series that has no issues; false when there was no such series. */
+  deleteSeries(id: string): Promise<boolean>;
+  /** The issues either side of one, among those someone who stands for these principals may read or has been published. */
+  neighbours(document: string, principals: readonly string[]): Promise<{ previous?: IssueLink; next?: IssueLink }>;
+  /** Starts or stops telling someone of each new issue. */
+  follow(series: string, person: string, on: boolean): Promise<void>;
+  /** Everyone following a series. */
+  followers(series: string): Promise<string[]>;
+  /** Every series that isn't ad hoc and has had an issue: the ones that can be late. */
+  timedSeries(): Promise<Series[]>;
+  /** Notes that the owner was told the issue for `periodStart` is late; false if someone already noted it. */
+  markReminded(series: string, periodStart: string): Promise<boolean>;
+}
+
+/** What a new document is. */
+export interface NewDocument {
+  id: string;
+  library: string;
+  folder?: string;
+  title: string;
+  createdBy: string;
+  tags?: string[];
+  /** Makes it this series' next issue. */
+  series?: string;
 }
 
 /** Documents published to someone, newest first, and how many there are in all. */
@@ -420,7 +501,10 @@ const checkParent = (folders: readonly Folder[], parent: string | undefined) => 
 
 const byTitle = (a: FolioDocument, b: FolioDocument) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id);
 const newestFirst = (key: 'createdAt' | 'updatedAt') => (a: FolioDocument, b: FolioDocument) => b[key].localeCompare(a[key]) || b.id.localeCompare(a.id);
-const ORDER: Record<DocumentSort, (a: FolioDocument, b: FolioDocument) => number> = { title: byTitle, newest: newestFirst('createdAt'), updated: newestFirst('updatedAt') };
+/** Issues by period, newest first, then everything else newest first. */
+const byPeriod = (a: FolioDocument, b: FolioDocument) =>
+  (b.issue?.periodStart ?? '').localeCompare(a.issue?.periodStart ?? '') || (b.issue?.number ?? 0) - (a.issue?.number ?? 0) || newestFirst('createdAt')(a, b);
+const ORDER: Record<DocumentSort, (a: FolioDocument, b: FolioDocument) => number> = { title: byTitle, newest: newestFirst('createdAt'), updated: newestFirst('updatedAt'), period: byPeriod };
 const publicVersion = ({ objectKey: _, ...version }: StoredVersion): DocumentVersion => version;
 const copyPublication = (p: Publication): Publication => ({ ...p, audience: [...p.audience], ...(p.ended ? { ended: { ...p.ended } } : {}) });
 /** A document's state, from its newest publication. A replaced one always has a newer one. */
@@ -451,12 +535,21 @@ const subtree = (folders: readonly Folder[], folder: string) => {
   return ids;
 };
 
+/** Tags with `from` swapped for `to`, or dropped when there's no `to`. */
+const retagged = (tags: readonly string[], from: ReadonlySet<string>, to?: string) =>
+  [...new Set(tags.map((t) => (from.has(t) ? to : t)).filter((t): t is string => Boolean(t)))];
+
 /** A view's tags with `from` swapped for `to`, or dropped when there's no `to`. */
 const retag = (query: ViewQuery, from: ReadonlySet<string>, to?: string): ViewQuery => {
   if (!query.tags?.some((t) => from.has(t))) return query;
-  const tags = [...new Set(query.tags.map((t) => (from.has(t) ? to : t)).filter((t): t is string => Boolean(t)))];
-  return { ...query, tags };
+  return { ...query, tags: retagged(query.tags, from, to) };
 };
+
+/** Just the place of an issue, from what the series expects next. */
+const pickPlace = ({ number, periodStart, period }: IssuePlace): IssuePlace => ({ number, periodStart, period });
+
+/** An issue as previous and next show it. */
+const linkTo = (d: Pick<FolioDocument, 'id' | 'library' | 'title' | 'issue'>): IssueLink => ({ id: d.id, library: d.library, title: d.title, number: d.issue!.number, period: d.issue!.period });
 
 const pageOf = (query: DocumentQuery) => ({ limit: Math.min(query.limit ?? MAX_PAGE, MAX_PAGE), offset: query.offset ?? 0 });
 
@@ -473,6 +566,8 @@ export class MemoryFolioStore implements FolioStore {
   private readonly seen = new Map<string, string>();
   private readonly grantList: Grant[] = [];
   private readonly pubs: Publication[] = [];
+  private readonly seriesList: (Omit<Series, 'issues' | 'last'> & { remindedFor?: string })[] = [];
+  private readonly following = new Map<string, Set<string>>();
   /** What Folio would have told other apps, oldest first: there's no relay without Postgres. */
   readonly outbox: OutboxEvent[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
@@ -587,11 +682,19 @@ export class MemoryFolioStore implements FolioStore {
     }
   }
 
+  /** Whether someone who stands for `principals` may read the document, or (with `audience`) has had it published to them. */
+  private visibleTo(d: { id: string; library: string }, principals: readonly string[], audience: boolean) {
+    if (this.readersOf(d.library, d.id).some((p) => principals.includes(p))) return true;
+    const [last] = this.publicationsOf(d.id);
+    return audience && Boolean(last && !last.ended && last.audience.some((a) => principals.includes(a)));
+  }
+
   async documents(library: string, query: DocumentQuery = {}) {
     const places: ReadonlySet<string | undefined> | undefined = query.below ? (query.folder ? subtree(await this.folders(library), query.folder) : undefined) : new Set([query.folder]);
     const matching = [...this.docs.values()]
       .filter((d) => d.library === library && !d.deletedAt && (!places || places.has(d.folder)))
-      .filter((d) => !query.readers || this.readersOf(d.library, d.id).some((p) => query.readers!.includes(p)))
+      .filter((d) => !query.series || d.issue?.series === query.series)
+      .filter((d) => !query.readers || this.visibleTo(d, query.readers, Boolean(query.audience)))
       .map((d) => this.withLatest(d))
       .filter(
         (d) =>
@@ -624,13 +727,16 @@ export class MemoryFolioStore implements FolioStore {
     return found && this.withReader(found);
   }
 
-  async createDocument({ id, library, folder, title, createdBy, tags = [] }: { id: string; library: string; folder?: string; title: string; createdBy: string; tags?: string[] }, first: NewVersion) {
+  async createDocument({ id, library, folder, title, createdBy, tags = [], series }: NewDocument, first: NewVersion) {
     const shelf = await this.library(library);
     if (!shelf) throw new BadParentError('There’s no such library.');
     await this.checkFolder(library, folder);
     this.checkTags(library, tags);
+    const run = series ? await this.series(series) : undefined;
+    if (series && run?.library !== library) throw new BadParentError('That series isn’t in this library.');
+    const issue = run && { series: run.id, ...pickPlace(nextIssue(run.cadence, run.last)) };
     const now = new Date().toISOString();
-    this.docs.set(id, { id, workspace: shelf.workspace, library, ...(folder ? { folder } : {}), title, createdBy, createdAt: now, updatedAt: now });
+    this.docs.set(id, { id, workspace: shelf.workspace, library, ...(folder ? { folder } : {}), title, createdBy, createdAt: now, updatedAt: now, ...(issue ? { issue } : {}) });
     this.versionList.push({ ...first, document: id, number: 1, createdAt: now });
     this.queue(first.id, now);
     if (tags.length) this.docTags.set(id, new Set(tags));
@@ -705,6 +811,7 @@ export class MemoryFolioStore implements FolioStore {
       set.add(tag.id);
     }
     for (const view of this.viewList) view.query = retag(view.query, absorbed, tag.id);
+    for (const run of this.seriesList) run.tags = retagged(run.tags, absorbed, tag.id).sort();
     for (let i = this.tagList.length - 1; i >= 0; i--) if (absorbed.has(this.tagList[i].id)) this.tagList.splice(i, 1);
   }
 
@@ -729,6 +836,7 @@ export class MemoryFolioStore implements FolioStore {
     this.tagList.splice(at, 1);
     for (const set of this.docTags.values()) set.delete(id);
     for (const view of this.viewList) view.query = retag(view.query, new Set([id]));
+    for (const run of this.seriesList) run.tags = retagged(run.tags, new Set([id])).sort();
     return true;
   }
 
@@ -890,6 +998,94 @@ export class MemoryFolioStore implements FolioStore {
       .sort((a, b) => b.published.publishedAt.localeCompare(a.published.publishedAt) || b.id.localeCompare(a.id));
     const { limit, offset } = pageOf(page);
     return { documents: live.slice(offset, offset + limit), total: live.length };
+  }
+
+  private issuesOf(series: string) {
+    return [...this.docs.values()].filter((d) => !d.deletedAt && d.issue?.series === series).sort((a, b) => a.issue!.number - b.issue!.number);
+  }
+
+  private withIssues({ remindedFor: _, ...run }: Omit<Series, 'issues' | 'last'> & { remindedFor?: string }): Series {
+    const issues = this.issuesOf(run.id);
+    const last = issues.at(-1);
+    return { ...run, audience: [...run.audience], tags: [...run.tags], issues: issues.length, ...(last ? { last: { document: last.id, ...pickPlace(last.issue!) } } : {}) };
+  }
+
+  async seriesIn(library: string) {
+    return this.seriesList.filter((s) => s.library === library).map((s) => this.withIssues(s)).sort(byName);
+  }
+
+  async series(id: string) {
+    const found = this.seriesList.find((s) => s.id === id);
+    return found && this.withIssues(found);
+  }
+
+  async createSeries({ library, name, description = '', cadence, audience = [], tags = [], createdBy }: { library: string; name: string; description?: string; cadence: Cadence; audience?: string[]; tags?: string[]; createdBy: string }) {
+    const shelf = await this.library(library);
+    if (!shelf) throw new BadParentError('There’s no such library.');
+    if (this.seriesList.some((s) => s.library === library && sameName(s.name, name))) throw new NameTakenError(`There’s already a series called ${name} here.`);
+    this.checkTags(library, tags);
+    const now = new Date().toISOString();
+    const run = { id: randomUUID(), workspace: shelf.workspace, library, name, description, cadence, audience: [...new Set(audience)].sort(), tags: [...new Set(tags)].sort(), createdBy, createdAt: now, updatedAt: now };
+    this.seriesList.push(run);
+    return this.withIssues(run);
+  }
+
+  async updateSeries(id: string, change: { name?: string; description?: string; cadence?: Cadence; audience?: string[]; tags?: string[] }) {
+    const run = this.seriesList.find((s) => s.id === id);
+    if (!run) return undefined;
+    if (change.name !== undefined && this.seriesList.some((s) => s.id !== id && s.library === run.library && sameName(s.name, change.name!)))
+      throw new NameTakenError(`There’s already a series called ${change.name} here.`);
+    if (change.tags) this.checkTags(run.library, change.tags);
+    if (change.name !== undefined) run.name = change.name;
+    if (change.description !== undefined) run.description = change.description;
+    if (change.cadence) run.cadence = change.cadence;
+    if (change.audience) run.audience = [...new Set(change.audience)].sort();
+    if (change.tags) run.tags = [...new Set(change.tags)].sort();
+    run.updatedAt = new Date().toISOString();
+    return this.withIssues(run);
+  }
+
+  async deleteSeries(id: string) {
+    const at = this.seriesList.findIndex((s) => s.id === id);
+    if (at < 0) return false;
+    if ([...this.docs.values()].some((d) => d.issue?.series === id)) throw new NotEmptyError('A series with issues stays, so its issues keep their place.');
+    this.seriesList.splice(at, 1);
+    this.following.delete(id);
+    return true;
+  }
+
+  async neighbours(document: string, principals: readonly string[]) {
+    const doc = this.docs.get(document);
+    if (!doc?.issue) return {};
+    const seen = this.issuesOf(doc.issue.series).filter((d) => this.visibleTo(d, principals, true));
+    const previous = seen.filter((d) => d.issue!.number < doc.issue!.number).at(-1);
+    const next = seen.find((d) => d.issue!.number > doc.issue!.number);
+    return { ...(previous ? { previous: linkTo(previous) } : {}), ...(next ? { next: linkTo(next) } : {}) };
+  }
+
+  async follow(series: string, person: string, on: boolean) {
+    const people = this.following.get(series) ?? new Set<string>();
+    if (on) people.add(person);
+    else people.delete(person);
+    this.following.set(series, people);
+  }
+
+  async followers(series: string) {
+    return [...(this.following.get(series) ?? [])].sort();
+  }
+
+  async timedSeries() {
+    return this.seriesList
+      .filter((s) => s.cadence !== 'adhoc' && !this.shelves.get(s.library)?.archivedAt)
+      .map((s) => this.withIssues(s))
+      .filter((s) => s.last);
+  }
+
+  async markReminded(series: string, periodStart: string) {
+    const run = this.seriesList.find((s) => s.id === series);
+    if (!run || run.remindedFor === periodStart) return false;
+    run.remindedFor = periodStart;
+    return true;
   }
 }
 
@@ -1094,6 +1290,40 @@ export const migrations: { id: string; sql: string }[] = [
       );
       create index outbox_unsent on folio.outbox (id) where sent_at is null;`,
   },
+  {
+    id: '007_series',
+    sql: `
+      -- A named run of documents in one library, on a cadence. Its audience and tags are what each new issue starts with.
+      create table folio.series (
+        id text primary key,
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        name text not null,
+        description text not null default '',
+        cadence text not null check (cadence in ('weekly', 'monthly', 'quarterly', 'adhoc')),
+        audience text[] not null default '{}',
+        tags text[] not null default '{}',
+        created_by text not null,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        -- The period whose late issue the owner was last told of, so they're told once.
+        reminded_for date
+      );
+      create unique index series_name on folio.series (library_id, lower(name));
+      -- An issue is a document with a place in its series. The period's name is kept as it was, whatever the cadence becomes.
+      alter table folio.documents add column series_id text references folio.series (id),
+        add column issue_number integer,
+        add column period_start date,
+        add column period text;
+      create unique index documents_issue on folio.documents (series_id, issue_number) where series_id is not null and deleted_at is null;
+      create table folio.series_followers (
+        series_id text not null references folio.series (id),
+        person_id text not null,
+        workspace_id text not null,
+        created_at timestamptz not null default now(),
+        primary key (series_id, person_id)
+      );`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
@@ -1155,6 +1385,10 @@ type DocumentRow = {
   tags: string[];
   /** Its newest publication, as JSON. */
   publication: PublicationRow | null;
+  series_id: string | null;
+  issue_number: number | null;
+  period_start: string | null;
+  period: string | null;
   total?: string;
 };
 type PublicationRow = {
@@ -1246,6 +1480,7 @@ const fromDocumentRow = (r: DocumentRow): FolioDocument => ({
   latest: publicVersion(fromVersionRow({ ...r.latest, size_bytes: String(r.latest.size_bytes), created_at: new Date(r.latest.created_at) })),
   tags: r.tags,
   ...publishing(r.publication ? fromPublicationRow(r.publication) : undefined),
+  ...(r.series_id ? { issue: { series: r.series_id, number: r.issue_number!, periodStart: r.period_start!, period: r.period! } } : {}),
 });
 
 /** A document's state and, while it's out, the publication, from its newest one. */
@@ -1258,6 +1493,7 @@ const READER_COLUMNS = `r.state as reader_state, r.error as reader_error, r.page
 /** A document with its newest version (`v`) and its tags, as one row, with how many rows match in all. */
 const DOCUMENT_SELECT = `
   select d.id, d.workspace_id, d.library_id, d.folder_id, d.title, d.created_by, d.created_at, d.updated_at,
+    d.series_id, d.issue_number, to_char(d.period_start, 'YYYY-MM-DD') as period_start, d.period,
     to_jsonb(v) - 'workspace_id' as latest,
     array(select dt.tag_id from folio.document_tags dt where dt.document_id = d.id order by dt.tag_id) as tags,
     (select to_jsonb(p) from folio.publications p where p.document_id = d.id order by p.seq desc limit 1) as publication,
@@ -1293,7 +1529,55 @@ const tell = (client: pg.PoolClient, topic: string, workspace: string, payload: 
   client.query('insert into folio.outbox (topic, workspace_id, payload) values ($1, $2, $3)', [topic, workspace, JSON.stringify(payload)]);
 
 const LIBRARY_COLUMNS = 'id, workspace_id, floor_principal, name, description, free_tags, created_by, created_at, updated_at';
-const DOCUMENT_ORDER: Record<DocumentSort, string> = { title: 'lower(d.title), d.id', newest: 'd.created_at desc, d.id desc', updated: 'd.updated_at desc, d.id desc' };
+const DOCUMENT_ORDER: Record<DocumentSort, string> = {
+  title: 'lower(d.title), d.id',
+  newest: 'd.created_at desc, d.id desc',
+  updated: 'd.updated_at desc, d.id desc',
+  period: 'd.period_start desc nulls last, d.issue_number desc nulls last, d.created_at desc, d.id desc',
+};
+
+/** Someone who stands for the principals in `$p` may read document `d`, or (with `audience`) has had it published to them. */
+const visibleSql = (p: string, audience: boolean) =>
+  `(exists (select 1 from folio.readers r where r.document_id = d.id and r.principals && ${p}::text[])${
+    audience ? ` or exists (select 1 from folio.publications vp where vp.document_id = d.id and vp.ended_at is null and vp.audience && ${p}::text[])` : ''
+  })`;
+
+type SeriesRow = {
+  id: string;
+  workspace_id: string;
+  library_id: string;
+  name: string;
+  description: string;
+  cadence: Cadence;
+  audience: string[];
+  tags: string[];
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+  issues: string;
+  last: { document: string; number: number; periodStart: string; period: string } | null;
+};
+const SERIES_SELECT = `
+  select s.id, s.workspace_id, s.library_id, s.name, s.description, s.cadence, s.audience, s.tags, s.created_by, s.created_at, s.updated_at,
+    (select count(*) from folio.documents d where d.series_id = s.id and d.deleted_at is null) as issues,
+    (select jsonb_build_object('document', d.id, 'number', d.issue_number, 'periodStart', to_char(d.period_start, 'YYYY-MM-DD'), 'period', d.period)
+      from folio.documents d where d.series_id = s.id and d.deleted_at is null order by d.issue_number desc limit 1) as last
+  from folio.series s`;
+const fromSeriesRow = (r: SeriesRow): Series => ({
+  id: r.id,
+  workspace: r.workspace_id,
+  library: r.library_id,
+  name: r.name,
+  description: r.description,
+  cadence: r.cadence,
+  audience: r.audience,
+  tags: r.tags,
+  createdBy: r.created_by,
+  createdAt: r.created_at.toISOString(),
+  updatedAt: r.updated_at.toISOString(),
+  issues: Number(r.issues),
+  ...(r.last ? { last: r.last } : {}),
+});
 const FOLDER_COLUMNS = 'id, library_id, parent_id, name, created_by, created_at';
 
 export class PgFolioStore implements FolioStore {
@@ -1454,7 +1738,8 @@ export class PgFolioStore implements FolioStore {
     if (query.from) where.push(`d.updated_at >= ${param(query.from)}::timestamptz`);
     if (query.to) where.push(`d.updated_at < ${param(query.to)}::timestamptz`);
     if (query.states?.length) where.push(`${STATE_OF_D} = any(${param(query.states)}::text[])`);
-    if (query.readers) where.push(`exists (select 1 from folio.readers r where r.document_id = d.id and r.principals && ${param(query.readers)}::text[])`);
+    if (query.series) where.push(`d.series_id = ${param(query.series)}`);
+    if (query.readers) where.push(visibleSql(param(query.readers), Boolean(query.audience)));
     const { limit, offset } = pageOf(query);
     const { rows } = await this.pool.query<DocumentRow>(
       `${place} ${DOCUMENT_SELECT} where ${where.join(' and ')} order by ${DOCUMENT_ORDER[query.sort ?? 'title']} limit ${param(limit)} offset ${param(offset)}`,
@@ -1526,13 +1811,24 @@ export class PgFolioStore implements FolioStore {
     }
   }
 
-  async createDocument({ id, library, folder, title, createdBy, tags = [] }: { id: string; library: string; folder?: string; title: string; createdBy: string; tags?: string[] }, first: NewVersion) {
+  async createDocument({ id, library, folder, title, createdBy, tags = [], series }: NewDocument, first: NewVersion) {
     await this.inTransaction(async (client) => {
+      let issue: IssuePlace | undefined;
+      if (series) {
+        // The series' row is locked first, so two issues added at once get the next two numbers.
+        const { rows } = await client.query<{ cadence: Cadence }>('select cadence from folio.series where id = $1 and library_id = $2 for update', [series, library]);
+        if (!rows[0]) throw new BadParentError('That series isn’t in this library.');
+        const { rows: last } = await client.query<{ number: number; period_start: string }>(
+          "select issue_number as number, to_char(period_start, 'YYYY-MM-DD') as period_start from folio.documents where series_id = $1 and deleted_at is null order by issue_number desc limit 1",
+          [series],
+        );
+        issue = pickPlace(nextIssue(rows[0].cadence, last[0] && { number: last[0].number, periodStart: last[0].period_start }));
+      }
       const { rowCount } = await client.query(
-        `insert into folio.documents (id, workspace_id, library_id, folder_id, title, created_by)
-          select $1, l.workspace_id, l.id, $3, $4, $5 from folio.libraries l
+        `insert into folio.documents (id, workspace_id, library_id, folder_id, title, created_by, series_id, issue_number, period_start, period)
+          select $1, l.workspace_id, l.id, $3, $4, $5, $6, $7, $8, $9 from folio.libraries l
           where l.id = $2 and l.archived_at is null and ($3::text is null or exists (select 1 from folio.folders f where f.id = $3 and f.library_id = l.id))`,
-        [id, library, folder ?? null, title, createdBy],
+        [id, library, folder ?? null, title, createdBy, series ?? null, issue?.number ?? null, issue?.periodStart ?? null, issue?.period ?? null],
       );
       if (!rowCount) throw new BadParentError(folder ? 'That folder isn’t in this library.' : 'There’s no such library.');
       await this.insertVersion(client, id, 1, first);
@@ -1646,8 +1942,15 @@ export class PgFolioStore implements FolioStore {
       [into, absorbed],
     );
     await this.untagViews(client, absorbed, into);
+    await this.untagSeries(client, absorbed, into);
     await client.query('delete from folio.document_tags where tag_id = any($1::text[])', [absorbed]);
     await client.query('delete from folio.tags where id = any($1::text[])', [absorbed]);
+  }
+
+  private async untagSeries(client: pg.PoolClient, tags: readonly string[], to?: string) {
+    const { rows } = await client.query<{ id: string; tags: string[] }>('select id, tags from folio.series where tags && $1::text[] for update', [tags]);
+    const from = new Set(tags);
+    for (const run of rows) await client.query('update folio.series set tags = $2 where id = $1', [run.id, retagged(run.tags, from, to).sort()]);
   }
 
   private async untagViews(client: pg.PoolClient, tags: readonly string[], to?: string) {
@@ -1694,6 +1997,7 @@ export class PgFolioStore implements FolioStore {
   async deleteTag(id: string) {
     return this.inTransaction(async (client) => {
       await this.untagViews(client, [id]);
+      await this.untagSeries(client, [id]);
       await client.query('delete from folio.document_tags where tag_id = $1', [id]);
       const { rowCount } = await client.query('delete from folio.tags where id = $1', [id]);
       return rowCount === 1;
@@ -1920,6 +2224,113 @@ export class PgFolioStore implements FolioStore {
     );
     const total = rows[0] ? Number(rows[0].total) : offset ? (await this.publishedTo(principals, { limit: 1 })).total : 0;
     return { documents: rows.map((r) => ({ ...(fromDocumentRow(r) as FolioDocument & { published: Publication }), libraryName: r.library_name })), total };
+  }
+
+  async seriesIn(library: string) {
+    const { rows } = await this.pool.query<SeriesRow>(`${SERIES_SELECT} where s.library_id = $1 order by lower(s.name), s.id`, [library]);
+    return rows.map(fromSeriesRow);
+  }
+
+  async series(id: string) {
+    const { rows } = await this.pool.query<SeriesRow>(`${SERIES_SELECT} where s.id = $1`, [id]);
+    return rows[0] && fromSeriesRow(rows[0]);
+  }
+
+  /** BadTagError unless each tag is the org's or the library's. */
+  private async checkSeriesTags(library: string, tags: readonly string[]) {
+    if (!tags.length) return;
+    const { rows } = await this.pool.query<{ n: string }>('select count(*) as n from folio.tags where id = any($1::text[]) and (library_id is null or library_id = $2)', [[...new Set(tags)], library]);
+    if (Number(rows[0].n) !== new Set(tags).size) throw new BadTagError('That tag isn’t the org’s or this library’s.');
+  }
+
+  async createSeries({ library, name, description = '', cadence, audience = [], tags = [], createdBy }: { library: string; name: string; description?: string; cadence: Cadence; audience?: string[]; tags?: string[]; createdBy: string }) {
+    await this.checkSeriesTags(library, tags);
+    const id = randomUUID();
+    try {
+      const { rowCount } = await this.pool.query(
+        `insert into folio.series (id, workspace_id, library_id, name, description, cadence, audience, tags, created_by)
+          select $1, workspace_id, id, $3, $4, $5, $6, $7, $8 from folio.libraries where id = $2 and archived_at is null`,
+        [id, library, name, description, cadence, [...new Set(audience)].sort(), [...new Set(tags)].sort(), createdBy],
+      );
+      if (!rowCount) throw new BadParentError('There’s no such library.');
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new NameTakenError(`There’s already a series called ${name} here.`);
+      throw err;
+    }
+    return (await this.series(id))!;
+  }
+
+  async updateSeries(id: string, change: { name?: string; description?: string; cadence?: Cadence; audience?: string[]; tags?: string[] }) {
+    const found = await this.series(id);
+    if (!found) return undefined;
+    if (change.tags) await this.checkSeriesTags(found.library, change.tags);
+    try {
+      await this.pool.query(
+        `update folio.series set name = coalesce($2, name), description = coalesce($3, description), cadence = coalesce($4, cadence),
+            audience = coalesce($5, audience), tags = coalesce($6, tags), updated_at = now()
+          where id = $1`,
+        [id, change.name ?? null, change.description ?? null, change.cadence ?? null, change.audience ? [...new Set(change.audience)].sort() : null, change.tags ? [...new Set(change.tags)].sort() : null],
+      );
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new NameTakenError(`There’s already a series called ${change.name} here.`);
+      throw err;
+    }
+    return this.series(id);
+  }
+
+  async deleteSeries(id: string) {
+    return this.inTransaction(async (client) => {
+      const { rowCount } = await client.query('select 1 from folio.series where id = $1 for update', [id]);
+      if (!rowCount) return false;
+      // Deleted issues keep their place too: they can be brought back.
+      const { rowCount: issues } = await client.query('select 1 from folio.documents where series_id = $1 limit 1', [id]);
+      if (issues) throw new NotEmptyError('A series with issues stays, so its issues keep their place.');
+      await client.query('delete from folio.series_followers where series_id = $1', [id]);
+      await client.query('delete from folio.series where id = $1', [id]);
+      return true;
+    });
+  }
+
+  async neighbours(document: string, principals: readonly string[]) {
+    const { rows } = await this.pool.query<{ side: 'previous' | 'next'; id: string; library_id: string; title: string; issue_number: number; period: string }>(
+      `with me as (select series_id, issue_number from folio.documents where id = $1 and series_id is not null)
+        (select 'previous' as side, d.id, d.library_id, d.title, d.issue_number, d.period from folio.documents d, me
+          where d.series_id = me.series_id and d.deleted_at is null and d.issue_number < me.issue_number and ${visibleSql('$2', true)}
+          order by d.issue_number desc limit 1)
+        union all
+        (select 'next' as side, d.id, d.library_id, d.title, d.issue_number, d.period from folio.documents d, me
+          where d.series_id = me.series_id and d.deleted_at is null and d.issue_number > me.issue_number and ${visibleSql('$2', true)}
+          order by d.issue_number limit 1)`,
+      [document, principals],
+    );
+    return Object.fromEntries(rows.map((r) => [r.side, { id: r.id, library: r.library_id, title: r.title, number: r.issue_number, period: r.period }]));
+  }
+
+  async follow(series: string, person: string, on: boolean) {
+    if (on)
+      await this.pool.query(
+        'insert into folio.series_followers (series_id, person_id, workspace_id) select id, $2, workspace_id from folio.series where id = $1 on conflict do nothing',
+        [series, person],
+      );
+    else await this.pool.query('delete from folio.series_followers where series_id = $1 and person_id = $2', [series, person]);
+  }
+
+  async followers(series: string) {
+    const { rows } = await this.pool.query<{ person_id: string }>('select person_id from folio.series_followers where series_id = $1 order by person_id', [series]);
+    return rows.map((r) => r.person_id);
+  }
+
+  async timedSeries() {
+    const { rows } = await this.pool.query<SeriesRow>(
+      `${SERIES_SELECT} join folio.libraries l on l.id = s.library_id and l.archived_at is null
+        where s.cadence <> 'adhoc' and exists (select 1 from folio.documents d where d.series_id = s.id and d.deleted_at is null)`,
+    );
+    return rows.map(fromSeriesRow);
+  }
+
+  async markReminded(series: string, periodStart: string) {
+    const { rowCount } = await this.pool.query('update folio.series set reminded_for = $2 where id = $1 and reminded_for is distinct from $2::date', [series, periodStart]);
+    return rowCount === 1;
   }
 
   /** A connection pool whose search path is Folio's schema, for the outbox relay, which names its table plainly. */

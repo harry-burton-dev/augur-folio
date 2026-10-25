@@ -18,7 +18,8 @@ import { MemoryObjectStore, type ObjectStore } from './objects.ts';
 import { accessRoutes } from './access.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipalOf, peopleFromEnv, type CallerPrincipals } from './people.ts';
-import { publishingRoutes } from './publishing.ts';
+import { publisherFor, publishingRoutes } from './publishing.ts';
+import { seriesRoutes } from './series.ts';
 import { BadParentError, BadTagError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { tagRoutes } from './tags.ts';
 
@@ -182,8 +183,14 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         if (!caller) return reply;
         const library = await libraryFor(caller, req.params.id, reply);
         if (!library) return reply;
-        const [folders, tags, authors, views] = await Promise.all([store.folders(library.id), store.tags(library.id), store.authors(library.id), store.views(library.id)]);
-        return { ...library, folders, tags, authors, views, can: rightsOn(caller, library) };
+        const [folders, tags, authors, views, series] = await Promise.all([
+          store.folders(library.id),
+          store.tags(library.id),
+          store.authors(library.id),
+          store.views(library.id),
+          store.seriesIn(library.id),
+        ]);
+        return { ...library, folders, tags, authors, views, series, can: rightsOn(caller, library) };
       });
 
       app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; freeTags?: boolean } }>(
@@ -278,10 +285,12 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         }
       });
 
-      await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, maxUploadBytes });
+      const publisher = publisherFor({ store, audit: record, directory, audience, notify: tell, log: app.log });
+      await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, publisher, maxUploadBytes });
       await accessRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, log: app.log });
       await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
-      await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log });
+      await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log, publisher });
+      await seriesRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, publisher, refused });
     },
     { prefix: `/${API_VERSION}` },
   );

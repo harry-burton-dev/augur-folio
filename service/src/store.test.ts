@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { following, periodStart } from './cadence.ts';
 import { BadParentError, BadTagError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
 
 const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
@@ -343,6 +344,77 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect((await store.publishedTo(['org'])).total).toBe(0);
   });
 
+  it('numbers a series’ issues in turn, a period each, and finds the ones either side', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Reports', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Other', createdBy: 'u-1' });
+    const weekly = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Weekly', createdBy: 'u-1' });
+    const run = await store.createSeries({ library: lib.id, name: 'Cash report', cadence: 'weekly', audience: ['tree:w-fin', 'org', 'org'], tags: [weekly.id], createdBy: 'u-1' });
+    expect(run).toMatchObject({ name: 'Cash report', cadence: 'weekly', audience: ['org', 'tree:w-fin'], tags: [weekly.id], issues: 0, description: '' });
+    expect(run.last).toBeUndefined();
+    await expect(store.createSeries({ library: lib.id, name: 'cash REPORT', cadence: 'monthly', createdBy: 'u-1' })).rejects.toBeInstanceOf(NameTakenError);
+    await expect(store.createSeries({ library: other.id, name: 'Bad', cadence: 'monthly', tags: [weekly.id], createdBy: 'u-1' })).rejects.toBeInstanceOf(BadTagError);
+    await expect(store.createDocument({ id: 'd-x', library: other.id, title: 'X', createdBy: 'u-1', series: run.id }, file('d-x', 'v-x'))).rejects.toBeInstanceOf(BadParentError);
+
+    const first = await store.createDocument({ id: 'd-1', library: lib.id, title: 'One', createdBy: 'u-1', series: run.id }, file('d-1', 'v-1'));
+    const now = periodStart('weekly', new Date());
+    expect(first.issue).toMatchObject({ series: run.id, number: 1, periodStart: now });
+    expect(first.issue!.period).toMatch(/^Week \d+, \d{4}$/);
+    const second = await store.createDocument({ id: 'd-2', library: lib.id, title: 'Two', createdBy: 'u-1', series: run.id }, file('d-2', 'v-2'));
+    expect(second.issue).toMatchObject({ number: 2, periodStart: following('weekly', now) });
+    await store.createDocument({ id: 'd-3', library: lib.id, title: 'Three', createdBy: 'u-1', series: run.id }, file('d-3', 'v-3'));
+    await store.createDocument({ id: 'd-plain', library: lib.id, title: 'Plain', createdBy: 'u-1' }, file('d-plain', 'v-plain'));
+    expect(await store.series(run.id)).toMatchObject({ issues: 3, last: { document: 'd-3', number: 3 } });
+    expect((await store.seriesIn(lib.id)).map((s) => s.name)).toEqual(['Cash report']);
+
+    expect(await titles(store, lib.id, { series: run.id, sort: 'period' })).toEqual(['Three', 'Two', 'One']);
+    expect(await titles(store, lib.id, { sort: 'period' })).toEqual(['Three', 'Two', 'One', 'Plain']);
+    // Only the ones they may read, or that were published to them, either side.
+    expect(await store.neighbours('d-2', ['tree:w-fin'])).toMatchObject({ previous: { id: 'd-1', number: 1, title: 'One' }, next: { id: 'd-3', number: 3 } });
+    expect(await store.neighbours('d-2', ['team:w-legal'])).toEqual({});
+    await store.publish({ document: 'd-3', version: 1, audience: ['team:w-legal'], by: 'u-1' });
+    expect(await store.neighbours('d-2', ['team:w-legal'])).toEqual({ next: { id: 'd-3', library: lib.id, title: 'Three', number: 3, period: expect.any(String) } });
+    expect(await titles(store, lib.id, { series: run.id, readers: ['team:w-legal'] })).toEqual([]);
+    expect(await titles(store, lib.id, { series: run.id, readers: ['team:w-legal'], audience: true })).toEqual(['Three']);
+    expect(await store.neighbours('d-plain', ['tree:w-fin'])).toEqual({});
+
+    // A deleted issue's number goes to the next one, and a series with issues stays.
+    await store.deleteDocument('d-3', 'u-1');
+    expect((await store.createDocument({ id: 'd-4', library: lib.id, title: 'Four', createdBy: 'u-1', series: run.id }, file('d-4', 'v-4'))).issue?.number).toBe(3);
+    await expect(store.deleteSeries(run.id)).rejects.toBeInstanceOf(NotEmptyError);
+    const empty = await store.createSeries({ library: lib.id, name: 'Board pack', cadence: 'adhoc', createdBy: 'u-1' });
+    expect(await store.deleteSeries(empty.id)).toBe(true);
+    expect(await store.deleteSeries(empty.id)).toBe(false);
+  });
+
+  it('changes a series, keeps its tags with the tags, follows it, and marks a late issue once', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Reports', createdBy: 'u-1' });
+    const a = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Cash', createdBy: 'u-1' });
+    const b = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Board', createdBy: 'u-1' });
+    const run = await store.createSeries({ library: lib.id, name: 'Cash report', cadence: 'weekly', tags: [a.id, b.id], createdBy: 'u-1' });
+    await store.createSeries({ library: lib.id, name: 'Board pack', cadence: 'adhoc', createdBy: 'u-1' });
+    await expect(store.updateSeries(run.id, { name: 'board PACK' })).rejects.toBeInstanceOf(NameTakenError);
+    expect(await store.updateSeries(run.id, { name: 'Cash', cadence: 'monthly', audience: ['org'], description: 'Each month' })).toMatchObject({ name: 'Cash', cadence: 'monthly', audience: ['org'], description: 'Each month' });
+    await store.deleteTag(b.id);
+    expect((await store.series(run.id))?.tags).toEqual([a.id]);
+    const org = await store.createTag({ workspace: 'w-org', name: 'cash', createdBy: 'u-9' });
+    expect((await store.series(run.id))?.tags).toEqual([org.id]);
+    expect(await store.updateSeries('nope', { name: 'X' })).toBeUndefined();
+
+    await store.follow(run.id, 'u-2', true);
+    await store.follow(run.id, 'u-3', true);
+    await store.follow(run.id, 'u-2', true);
+    await store.follow(run.id, 'u-3', false);
+    expect(await store.followers(run.id)).toEqual(['u-2']);
+
+    // Only series that come out on a cadence and have had an issue can be late.
+    expect(await store.timedSeries()).toEqual([]);
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'One', createdBy: 'u-1', series: run.id }, file('d-1', 'v-1'));
+    expect((await store.timedSeries()).map((s) => s.name)).toEqual(['Cash']);
+    expect(await store.markReminded(run.id, '2026-11-01')).toBe(true);
+    expect(await store.markReminded(run.id, '2026-11-01')).toBe(false);
+    expect(await store.markReminded(run.id, '2026-12-01')).toBe(true);
+  });
+
   it('tells other apps what happened, with ids and no titles', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
@@ -388,7 +460,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
@@ -396,7 +468,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {

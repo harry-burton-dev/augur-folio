@@ -3,6 +3,10 @@ import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, t
 import './folio-reader.js';
 import './folio-share.js';
 import './folio-publish.js';
+import './folio-series.js';
+import './folio-audience.js';
+import type { Chosen } from './folio-audience.js';
+import { whoWords } from './folio-share.js';
 import {
   ACCEPT,
   KINDS,
@@ -19,8 +23,12 @@ import {
   type OpenLibrary,
   type Place,
   type PublishedPage,
+  type Principal,
   type ReaderState,
   type SavedView,
+  type Series,
+  type SeriesView,
+  type Cadence,
   type Shared,
   type Since,
   type Tag,
@@ -56,7 +64,10 @@ type Dialog =
   | 'rename-view'
   | 'delete-view'
   | 'share'
-  | 'publish';
+  | 'publish'
+  | 'new-series'
+  | 'edit-series'
+  | 'delete-series';
 
 /** How many documents come in one page of the list. */
 const PAGE = 100;
@@ -65,6 +76,14 @@ export const SORTS: SelectOption[] = [
   { value: 'title', label: 'Title' },
   { value: 'newest', label: 'Newest first' },
   { value: 'updated', label: 'Recently changed' },
+  { value: 'period', label: 'Series period' },
+];
+
+const CADENCE_OPTIONS: SelectOption[] = [
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Quarterly' },
+  { value: 'adhoc', label: 'Now and then', detail: 'No due dates' },
 ];
 
 const STATE_OPTIONS: SelectOption[] = [
@@ -85,12 +104,13 @@ const SINCE_OPTIONS: SelectOption[] = [
 ];
 
 /** The filter bar's choices, from what the library has. */
-export const filtersFor = (open: Pick<OpenLibrary, 'tags' | 'authors'>): FilterDef[] => [
+export const filtersFor = (open: Pick<OpenLibrary, 'tags' | 'authors'> & { series?: Series[] }): FilterDef[] => [
   { id: 'tag', label: 'Tags', search: true, options: tagOptions(open.tags) },
   { id: 'type', label: 'Type', options: KINDS },
   { id: 'author', label: 'Added by', search: open.authors.length > 8, options: open.authors.map((a) => ({ value: a.id, label: a.name || 'Someone' })) },
   { id: 'since', label: 'Changed', single: true, options: SINCE_OPTIONS },
   { id: 'state', label: 'Published', options: STATE_OPTIONS },
+  ...(open.series?.length ? [{ id: 'series', label: 'Series', single: true, options: open.series.map((r) => ({ value: r.id, label: r.name })) }] : []),
 ];
 
 /** Tags as a picker offers them: the org's marked as such. */
@@ -106,12 +126,15 @@ export const queryFrom = (filters: FilterValue, sort: DocumentSort, folder?: str
   ...(filters.since?.length ? { since: filters.since[0] as Since } : {}),
   ...(sort !== 'title' ? { sort } : {}),
   ...(filters.state?.length ? { states: filters.state as DocumentState[] } : {}),
+  ...(filters.series?.length ? { series: filters.series[0] } : {}),
 });
 
 /** A saved view's filters, back in the bar's shape. */
 export const filtersFrom = (q: ViewQuery): FilterValue =>
   Object.fromEntries(
-    Object.entries({ tag: q.tags ?? [], type: q.types ?? [], author: q.authors ?? [], since: q.since ? [q.since] : [], state: q.states ?? [] }).filter(([, v]) => v.length),
+    Object.entries({ tag: q.tags ?? [], type: q.types ?? [], author: q.authors ?? [], since: q.since ? [q.since] : [], state: q.states ?? [], series: q.series ? [q.series] : [] }).filter(
+      ([, v]) => v.length,
+    ),
   );
 
 const sameQuery = (a: ViewQuery, b: ViewQuery) => {
@@ -201,6 +224,9 @@ export class FolioApp extends LitElement {
     reading: { state: true },
     shared: { state: true },
     inbox: { state: true },
+    run: { state: true },
+    seriesEdit: { state: true },
+    publisher: { type: Boolean },
   };
 
   declare api: FolioApi;
@@ -247,6 +273,12 @@ export class FolioApp extends LitElement {
   declare shared: Shared;
   /** What's been published to the person, while they're looking at it (`/published`), or reading from it. */
   declare inbox: PublishedPage | undefined;
+  /** The series open on its own page, and the library it's in. */
+  declare run: { library: string; series: string } | undefined;
+  /** The series its dialog changes, with its audience named. */
+  declare seriesEdit: (Omit<SeriesView, 'audience'> & { audience: Principal[] }) | undefined;
+  /** The person has the publisher role: the whole org is theirs to publish to. */
+  declare publisher: boolean;
   /** What the share dialog is about: a library, or one document of it. */
   shareTarget: { library: string; document?: string; name: string } | undefined;
 
@@ -269,6 +301,7 @@ export class FolioApp extends LitElement {
     this.uploadTags = [];
     this.more = false;
     this.shared = { libraries: [], documents: [] };
+    this.publisher = false;
   }
 
   override createRenderRoot() {
@@ -296,7 +329,13 @@ export class FolioApp extends LitElement {
       const start = this.open?.id ?? this.reading?.library ?? asked?.library ?? this.place.library ?? libraries[0]?.id;
       const reading = this.reading ?? (this.place.document ? { document: this.place.document, version: this.place.version } : undefined);
       if (this.place.adding && can.create) this.dialog = 'new-library';
-      if (this.place.published && !reading) {
+      const run = this.run ?? (this.place.series && this.place.library ? { library: this.place.library, series: this.place.series } : undefined);
+      if (run && !reading) {
+        // Its library when the person can see it; a series published to them opens on its own.
+        this.open = undefined;
+        if ([...libraries, ...shared.libraries].some((l) => l.id === run.library)) await this.openLibrary(run.library, undefined, false);
+        this.run = run;
+      } else if (this.place.published && !reading) {
         this.open = undefined;
         await this.openInbox(false);
       } else if (start && [...libraries, ...shared.libraries].some((l) => l.id === start)) {
@@ -318,6 +357,7 @@ export class FolioApp extends LitElement {
   private async openInbox(tell = true) {
     this.reading = undefined;
     this.doc = undefined;
+    this.run = undefined;
     try {
       this.inbox = await this.api.published();
       if (tell) this.tell();
@@ -330,6 +370,7 @@ export class FolioApp extends LitElement {
     this.opening = true;
     this.reading = undefined;
     this.inbox = undefined;
+    this.run = undefined;
     try {
       const switching = this.open?.id !== id;
       this.open = await this.api.library(id);
@@ -353,6 +394,7 @@ export class FolioApp extends LitElement {
 
   private async goToFolder(folder: string | undefined) {
     this.reading = undefined;
+    this.run = undefined;
     this.folder = folder;
     this.view = undefined;
     this.note = '';
@@ -364,6 +406,7 @@ export class FolioApp extends LitElement {
   private applyView(view: SavedView) {
     const open = this.open!;
     this.reading = undefined;
+    this.run = undefined;
     this.view = view.id;
     this.folder = view.query.folder && open.folders.some((f) => f.id === view.query.folder) ? view.query.folder : undefined;
     this.filters = filterValue(filtersFor(open), filtersFrom(view.query));
@@ -453,10 +496,22 @@ export class FolioApp extends LitElement {
     }
   }
 
+  /** A series on its own page. */
+  private openSeries(library: string, series: string) {
+    this.reading = undefined;
+    this.doc = undefined;
+    this.inbox = undefined;
+    this.view = undefined;
+    this.note = '';
+    this.run = { library, series };
+    this.tell();
+  }
+
   /** Leaves the document being read, back to where it is in its library. */
   private async stopReading() {
     this.reading = undefined;
     this.doc = undefined;
+    if (this.run) return this.tell();
     if (this.inbox) return this.openInbox();
     if (!this.open) {
       // Read from "Shared with you", with no library to go back to: back to the floor's own.
@@ -700,9 +755,68 @@ export class FolioApp extends LitElement {
     ];
   }
 
+  /** Starts a new series in the open library. */
+  private newSeries() {
+    this.seriesEdit = undefined;
+    this.dialog = 'new-series';
+  }
+
+  /** Opens a series' dialog, with its audience named. */
+  private async editSeries(id: string, dialog: Dialog = 'edit-series') {
+    try {
+      this.seriesEdit = await this.api.series(id);
+      this.dialog = dialog;
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  /** What a series dialog's fields say. */
+  private seriesFields(values: Record<string, string>) {
+    const list = (v: string | undefined) => (v ? v.split(',').filter(Boolean) : []);
+    return { name: values.name.trim(), description: values.description?.trim() ?? '', cadence: values.cadence as Cadence, tags: list(values.tags), audience: list(values.audience) };
+  }
+
+  private submitNewSeries: DialogSubmit = async (values) => {
+    const open = this.open!;
+    const made = await this.api.createSeries(open.id, this.seriesFields(values));
+    await this.refreshLibrary();
+    this.openSeries(open.id, made.id);
+  };
+
+  private submitEditSeries: DialogSubmit = async (values) => {
+    const run = this.seriesEdit!;
+    await this.api.updateSeries(run.library, run.id, this.seriesFields(values));
+    await this.refreshLibrary().catch(() => undefined);
+    await this.querySelector('folio-series')?.load();
+  };
+
+  private submitDeleteSeries: DialogSubmit = async () => {
+    const run = this.seriesEdit!;
+    await this.api.deleteSeries(run.library, run.id);
+    this.run = undefined;
+    await this.refreshLibrary();
+    this.tell();
+    await this.loadDocuments();
+  };
+
+  /** Follows or stops following the series of the issue being read. */
+  private async followFromReader(following: boolean) {
+    const doc = this.doc;
+    if (!doc?.run) return;
+    try {
+      await this.api.follow(doc.run.id, following);
+      if (this.doc?.id === doc.id) this.doc = { ...doc, run: { ...doc.run, following } };
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
   private tell() {
     const detail = this.reading
       ? { ...this.reading }
+      : this.run
+        ? { ...this.run }
       : this.inbox
         ? { published: true }
         : this.view
@@ -819,6 +933,15 @@ export class FolioApp extends LitElement {
             @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => this.goToFolder(e.detail.item.id)}
           ></ui-tree>`
         : nothing}
+      ${open && open.series.length
+        ? html`<ui-tree
+            label=${`Series in ${open.name}`}
+            heading="Series"
+            .items=${open.series.map((r): TreeItem => ({ id: r.id, label: r.name, icon: 'series' }))}
+            selected=${this.run && !this.reading ? this.run.series : ''}
+            @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => this.openSeries(open.id, e.detail.item.id)}
+          ></ui-tree>`
+        : nothing}
       ${open && open.views.length
         ? html`<ui-tree
             label=${`Views saved in ${open.name}`}
@@ -850,10 +973,21 @@ export class FolioApp extends LitElement {
         @folio-manage=${() => (this.dialog = 'document')}
         @folio-share=${() => this.openShare({ library: doc.library, document: doc.id, name: doc.title })}
         @folio-publish=${() => (this.dialog = 'publish')}
+        @folio-issue=${(e: CustomEvent<{ library: string; document: string }>) => void this.read(e.detail.document, undefined, true, e.detail.library)}
+        @folio-series=${(e: CustomEvent<{ series: string }>) => this.openSeries(doc.library, e.detail.series)}
+        @folio-follow=${(e: CustomEvent<{ following: boolean }>) => void this.followFromReader(e.detail.following)}
         @folio-download=${(e: CustomEvent<{ version: number }>) => void this.download(e.detail.version)}
         @folio-retry=${(e: CustomEvent<{ version: number }>) => void this.retryReader(e.detail.version)}
       ></folio-reader>`;
     }
+    if (this.run)
+      return html`<div class="folio-main-inner">
+        <folio-series .api=${this.api} series=${this.run.series}
+          @folio-read=${(e: CustomEvent<{ library: string; document: string }>) => void this.read(e.detail.document, undefined, true, e.detail.library)}
+          @folio-edit-series=${(e: CustomEvent<{ series: string }>) => void this.editSeries(e.detail.series)}
+          @folio-delete-series=${(e: CustomEvent<{ series: string }>) => void this.editSeries(e.detail.series, 'delete-series')}
+          @folio-issue-added=${() => void this.refreshLibrary().catch(() => undefined)}></folio-series>
+      </div>`;
     if (this.inbox) return this.inboxPage(this.inbox);
     if (!open)
       return this.canCreate
@@ -907,6 +1041,7 @@ export class FolioApp extends LitElement {
             ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'rename-view')}>Rename view</ui-button>
                 <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-view')}>Delete view</ui-button>`
             : html`${open.can.addFolders && !view ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
+                ${open.can.manage && !here && !view ? html`<ui-button kind="ghost" size="sm" @click=${() => this.newSeries()}>New series</ui-button>` : nothing}
                 <ui-button kind="ghost" size="sm" @click=${() => void this.openTags()}>Tags</ui-button>
                 ${!here ? html`<ui-button kind="ghost" size="sm" @click=${() => this.openShare({ library: open.id, name: open.name })}>${open.can.share ? 'Share' : 'Who can see it'}</ui-button>` : nothing}
                 ${open.can.manage && !here
@@ -987,7 +1122,9 @@ export class FolioApp extends LitElement {
     const open = this.open!;
     const names = d.tags.map((t) => open.tags.find((x) => x.id === t)?.name).filter(Boolean);
     const folder = spanning ? folderTrail(open.folders, d.folder).map((f) => f.name).join(' / ') : '';
-    return [stateWords(d), folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
+    const run = d.issue && open.series.find((r) => r.id === d.issue!.series);
+    const issue = d.issue && run ? `${run.name}, ${d.issue.period.startsWith('Issue') ? d.issue.period.toLowerCase() : d.issue.period}` : '';
+    return [stateWords(d), issue, folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
   }
 
   /** What's out to the person now, from any floor: each opens at the version that's out. */
@@ -1134,6 +1271,39 @@ export class FolioApp extends LitElement {
             @folio-published=${() => void this.loadDocuments()}></folio-publish>
         </ui-dialog>`;
       }
+      case 'new-series':
+      case 'edit-series': {
+        if (!open && this.dialog === 'new-series') return nothing;
+        const run = this.dialog === 'edit-series' ? this.seriesEdit : undefined;
+        if (this.dialog === 'edit-series' && !run) return nothing;
+        const taken = (open?.series ?? []).filter((r) => r.id !== run?.id).map((r) => r.name);
+        const chosen: Chosen[] = run ? run.audience.map((p) => ({ principal: p.principal, name: whoWords(p) })) : [];
+        return html`<ui-dialog open eyebrow=${run ? 'Series' : (open?.name ?? 'Series')} heading=${run ? `Change ${run.name}` : 'New series'}
+          summary="A run of documents that comes out on a cadence, such as a weekly report. Each new issue takes its name, tags and audience from here."
+          action-label=${run ? 'Save' : 'Make it'} busy-label=${run ? 'Saving…' : 'Making…'} .submit=${run ? this.submitEditSeries : this.submitNewSeries}
+          @ui-close=${() => {
+            this.dialog = undefined;
+            this.seriesEdit = undefined;
+          }}>
+          <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .value=${run?.name ?? ''} .validate=${nameCheck(taken, 'series')}></ui-text-field>
+          <ui-text-field slot="fields" name="description" label="What it’s for" optional multiline maxlength="500" .value=${run?.description ?? ''}></ui-text-field>
+          <ui-select slot="fields" name="cadence" label="Comes out" .options=${CADENCE_OPTIONS} .value=${run?.cadence ?? 'weekly'}
+            hint="Weekly, monthly and quarterly issues each have a period, and its owner is reminded when one is late."></ui-select>
+          <ui-tag-picker slot="fields" name="tags" label="Tags each issue starts with" optional placeholder="None" .options=${tagOptions(open?.tags ?? [])} .values=${run?.tags ?? []}></ui-tag-picker>
+          <folio-audience slot="fields" name="audience" label="Who each issue goes to" .api=${this.api} .chosen=${chosen} ?org=${this.publisher}
+            empty="No one: issues stay drafts until someone publishes them."></folio-audience>
+        </ui-dialog>`;
+      }
+      case 'delete-series':
+        return this.seriesEdit
+          ? html`<ui-dialog open danger eyebrow="Series" heading=${`Remove ${this.seriesEdit.name}?`} action-label="Remove" busy-label="Removing…" .submit=${this.submitDeleteSeries}
+              @ui-close=${() => {
+                this.dialog = undefined;
+                this.seriesEdit = undefined;
+              }}>
+              <p>It has no issues, so nothing else changes. Anyone following it stops being told.</p>
+            </ui-dialog>`
+          : nothing;
       case 'edit-document':
         return this.doc
           ? html`<ui-dialog open eyebrow="Document" heading=${`Rename or move ${this.doc.title}`} action-label="Save" busy-label="Saving…" .submit=${this.submitEditDocument}
