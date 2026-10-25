@@ -4,7 +4,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Audit } from './audit.ts';
 import type { OnFloor } from './app.ts';
 import type { ObjectStore } from './objects.ts';
-import { objectKeyFor, type FolioDocument, type FolioStore, type Library, type NewVersion } from './store.ts';
+import { objectKeyFor, SINCE, type DocumentSort, type FolioDocument, type FolioStore, type Library, type NewVersion, type Since } from './store.ts';
+import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
 
 /** What Folio takes, and the file endings each may have. PowerPoint waits for a later version. */
 export const ACCEPTED: Record<string, readonly string[]> = {
@@ -53,6 +54,44 @@ const FILE_QUERY = {
     folder: { type: 'string', maxLength: 64 },
   },
 } as const;
+/** An upload may come tagged: `tag` once for each. */
+const UPLOAD_QUERY = { ...FILE_QUERY, properties: { ...FILE_QUERY.properties, tag: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 64 } } } } as const;
+
+/** The document list's filters: the view query's, one value of each in the address, and paging. */
+const LIST_QUERY = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    folder: VIEW_QUERY.properties.folder,
+    below: { type: 'boolean' },
+    tag: VIEW_QUERY.properties.tags,
+    type: VIEW_QUERY.properties.types,
+    author: VIEW_QUERY.properties.authors,
+    since: VIEW_QUERY.properties.since,
+    from: VIEW_QUERY.properties.from,
+    to: VIEW_QUERY.properties.to,
+    sort: VIEW_QUERY.properties.sort,
+    limit: { type: 'integer', minimum: 1, maximum: 200 },
+    offset: { type: 'integer', minimum: 0 },
+  },
+} as const;
+
+type ListQuery = {
+  folder?: string;
+  below?: boolean;
+  tag?: string[];
+  type?: string[];
+  author?: string[];
+  since?: Since;
+  from?: string;
+  to?: string;
+  sort?: DocumentSort;
+  limit?: number;
+  offset?: number;
+};
+
+const DAY = 24 * 60 * 60 * 1000;
+
 const DOC_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, doc: { type: 'string', maxLength: 64 } }, required: ['id', 'doc'] } as const;
 const VERSION_PARAMS = {
   type: 'object',
@@ -132,22 +171,41 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
   const recorded = (entry: Parameters<Audit>[0]) =>
     audit(entry).catch((err: Error) => log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
 
-  app.get<{ Params: { id: string }; Querystring: { folder?: string } }>(
+  /**
+   * The documents in a folder (or at the top), or with `below` everything inside it,
+   * narrowed by tags (all of them), kinds, authors and when they last changed.
+   */
+  app.get<{ Params: { id: string }; Querystring: ListQuery }>(
     '/libraries/:id/documents',
-    { schema: { params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] }, querystring: { type: 'object', properties: { folder: { type: 'string', maxLength: 64 } } } } },
+    { schema: { params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] }, querystring: LIST_QUERY } },
     async (req, reply) => {
       const caller = onFloor(req, reply);
       if (!caller) return reply;
       const library = await libraryFor(caller, req.params.id, reply);
       if (!library) return reply;
-      const documents = await store.documents(library.id, req.query.folder || undefined);
-      return { documents: documents.map((d) => ({ ...d, can: { change: mayChange(caller, d) } })) };
+      const q = req.query;
+      const [from, to] = [timeOf(q.from), timeOf(q.to)];
+      if (from === null || to === null) return reply.code(400).send({ error: 'bad-time', message: 'Give “from” and “to” as dates or times.' });
+      const since = q.since && new Date(Date.now() - SINCE[q.since] * DAY).toISOString();
+      const { documents, total } = await store.documents(library.id, {
+        folder: q.folder || undefined,
+        below: q.below,
+        tags: q.tag,
+        mediaTypes: q.type?.map((t) => KINDS[t]),
+        authors: q.author,
+        from: since && (!from || since > from) ? since : from,
+        to,
+        sort: q.sort,
+        limit: q.limit,
+        offset: q.offset,
+      });
+      return { documents: documents.map((d) => ({ ...d, can: { change: mayChange(caller, d) } })), total };
     },
   );
 
-  app.post<{ Params: { id: string }; Querystring: { filename: string; title?: string; folder?: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { filename: string; title?: string; folder?: string; tag?: string[] } }>(
     '/libraries/:id/documents',
-    { schema: { params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] }, querystring: FILE_QUERY } },
+    { schema: { params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] }, querystring: UPLOAD_QUERY } },
     async (req, reply) => {
       const caller = onFloor(req, reply);
       if (!caller) return reply;
@@ -158,6 +216,10 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!mediaType) return reply;
       if (folder && !(await store.folders(library.id)).some((f) => f.id === folder))
         return reply.code(400).send({ error: 'bad-parent', message: 'That folder isn’t in this library.' });
+      // Checked before the file goes up, so a wrong tag costs no upload.
+      const tags = [...new Set(req.query.tag ?? [])];
+      const known = new Set((await store.tags(library.id)).map((t) => t.id));
+      if (tags.some((t) => !known.has(t))) return reply.code(400).send({ error: 'bad-tag', message: 'That tag isn’t the org’s or this library’s.' });
       const id = randomUUID();
       try {
         const first = await receive(req, id, filename, mediaType, caller.id);
@@ -166,7 +228,8 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
           return reply.code(400).send({ error: 'empty', message: 'That file is empty.' });
         }
         const title = req.query.title?.trim() || titleFrom(filename);
-        const doc = await store.createDocument({ id, library: library.id, folder: folder || undefined, title, createdBy: caller.id }, first).catch(async (err) => {
+        await store.notePerson({ id: caller.id, name: caller.name });
+        const doc = await store.createDocument({ id, library: library.id, folder: folder || undefined, title, createdBy: caller.id, tags }, first).catch(async (err) => {
           await objects.delete(first.objectKey).catch(() => undefined);
           throw err;
         });
@@ -224,6 +287,29 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     await recorded({ actor: caller.id, action: 'document.deleted', target: doc.id, workspace: doc.workspace, detail: { library: doc.library, title: doc.title } });
     return reply.code(204).send();
   });
+
+  app.put<{ Params: { id: string; doc: string }; Body: { tags: string[] } }>(
+    '/libraries/:id/documents/:doc/tags',
+    {
+      schema: {
+        params: DOC_PARAMS,
+        body: { type: 'object', additionalProperties: false, required: ['tags'], properties: { tags: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 64 } } } },
+      },
+    },
+    async (req, reply) => {
+      const caller = onFloor(req, reply);
+      if (!caller) return reply;
+      const doc = await documentFor(caller, req.params, reply);
+      if (!doc) return reply;
+      if (!mayChange(caller, doc)) return forbidden(reply);
+      try {
+        const tagged = await store.setDocumentTags(doc.id, req.body.tags);
+        return { ...tagged, can: { change: true } };
+      } catch (err) {
+        return refused(err, reply);
+      }
+    },
+  );
 
   app.post<{ Params: { id: string; doc: string }; Querystring: { filename: string } }>(
     '/libraries/:id/documents/:doc/versions',

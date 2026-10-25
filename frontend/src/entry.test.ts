@@ -1,21 +1,26 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
-import type { UiDialog, UiList, UiTree } from '@augur/ui-kit';
+import type { UiDialog, UiFilterBar, UiList, UiTagPicker, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor } from './api.js';
 import app, { addressFor } from './entry.js';
 import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
-const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', createdBy: 'u1', createdAt: '', updatedAt: '' };
+const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', freeTags: false, createdBy: 'u1', createdAt: '', updatedAt: '' };
 const reports = { ...policies, id: 'l-2', name: 'Reports', description: '' };
 const hr = { id: 'f-hr', library: 'l-1', name: 'HR', createdBy: 'u1', createdAt: '' };
 const leave = { id: 'f-leave', library: 'l-1', parent: 'f-hr', name: 'Leave', createdBy: 'u2', createdAt: '' };
 const it_ = { id: 'f-it', library: 'l-1', name: 'IT', createdBy: 'u2', createdAt: '' };
 const v = (number: number, filename = 'travel.pdf', size = 1_234_567) => ({ id: `v-${number}`, document: 'd-1', number, filename, mediaType: 'application/pdf', size, sha256: 'ab', createdBy: 'u2', createdAt: new Date().toISOString() });
-const travel = { id: 'd-1', workspace: 'w-fin', library: 'l-1', title: 'Travel policy', createdBy: 'u2', createdAt: '', updatedAt: new Date().toISOString(), latest: v(2), can: { change: true } };
+const travel = { id: 'd-1', workspace: 'w-fin', library: 'l-1', title: 'Travel policy', createdBy: 'u2', createdAt: '', updatedAt: new Date().toISOString(), latest: v(2), tags: [] as string[], can: { change: true } };
+const tag = (id: string, name: string, library?: string) => ({ id, workspace: library ? 'w-fin' : 'w-org', ...(library ? { library } : {}), name, createdBy: 'u1', createdAt: '' });
+const policyTag = tag('t-pol', 'Policy');
+const travelTag = tag('t-trv', 'Travel', 'l-1');
+const leaveDoc = { ...travel, id: 'd-2', title: 'Annual leave', folder: 'f-leave', tags: ['t-pol'] };
+const recent = { id: 'vw-1', library: 'l-1', name: 'Recent policy', query: { tags: ['t-pol'], sort: 'updated' }, createdBy: 'u1', createdAt: '' };
 
 /** A stand-in for Folio's service, answering what the app asks through ctx.fetch. */
-const service = ({ lead = true, libraries = [policies, reports], folders = [hr, leave, it_], documents = [] as (typeof travel)[] } = {}) => {
+const service = ({ lead = true, libraries = [policies, reports], folders = [hr, leave, it_], documents = [] as (typeof travel & { folder?: string })[], views = [recent] as (typeof recent)[] } = {}) => {
   const calls: [string, string, unknown?][] = [];
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
@@ -25,7 +30,16 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
     const route = path.replace('/api/folio/v1', '');
     const [where, query = ''] = route.split('?');
     const params = new URLSearchParams(query);
-    if (method === 'GET' && /^\/libraries\/[^/]+\/documents$/.test(where)) return Response.json({ documents: documents.filter((d) => (d as { folder?: string }).folder === (params.get('folder') ?? undefined)) });
+    if (method === 'GET' && /^\/libraries\/[^/]+\/documents$/.test(where)) {
+      const tags = params.getAll('tag');
+      const found = documents.filter((d) => (params.get('below') ? true : d.folder === (params.get('folder') ?? undefined)) && tags.every((t) => d.tags.includes(t)));
+      return Response.json({ documents: found, total: found.length });
+    }
+    if (method === 'PUT' && where === '/libraries/l-1/documents/d-1/tags') return Response.json({ ...travel, tags: body.tags });
+    if (method === 'POST' && where === '/libraries/l-1/tags') return Response.json(tag('t-new', body.name, 'l-1'), { status: 201 });
+    if (method === 'GET' && where === '/tags') return Response.json({ tags: [policyTag], can: { manage: false } });
+    if (method === 'POST' && where === '/libraries/l-1/views') return Response.json({ ...recent, id: 'vw-new', name: body.name, query: body.query }, { status: 201 });
+    if (method === 'PATCH' && where === '/libraries/l-1') return Response.json({ ...policies, ...body });
     if (method === 'POST' && where === '/libraries/l-1/documents') {
       if (params.get('filename') === 'big.pdf') return new Response('Payload Too Large', { status: 413 });
       return Response.json({ ...travel, id: 'd-new', title: params.get('filename'), latest: v(1, params.get('filename')!) }, { status: 201 });
@@ -39,7 +53,17 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
     const one = route.match(/^\/libraries\/([^/]+)$/);
     if (method === 'GET' && one) {
       const lib = libraries.find((l) => l.id === one[1]);
-      return lib ? Response.json({ ...lib, folders: lib.id === 'l-1' ? folders : [], can: { manage: lead, addFolders: true, addDocuments: true } }) : Response.json({ message: 'Not here' }, { status: 404 });
+      const mine = lib?.id === 'l-1';
+      return lib
+        ? Response.json({
+            ...lib,
+            folders: mine ? folders : [],
+            tags: mine ? [policyTag, travelTag] : [policyTag],
+            authors: [{ id: 'u2', name: 'Alex Rivera' }],
+            views: mine ? views : [],
+            can: { manage: lead, addFolders: true, addDocuments: true, addTags: lead },
+          })
+        : Response.json({ message: 'Not here' }, { status: 404 });
     }
     if (method === 'POST' && route === '/libraries') {
       if (body.name === 'Taken') return Response.json({ error: 'name-taken', message: 'There’s already a library called Taken here.' }, { status: 409 });
@@ -92,6 +116,8 @@ describe('folio paths', () => {
     expect(placeFor('/libraries')).toEqual({ adding: false });
     expect(placeFor('/libraries/new')).toEqual({ adding: true });
     expect(placeFor('/libraries/l-1/f%20x')).toEqual({ library: 'l-1', folder: 'f x', adding: false });
+    expect(placeFor('/libraries/l-1/views/vw-1')).toEqual({ library: 'l-1', view: 'vw-1', adding: false });
+    expect(pathFor({ library: 'l-1', view: 'vw-1', folder: 'f-hr' })).toBe('/libraries/l-1/views/vw-1');
     expect(pathFor({ library: 'l-1', folder: 'f x' })).toBe('/libraries/l-1/f%20x');
     expect(addressFor('/@finance/folio/libraries', '/libraries', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
     expect(addressFor('/@finance/folio', '/', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
@@ -119,12 +145,21 @@ describe('folio', () => {
     ]);
     const zone = el.querySelector('ui-drop-zone')!;
     expect(zone.getAttribute('heading')).toBe('Drop files to add them to Policies');
+    // Tags chosen for what's added go with the next file.
+    const picker = el.querySelector<UiTagPicker>('.folio-add ui-tag-picker')!;
+    expect(picker.options.map((o) => [o.label, o.detail])).toEqual([['Policy', 'Org'], ['Travel', undefined]]);
+    picker.dispatchEvent(new CustomEvent('ui-change', { detail: { values: ['t-trv'] } }));
+    zone.dispatchEvent(new CustomEvent('ui-files', { detail: { files: [new File(['%PDF'], 'Leave.pdf')] } }));
+    await settle(el);
+    picker.dispatchEvent(new CustomEvent('ui-change', { detail: { values: [] } }));
+    await settle(el);
     const pdf = new File(['%PDF'], 'Leave.pdf', { type: 'application/pdf' });
     const md = new File(['# Notes'], 'notes.md');
     zone.dispatchEvent(new CustomEvent('ui-files', { detail: { files: [pdf, md, new File(['x'], 'big.pdf')] } }));
     await settle(el);
     const sent = calls.filter(([m, p]) => m === 'POST' && p.startsWith('/api/folio/v1/libraries/l-1/documents?'));
     expect(sent.map(([, p]) => p)).toEqual([
+      '/api/folio/v1/libraries/l-1/documents?filename=Leave.pdf&tag=t-trv',
       '/api/folio/v1/libraries/l-1/documents?filename=Leave.pdf',
       '/api/folio/v1/libraries/l-1/documents?filename=notes.md',
       '/api/folio/v1/libraries/l-1/documents?filename=big.pdf',
@@ -194,8 +229,9 @@ describe('folio', () => {
   it('opens the floor’s first library, with its libraries and folders in the side rail', async () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch);
-    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /api/folio/v1/libraries', 'GET /api/folio/v1/libraries/l-1', 'GET /api/folio/v1/libraries/l-1/documents']);
-    const [libs, folders] = trees(el);
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /api/folio/v1/libraries', 'GET /api/folio/v1/libraries/l-1', 'GET /api/folio/v1/libraries/l-1/documents?limit=100']);
+    const [libs, folders, views] = trees(el);
+    expect(views.items.map((i) => i.label)).toEqual(['Recent policy']);
     expect(libs.heading).toBe('Libraries on Finance');
     expect(libs.items.map((i) => i.label)).toEqual(['Policies', 'Reports']);
     expect(libs.selected).toBe('l-1');
@@ -298,5 +334,79 @@ describe('folio', () => {
     const el = await mounted(vi.fn(async () => new Response(null, { status: 502 })));
     expect(el.querySelector('ui-state')!.getAttribute('kind')).toBe('error');
     expect(el.querySelector('ui-state')!.getAttribute('body')).toMatch(/isn’t answering/);
+  });
+  it('filters everywhere below, with folders out of the list, and says where each match is', async () => {
+    const { fetch, calls } = service({ documents: [travel, leaveDoc] });
+    const el = await mounted(fetch);
+    const bar = el.querySelector<UiFilterBar>('ui-filter-bar')!;
+    expect(bar.filters.map((f) => [f.id, f.options.map((o) => o.label)])).toEqual([
+      ['tag', ['Policy', 'Travel']],
+      ['type', ['PDF', 'Word', 'HTML', 'Markdown', 'Text']],
+      ['author', ['Alex Rivera']],
+      ['since', ['Past week', 'Past month', 'Past three months', 'Past year']],
+    ]);
+    bar.dispatchEvent(new CustomEvent('ui-change', { detail: { value: { tag: ['t-pol'], type: ['pdf'] }, sort: 'newest' } }));
+    await settle(el);
+    expect(calls.at(-1)).toEqual(['GET', '/api/folio/v1/libraries/l-1/documents?below=true&tag=t-pol&type=pdf&sort=newest&limit=100']);
+    expect(list(el).items.map((i) => [i.title, i.detail])).toEqual([['Annual leave', 'HR / Leave · Version 2 · PDF · 1.2 MB · Policy']]);
+    expect(button(el, 'Save view')).toBeDefined();
+  });
+
+  it('saves the filters as a view in the side rail, and opens a view from its path', async () => {
+    window.history.replaceState(null, '', '/@finance/folio/libraries');
+    const { fetch, calls } = service({ documents: [travel, leaveDoc] });
+    const el = await mounted(fetch);
+    el.querySelector<UiFilterBar>('ui-filter-bar')!.dispatchEvent(new CustomEvent('ui-change', { detail: { value: { since: ['month'] }, sort: 'title' } }));
+    await settle(el);
+    button(el, 'Save view')!.click();
+    await settle(el);
+    const dialog = el.querySelector<UiDialog>('ui-dialog')!;
+    expect(dialog.heading).toBe('Save this view');
+    await dialog.submit!({ name: ' This month ' }, dialog);
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/views', { name: 'This month', query: { since: 'month' } }]);
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/views/vw-new');
+
+    const opened = await mounted(service({ documents: [travel, leaveDoc] }).fetch, '/libraries/l-1/views/vw-1');
+    expect(opened.querySelector('ui-heading')!.getAttribute('heading')).toBe('Recent policy');
+    const bar = opened.querySelector<UiFilterBar>('ui-filter-bar')!;
+    expect([bar.value, bar.sort]).toEqual([{ tag: ['t-pol'] }, 'updated']);
+    expect(trees(opened)[2].selected).toBe('vw-1');
+    expect(button(opened, 'Delete view')).toBeDefined();
+  });
+
+  it('tags a document from its dialog, and adds a new tag when the library allows', async () => {
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    const picker = el.querySelector<UiTagPicker>('ui-dialog ui-tag-picker')!;
+    expect(picker.creatable).toBe(true);
+    picker.dispatchEvent(new CustomEvent('ui-change', { detail: { values: ['t-pol'] } }));
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/documents/d-1/tags', { tags: ['t-pol'] }]);
+    picker.dispatchEvent(new CustomEvent('ui-create', { detail: { name: 'Expenses' } }));
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/tags', { name: 'Expenses' }]);
+    expect(calls.at(-1)).toEqual(['PUT', '/api/folio/v1/libraries/l-1/documents/d-1/tags', { tags: ['t-pol', 't-new'] }]);
+  });
+
+  it('keeps a library’s tags in one dialog, with free tags a lead’s switch', async () => {
+    const { fetch, calls } = service();
+    const el = await mounted(fetch);
+    button(el, 'Tags')!.click();
+    await settle(el);
+    const dialog = el.querySelector<UiDialog>('ui-dialog')!;
+    const [own, org] = [...dialog.querySelectorAll<UiList>('ui-list')];
+    expect(own.items.map((i) => [i.title, (i.actions ?? []).map((a) => a.label)])).toEqual([['Travel', ['Rename', 'Remove']]]);
+    expect(org.items.map((i) => [i.title, i.actions])).toEqual([['Policy', undefined]]);
+    const toggle = dialog.querySelector('ui-toggle')!;
+    await toggle.flip();
+    expect(calls).toContainEqual(['PATCH', '/api/folio/v1/libraries/l-1', { freeTags: true }]);
+    const field = dialog.querySelector<HTMLElement & { value: string }>('ui-text-field[name="new-tag"]')!;
+    field.value = 'Expenses';
+    button(dialog, 'Add')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/tags', { name: 'Expenses' }]);
   });
 });

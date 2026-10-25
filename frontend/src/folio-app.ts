@@ -1,8 +1,93 @@
 import { LitElement, html, nothing } from 'lit';
-import { ago, type DialogSubmit, type FieldCheck, type ListItem, type SelectOption, type TreeItem } from '@augur/ui-kit';
-import { ACCEPT, MAX_UPLOAD_MB, fileTypeOf, sizeWords, type FolioApi, type FolioDocument, type Folder, type Library, type OpenDocument, type OpenLibrary, type Place } from './api.js';
+import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
+import {
+  ACCEPT,
+  KINDS,
+  MAX_UPLOAD_MB,
+  fileTypeOf,
+  sizeWords,
+  type DocumentSort,
+  type FolioApi,
+  type FolioDocument,
+  type Folder,
+  type Library,
+  type OpenDocument,
+  type OpenLibrary,
+  type Place,
+  type SavedView,
+  type Since,
+  type Tag,
+  type ViewQuery,
+} from './api.js';
 
-type Dialog = 'new-library' | 'edit-library' | 'archive-library' | 'new-folder' | 'rename-folder' | 'remove-folder' | 'document' | 'edit-document' | 'delete-document';
+type Dialog =
+  | 'new-library'
+  | 'edit-library'
+  | 'archive-library'
+  | 'new-folder'
+  | 'rename-folder'
+  | 'remove-folder'
+  | 'document'
+  | 'edit-document'
+  | 'delete-document'
+  | 'tags'
+  | 'rename-tag'
+  | 'remove-tag'
+  | 'save-view'
+  | 'rename-view'
+  | 'delete-view';
+
+/** How many documents come in one page of the list. */
+const PAGE = 100;
+
+export const SORTS: SelectOption[] = [
+  { value: 'title', label: 'Title' },
+  { value: 'newest', label: 'Newest first' },
+  { value: 'updated', label: 'Recently changed' },
+];
+
+const SINCE_OPTIONS: SelectOption[] = [
+  { value: 'week', label: 'Past week' },
+  { value: 'month', label: 'Past month' },
+  { value: 'quarter', label: 'Past three months' },
+  { value: 'year', label: 'Past year' },
+];
+
+/** The filter bar's choices, from what the library has. */
+export const filtersFor = (open: Pick<OpenLibrary, 'tags' | 'authors'>): FilterDef[] => [
+  { id: 'tag', label: 'Tags', search: true, options: tagOptions(open.tags) },
+  { id: 'type', label: 'Type', options: KINDS },
+  { id: 'author', label: 'Added by', search: open.authors.length > 8, options: open.authors.map((a) => ({ value: a.id, label: a.name || 'Someone' })) },
+  { id: 'since', label: 'Changed', single: true, options: SINCE_OPTIONS },
+];
+
+/** Tags as a picker offers them: the org's marked as such. */
+export const tagOptions = (tags: readonly Tag[]): TagOption[] =>
+  tags.map((t) => ({ value: t.id, label: t.name, ...(t.library ? {} : { detail: 'Org', icon: 'org' }) }));
+
+/** The bar's filters and sort as a saved view keeps them. */
+export const queryFrom = (filters: FilterValue, sort: DocumentSort, folder?: string): ViewQuery => ({
+  ...(folder ? { folder } : {}),
+  ...(filters.tag?.length ? { tags: filters.tag } : {}),
+  ...(filters.type?.length ? { types: filters.type } : {}),
+  ...(filters.author?.length ? { authors: filters.author } : {}),
+  ...(filters.since?.length ? { since: filters.since[0] as Since } : {}),
+  ...(sort !== 'title' ? { sort } : {}),
+});
+
+/** A saved view's filters, back in the bar's shape. */
+export const filtersFrom = (q: ViewQuery): FilterValue =>
+  Object.fromEntries(
+    Object.entries({ tag: q.tags ?? [], type: q.types ?? [], author: q.authors ?? [], since: q.since ? [q.since] : [] }).filter(([, v]) => v.length),
+  );
+
+const sameQuery = (a: ViewQuery, b: ViewQuery) => {
+  const norm = (q: ViewQuery) => JSON.stringify(Object.entries(q).sort(([x], [y]) => x.localeCompare(y)));
+  return norm(a) === norm(b);
+};
+
+/** Whether any filter is on: then the list looks in every folder below. */
+export const filtering = (filters: FilterValue) => Object.values(filters).some((v) => v.length > 0);
 
 /** Rows for documents carry this before their id, so they never meet a folder's. */
 const DOC = 'doc:';
@@ -36,11 +121,11 @@ export const folderTrail = (folders: readonly Folder[], id: string | undefined):
 };
 
 const nameCheck =
-  (taken: readonly string[], what: string, slashes = true) =>
+  (taken: readonly string[], what: string, slashes = true, most = 80) =>
   (value: string): FieldCheck | null => {
     const name = value.trim();
     if (!name) return { state: 'error', message: `Give the ${what} a name.` };
-    if (name.length > 80) return { state: 'error', message: 'Keep it to 80 characters.' };
+    if (name.length > most) return { state: 'error', message: `Keep it to ${most} characters.` };
     if (!slashes && /[/\\]/.test(name)) return { state: 'error', message: 'A folder’s name can’t have a slash in it.' };
     if (taken.some((t) => t.toLocaleLowerCase() === name.toLocaleLowerCase())) return { state: 'error', message: `There’s already a ${what} called ${name} here.` };
     return null;
@@ -72,6 +157,14 @@ export class FolioApp extends LitElement {
     uploading: { state: true },
     note: { state: true },
     doc: { state: true },
+    filters: { state: true },
+    sort: { state: true },
+    total: { state: true },
+    view: { state: true },
+    uploadTags: { state: true },
+    orgTags: { state: true },
+    tagTarget: { state: true },
+    more: { state: true },
   };
 
   declare api: FolioApi;
@@ -97,6 +190,21 @@ export class FolioApp extends LitElement {
   declare note: string;
   /** The document open in its dialog, with its versions. */
   declare doc: OpenDocument | undefined;
+  /** What the filter bar has on, by filter: tag, type, author, since. */
+  declare filters: FilterValue;
+  declare sort: DocumentSort;
+  /** How many documents match, of which `documents` holds the first pages. */
+  declare total: number;
+  /** The saved view open, if one is. */
+  declare view: string | undefined;
+  /** Tags for the next files dropped. */
+  declare uploadTags: string[];
+  /** The org's tags and whether the person keeps them, once the tags dialog has asked. */
+  declare orgTags: { tags: Tag[]; manage: boolean } | undefined;
+  /** The tag a tag dialog is about. */
+  declare tagTarget: Tag | undefined;
+  /** The next page is on its way. */
+  declare more: boolean;
 
   constructor() {
     super();
@@ -111,6 +219,11 @@ export class FolioApp extends LitElement {
     this.documents = [];
     this.uploading = 0;
     this.note = '';
+    this.filters = {};
+    this.sort = 'title';
+    this.total = 0;
+    this.uploadTags = [];
+    this.more = false;
   }
 
   override createRenderRoot() {
@@ -130,7 +243,7 @@ export class FolioApp extends LitElement {
       this.canCreate = can.create;
       const start = this.open?.id ?? this.place.library ?? libraries[0]?.id;
       if (this.place.adding && can.create) this.dialog = 'new-library';
-      if (start && libraries.some((l) => l.id === start)) await this.openLibrary(start, this.open ? this.folder : this.place.folder, false);
+      if (start && libraries.some((l) => l.id === start)) await this.openLibrary(start, this.open ? this.folder : this.place.folder, false, this.open ? this.view : this.place.view);
       else this.open = undefined;
     } catch (err) {
       this.error = (err as Error).message;
@@ -139,12 +252,21 @@ export class FolioApp extends LitElement {
     }
   }
 
-  private async openLibrary(id: string, folder?: string, tell = true) {
+  private async openLibrary(id: string, folder?: string, tell = true, view?: string) {
     this.opening = true;
     try {
+      const switching = this.open?.id !== id;
       this.open = await this.api.library(id);
       this.folder = folder && this.open.folders.some((f) => f.id === folder) ? folder : undefined;
-      this.documents = (await this.api.documents(id, this.folder)).documents;
+      if (switching) {
+        this.filters = {};
+        this.sort = 'title';
+        this.uploadTags = [];
+      }
+      this.view = undefined;
+      const saved = view ? this.open.views.find((v) => v.id === view) : undefined;
+      if (saved) this.applyView(saved);
+      await this.loadDocuments();
       if (tell) this.tell();
     } catch (err) {
       this.error = (err as Error).message;
@@ -155,22 +277,62 @@ export class FolioApp extends LitElement {
 
   private async goToFolder(folder: string | undefined) {
     this.folder = folder;
+    this.view = undefined;
     this.note = '';
     this.tell();
     await this.loadDocuments();
   }
 
-  private async loadDocuments() {
+  /** Puts a saved view's folder, filters and sort in place, dropping any tag that's gone. */
+  private applyView(view: SavedView) {
+    const open = this.open!;
+    this.view = view.id;
+    this.folder = view.query.folder && open.folders.some((f) => f.id === view.query.folder) ? view.query.folder : undefined;
+    this.filters = filterValue(filtersFor(open), filtersFrom(view.query));
+    this.sort = view.query.sort ?? 'title';
+  }
+
+  private async openView(id: string) {
+    const view = this.open?.views.find((v) => v.id === id);
+    if (!view) return;
+    this.applyView(view);
+    this.note = '';
+    this.tell();
+    await this.loadDocuments();
+  }
+
+  private async refilter(e: CustomEvent<{ value: FilterValue; sort: DocumentSort }>) {
+    this.filters = e.detail.value;
+    this.sort = e.detail.sort;
+    await this.loadDocuments();
+  }
+
+  /** The documents where the person is, as the bar filters and sorts them; `more` adds the next page. */
+  private async loadDocuments(more = false) {
     const open = this.open;
     if (!open) return;
-    const folder = this.folder;
+    const { folder, filters, sort } = this;
+    const offset = more ? this.documents.length : 0;
+    this.more = more;
     try {
-      const { documents } = await this.api.documents(open.id, folder);
+      const page = await this.api.documents(open.id, { ...queryFrom(filters, sort, folder), below: filtering(filters), limit: PAGE, offset });
       // Only if the person is still where they were when asked.
-      if (this.open?.id === open.id && this.folder === folder) this.documents = documents;
+      if (this.open?.id !== open.id || this.folder !== folder || this.filters !== filters || this.sort !== sort) return;
+      this.documents = more ? [...this.documents, ...page.documents] : page.documents;
+      this.total = page.total;
     } catch (err) {
       this.note = (err as Error).message;
+    } finally {
+      this.more = false;
     }
+  }
+
+  /** The library again, for its tags, authors and views after a change. */
+  private async refreshLibrary() {
+    const open = this.open;
+    if (!open) return;
+    const fresh = await this.api.library(open.id);
+    if (this.open?.id === open.id) this.open = fresh;
   }
 
   /** Uploads the files one after another into where the person is, and says how it went. */
@@ -184,7 +346,7 @@ export class FolioApp extends LitElement {
     let added = 0;
     for (const file of files) {
       try {
-        await this.api.upload(open.id, file, folder);
+        await this.api.upload(open.id, file, folder, this.uploadTags);
         added++;
       } catch (err) {
         failed.push(`${file.name}: ${(err as Error).message}`);
@@ -192,6 +354,8 @@ export class FolioApp extends LitElement {
       this.uploading--;
     }
     this.note = [added ? `Added ${added} ${added === 1 ? 'document' : 'documents'}.` : '', ...failed.map((f) => `Couldn’t add ${f}`)].filter(Boolean).join(' ');
+    // Someone new may have added something: the author filter should know them.
+    if (added) await this.refreshLibrary().catch(() => undefined);
     await this.loadDocuments();
   }
 
@@ -252,6 +416,127 @@ export class FolioApp extends LitElement {
     this.documents = this.documents.filter((d) => d.id !== doc.id);
   };
 
+  /** A new tag for the open library, from a picker's "Add …", or a word typed in the tags dialog. */
+  private async addTag(name: string): Promise<Tag | undefined> {
+    const open = this.open;
+    if (!open) return undefined;
+    try {
+      const tag = await this.api.createTag(open.id, name);
+      this.open = { ...open, tags: [...open.tags, tag].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })) };
+      return tag;
+    } catch (err) {
+      this.note = (err as Error).message;
+      return undefined;
+    }
+  }
+
+  private async retag(tags: string[]) {
+    const doc = this.doc;
+    if (!doc) return;
+    try {
+      const tagged = await this.api.setTags(doc.library, doc.id, tags);
+      this.doc = { ...doc, tags: tagged.tags };
+      this.documents = this.documents.map((d) => (d.id === doc.id ? { ...d, tags: tagged.tags } : d));
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  private async openTags() {
+    this.dialog = 'tags';
+    try {
+      const { tags, can } = await this.api.orgTags();
+      this.orgTags = { tags, manage: can.manage };
+    } catch {
+      this.orgTags = undefined;
+    }
+  }
+
+  /** Adds the word in one of the tags dialog's fields: for the library, or with `org` for the org. */
+  private async addTagFrom(field: string, org = false) {
+    const input = this.querySelector<UiTextField>(`ui-text-field[name="${field}"]`);
+    const name = input?.value.trim();
+    if (!input || !name) return;
+    try {
+      if (org) {
+        await this.api.createTag(undefined, name);
+        await this.openTags();
+      } else if (!(await this.addTag(name))) {
+        input.setState('error', this.note);
+        this.note = '';
+        return;
+      }
+      await this.refreshLibrary();
+      input.value = '';
+      input.setState('idle');
+    } catch (err) {
+      input.setState('error', (err as Error).message);
+    }
+  }
+
+  private submitRenameTag: DialogSubmit = async (values) => {
+    await this.api.renameTag(this.tagTarget!, values.name.trim());
+    await this.refreshLibrary();
+    if (!this.tagTarget!.library) await this.openTags();
+  };
+
+  private submitRemoveTag: DialogSubmit = async () => {
+    const tag = this.tagTarget!;
+    await this.api.deleteTag(tag);
+    this.filters = filterValue(filtersFor({ tags: this.open!.tags.filter((t) => t.id !== tag.id), authors: this.open!.authors }), this.filters);
+    this.uploadTags = this.uploadTags.filter((t) => t !== tag.id);
+    await this.refreshLibrary();
+    if (!tag.library) await this.openTags();
+    await this.loadDocuments();
+  };
+
+  private onTagAction(e: CustomEvent<{ item: ListItem; action: { id: string } }>) {
+    this.tagTarget = [...(this.open?.tags ?? []), ...(this.orgTags?.tags ?? [])].find((t) => t.id === e.detail.item.id);
+    this.dialog = e.detail.action.id === 'rename' ? 'rename-tag' : 'remove-tag';
+  }
+
+  /** May the person rename or delete this view: whoever saved it, or a lead. */
+  private mayChangeView(view: SavedView) {
+    return Boolean(this.open?.can.manage || view.createdBy === this.userId);
+  }
+
+  private get currentView() {
+    return this.open?.views.find((v) => v.id === this.view);
+  }
+
+  private submitSaveView: DialogSubmit = async (values) => {
+    const open = this.open!;
+    const view = await this.api.createView(open.id, values.name.trim(), queryFrom(this.filters, this.sort, this.folder));
+    await this.refreshLibrary();
+    this.view = view.id;
+    this.tell();
+  };
+
+  private async saveViewChanges() {
+    const open = this.open;
+    const view = this.currentView;
+    if (!open || !view) return;
+    try {
+      await this.api.updateView(open.id, view.id, { query: queryFrom(this.filters, this.sort, this.folder) });
+      await this.refreshLibrary();
+      this.note = `Saved the changes to ${view.name}.`;
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  private submitRenameView: DialogSubmit = async (values) => {
+    await this.api.updateView(this.open!.id, this.view!, { name: values.name.trim() });
+    await this.refreshLibrary();
+  };
+
+  private submitDeleteView: DialogSubmit = async () => {
+    await this.api.deleteView(this.open!.id, this.view!);
+    this.view = undefined;
+    this.tell();
+    await this.refreshLibrary();
+  };
+
   /** Every folder in the open library, by where it is, for moving a document. */
   private folderOptions(): SelectOption[] {
     const open = this.open;
@@ -265,7 +550,8 @@ export class FolioApp extends LitElement {
   }
 
   private tell() {
-    this.dispatchEvent(new CustomEvent('folio-place', { detail: { library: this.open?.id, folder: this.folder }, bubbles: true }));
+    const detail = this.view ? { library: this.open?.id, view: this.view } : { library: this.open?.id, folder: this.folder };
+    this.dispatchEvent(new CustomEvent('folio-place', { detail, bubbles: true }));
   }
 
   /** May the person rename or remove this folder: whoever made it, or a lead. */
@@ -294,6 +580,7 @@ export class FolioApp extends LitElement {
     this.libraries = this.libraries.filter((l) => l.id !== this.open!.id);
     this.open = undefined;
     this.folder = undefined;
+    this.view = undefined;
     if (this.libraries[0]) await this.openLibrary(this.libraries[0].id);
     else this.tell();
   };
@@ -342,8 +629,17 @@ export class FolioApp extends LitElement {
             label=${`Folders in ${open.name}`}
             heading="Folders"
             .items=${folderTree(open.folders)}
-            selected=${this.folder ?? ''}
+            selected=${this.view ? '' : (this.folder ?? '')}
             @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => this.goToFolder(e.detail.item.id)}
+          ></ui-tree>`
+        : nothing}
+      ${open && open.views.length
+        ? html`<ui-tree
+            label=${`Views saved in ${open.name}`}
+            heading="Views"
+            .items=${open.views.map((v): TreeItem => ({ id: v.id, label: v.name, icon: 'view' }))}
+            selected=${this.view ?? ''}
+            @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openView(e.detail.item.id)}
           ></ui-tree>`
         : nothing}
     </nav>`;
@@ -361,7 +657,10 @@ export class FolioApp extends LitElement {
         : html`<ui-state kind="empty" heading="No libraries here yet" body="A lead on this floor can start one."></ui-state>`;
     const trail = folderTrail(open.folders, this.folder);
     const here = trail.at(-1);
-    const folders = open.folders.filter((f) => f.parent === this.folder);
+    const view = this.currentView;
+    const narrowed = filtering(this.filters);
+    // Filtering looks in every folder below, so folders themselves leave the list.
+    const folders = narrowed ? [] : open.folders.filter((f) => f.parent === this.folder);
     const both = folders.length > 0 && this.documents.length > 0;
     const inside: ListItem[] = [
       ...folders.map((f) => ({
@@ -376,14 +675,16 @@ export class FolioApp extends LitElement {
         id: `${DOC}${d.id}`,
         title: d.title,
         icon: 'document',
-        detail: documentLine(d),
+        detail: this.rowDetail(d, narrowed),
         meta: ago(d.updatedAt),
         ...(both ? { group: 'Documents' } : {}),
       })),
     ];
     const where = here?.name ?? open.name;
+    const changedView = view && !sameQuery(view.query, queryFrom(this.filters, this.sort, this.folder));
+    const tagOpts = tagOptions(open.tags);
     return html`<div class="folio-main-inner" aria-busy=${this.opening ? 'true' : 'false'}>
-      ${here
+      ${here && !view
         ? html`<ol class="folio-trail" aria-label="Where you are">
             <li><button class="folio-crumb" @click=${() => this.goToFolder(undefined)}>${open.name}</button></li>
             ${trail.map(
@@ -392,22 +693,45 @@ export class FolioApp extends LitElement {
           </ol>`
         : nothing}
       <div class="folio-head">
-        <ui-heading eyebrow=${here ? (trail.at(-2)?.name ?? open.name) : this.shelfName} heading=${here?.name ?? open.name} summary=${here ? '' : open.description}></ui-heading>
+        ${view
+          ? html`<ui-heading eyebrow=${`A view in ${open.name}`} heading=${view.name} summary=${here ? `In ${trail.map((f) => f.name).join(' / ')}` : ''}></ui-heading>`
+          : html`<ui-heading eyebrow=${here ? (trail.at(-2)?.name ?? open.name) : this.shelfName} heading=${here?.name ?? open.name} summary=${here ? '' : open.description}></ui-heading>`}
         <div class="folio-actions">
-          ${open.can.addFolders ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
-          ${open.can.manage && !here
-            ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'edit-library')}>Rename</ui-button>
-                <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'archive-library')}>Archive</ui-button>`
-            : nothing}
+          ${view && this.mayChangeView(view)
+            ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'rename-view')}>Rename view</ui-button>
+                <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-view')}>Delete view</ui-button>`
+            : html`${open.can.addFolders && !view ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
+                <ui-button kind="ghost" size="sm" @click=${() => void this.openTags()}>Tags</ui-button>
+                ${open.can.manage && !here
+                  ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'edit-library')}>Rename</ui-button>
+                      <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'archive-library')}>Archive</ui-button>`
+                  : nothing}`}
         </div>
       </div>
+      <ui-filter-bar
+        label=${`Filter what’s in ${where}`}
+        .filters=${filtersFor(open)}
+        .value=${this.filters}
+        .sorts=${SORTS}
+        sort=${this.sort}
+        .count=${this.total}
+        .noun=${['document', 'documents']}
+        @ui-change=${this.refilter}
+      >
+        ${changedView && this.mayChangeView(view)
+          ? html`<ui-button slot="actions" kind="secondary" size="sm" @click=${() => void this.saveViewChanges()}>Save changes</ui-button>`
+          : nothing}
+        ${(narrowed || this.sort !== 'title') && (!view || changedView)
+          ? html`<ui-button slot="actions" kind="ghost" size="sm" @click=${() => (this.dialog = 'save-view')}>${view ? 'Save as new view' : 'Save view'}</ui-button>`
+          : nothing}
+      </ui-filter-bar>
       <ui-surface>
         <ui-list
-          label=${`In ${where}`}
+          label=${narrowed ? `Matching in ${where}` : `In ${where}`}
           density="compact"
           .noun=${folders.length && !this.documents.length ? ['folder', 'folders'] : this.documents.length && !folders.length ? ['document', 'documents'] : ['item', 'items']}
           .items=${inside}
-          empty=${here ? 'This folder is empty.' : 'This library is empty.'}
+          empty=${narrowed ? `Nothing in ${where} matches these filters.` : here ? 'This folder is empty.' : 'This library is empty.'}
           @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
             const id = e.detail.item.id;
             void (id.startsWith(DOC) ? this.openDocument(id.slice(DOC.length)) : this.goToFolder(id));
@@ -415,20 +739,48 @@ export class FolioApp extends LitElement {
           @ui-action=${this.onFolderAction}
         ></ui-list>
       </ui-surface>
-      ${open.can.addDocuments
-        ? html`<ui-drop-zone
-            heading=${`Drop files to add them to ${where}`}
-            hint=${`PDF, Word, HTML, Markdown or text, up to ${MAX_UPLOAD_MB} MB each`}
-            action="Choose files"
-            accept=${ACCEPT}
-            multiple
-            ?busy=${this.uploading > 0}
-            @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.upload(e.detail.files)}
-            @ui-reject=${(e: CustomEvent<{ files: File[] }>) => this.rejected(e.detail.files)}
-          ></ui-drop-zone>`
+      ${this.documents.length < this.total
+        ? html`<div class="folio-more"><ui-button kind="ghost" size="sm" ?busy=${this.more} busy-label="Loading…" @click=${() => void this.loadDocuments(true)}>
+            Show ${Math.min(PAGE, this.total - this.documents.length)} more of ${this.total}
+          </ui-button></div>`
+        : nothing}
+      ${open.can.addDocuments && !view
+        ? html`<div class="folio-add">
+            <ui-tag-picker
+              label="Tags for what you add"
+              optional
+              placeholder="None"
+              .options=${tagOpts}
+              .values=${this.uploadTags}
+              ?creatable=${open.can.addTags}
+              @ui-change=${(e: CustomEvent<{ values: string[] }>) => (this.uploadTags = e.detail.values)}
+              @ui-create=${async (e: CustomEvent<{ name: string }>) => {
+                const tag = await this.addTag(e.detail.name);
+                if (tag) this.uploadTags = [...this.uploadTags, tag.id];
+              }}
+            ></ui-tag-picker>
+            <ui-drop-zone
+              heading=${`Drop files to add them to ${where}`}
+              hint=${`PDF, Word, HTML, Markdown or text, up to ${MAX_UPLOAD_MB} MB each`}
+              action="Choose files"
+              accept=${ACCEPT}
+              multiple
+              ?busy=${this.uploading > 0}
+              @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.upload(e.detail.files)}
+              @ui-reject=${(e: CustomEvent<{ files: File[] }>) => this.rejected(e.detail.files)}
+            ></ui-drop-zone>
+          </div>`
         : nothing}
       <p class="folio-note" role="status">${this.uploading ? `Adding ${this.uploading} ${this.uploading === 1 ? 'file' : 'files'}…` : this.note}</p>
     </div>`;
+  }
+
+  /** "Version 3 · PDF · 1.2 MB · Policy, Travel", with the folder first when the list spans several. */
+  private rowDetail(d: FolioDocument, spanning: boolean) {
+    const open = this.open!;
+    const names = d.tags.map((t) => open.tags.find((x) => x.id === t)?.name).filter(Boolean);
+    const folder = spanning ? folderTrail(open.folders, d.folder).map((f) => f.name).join(' / ') : '';
+    return [folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
   }
 
   private dialogs() {
@@ -494,6 +846,19 @@ export class FolioApp extends LitElement {
             close();
             this.doc = undefined;
           }}>
+          ${doc.can.change
+            ? html`<ui-tag-picker label="Tags" placeholder="Add a tag" .options=${tagOptions(open?.tags ?? [])} .values=${doc.tags} ?creatable=${Boolean(open?.can.addTags)}
+                @ui-change=${(e: CustomEvent<{ values: string[] }>) => void this.retag(e.detail.values)}
+                @ui-create=${async (e: CustomEvent<{ name: string }>) => {
+                  const tag = await this.addTag(e.detail.name);
+                  if (tag) await this.retag([...doc.tags, tag.id]);
+                }}></ui-tag-picker>`
+            : doc.tags.length
+              ? html`<div class="folio-tags" aria-label="Tags">${doc.tags.map((t) => {
+                  const tag = open?.tags.find((x) => x.id === t);
+                  return tag ? html`<ui-tag quiet label=${tag.name} icon=${tag.library ? '' : 'org'}></ui-tag>` : nothing;
+                })}</div>`
+              : nothing}
           <ui-list label="Versions" density="compact" .noun=${['version', 'versions']} .items=${versions}
             @ui-action=${(e: CustomEvent<{ item: ListItem }>) => void this.download(Number(e.detail.item.id))}></ui-list>
           ${doc.can.change
@@ -529,6 +894,93 @@ export class FolioApp extends LitElement {
               <p>It leaves this library, with all ${this.doc.versions.length} ${this.doc.versions.length === 1 ? 'version' : 'versions'}. The record of it stays in the audit log.</p>
             </ui-dialog>`
           : nothing;
+      case 'tags': {
+        if (!open) return nothing;
+        const own = open.tags.filter((t) => t.library);
+        const org = this.orgTags?.tags ?? open.tags.filter((t) => !t.library);
+        const tagRows = (tags: Tag[], editable: boolean): ListItem[] =>
+          tags.map((t) => ({ id: t.id, title: t.name, icon: t.library ? 'tag' : 'org', ...(editable ? { actions: [{ id: 'rename', label: 'Rename' }, { id: 'remove', label: 'Remove' }] } : {}) }));
+        return html`<ui-dialog open size="read" light eyebrow=${open.name} heading="Tags"
+          summary="Documents are found by their tags. The org’s tags are shared by every library; this library’s are its own."
+          cancel-label="Done" @ui-close=${close}>
+          <ui-list label=${`${open.name}’s tags`} density="compact" .noun=${['tag', 'tags']} .items=${tagRows(own, open.can.manage)}
+            empty="This library has no tags of its own yet." @ui-action=${this.onTagAction}></ui-list>
+          ${open.can.addTags
+            ? html`<div class="folio-add-tag">
+                <ui-text-field name="new-tag" label="New tag" maxlength="40" .validate=${nameCheck(open.tags.map((t) => t.name), 'tag', true, 40)}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    void this.addTagFrom('new-tag');
+                  }}></ui-text-field>
+                <ui-button kind="secondary" size="sm" @click=${() => void this.addTagFrom('new-tag')}>Add</ui-button>
+              </div>`
+            : nothing}
+          ${open.can.manage
+            ? html`<ui-toggle label="Anyone here can add tags" hint="Otherwise only the floor’s leads add them; everyone can still tag with the ones there are."
+                ?checked=${open.freeTags}
+                .change=${async (on: boolean) => {
+                  await this.api.updateLibrary(open.id, { freeTags: on });
+                  await this.refreshLibrary();
+                }}></ui-toggle>`
+            : nothing}
+          <ui-list label="The org’s tags" density="compact" .noun=${['org tag', 'org tags']} .items=${tagRows(org, Boolean(this.orgTags?.manage))}
+            empty=${this.orgTags?.manage ? 'The org has no tags yet.' : 'The org has no tags yet. Its leads add them, on the org’s floor.'} @ui-action=${this.onTagAction}></ui-list>
+          ${this.orgTags?.manage
+            ? html`<div class="folio-add-tag">
+                <ui-text-field name="new-org-tag" label="New org tag" maxlength="40" .validate=${nameCheck(org.map((t) => t.name), 'tag', true, 40)}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    void this.addTagFrom('new-org-tag', true);
+                  }}></ui-text-field>
+                <ui-button kind="secondary" size="sm" @click=${() => void this.addTagFrom('new-org-tag', true)}>Add</ui-button>
+              </div>`
+            : nothing}
+        </ui-dialog>`;
+      }
+      case 'rename-tag': {
+        const tag = this.tagTarget;
+        if (!tag) return nothing;
+        const same = (tag.library ? open?.tags.filter((t) => t.library === tag.library || !t.library) : this.orgTags?.tags) ?? [];
+        return html`<ui-dialog open eyebrow=${tag.library ? 'Tag' : 'Org tag'} heading=${`Rename ${tag.name}`} action-label="Save" busy-label="Saving…"
+          summary=${tag.library ? 'Every document with it keeps it.' : 'Every document with it keeps it, in every library.'}
+          .submit=${this.submitRenameTag} @ui-close=${() => (this.dialog = 'tags')}>
+          <ui-text-field slot="fields" name="name" label="Name" required maxlength="40" .value=${tag.name}
+            .validate=${nameCheck(same.filter((t) => t.id !== tag.id && (!tag.library || t.library)).map((t) => t.name), 'tag', true, 40)}></ui-text-field>
+        </ui-dialog>`;
+      }
+      case 'remove-tag':
+        return this.tagTarget
+          ? html`<ui-dialog open danger eyebrow=${this.tagTarget.library ? 'Tag' : 'Org tag'} heading=${`Remove ${this.tagTarget.name}?`} action-label="Remove" busy-label="Removing…"
+              .submit=${this.submitRemoveTag} @ui-close=${() => (this.dialog = 'tags')}>
+              <p>It comes off every document that has it${this.tagTarget.library ? '' : ', in every library'}. The documents stay.</p>
+            </ui-dialog>`
+          : nothing;
+      case 'save-view':
+        return open
+          ? html`<ui-dialog open eyebrow=${open.name} heading="Save this view" summary="It goes in the side rail, for everyone who can see this library."
+              action-label="Save" busy-label="Saving…" .submit=${this.submitSaveView} @ui-close=${close}>
+              <ui-text-field slot="fields" name="name" label="Name" required maxlength="60" .validate=${nameCheck(open.views.map((v) => v.name), 'view', true, 60)}></ui-text-field>
+            </ui-dialog>`
+          : nothing;
+      case 'rename-view': {
+        const view = this.currentView;
+        return view && open
+          ? html`<ui-dialog open eyebrow="View" heading=${`Rename ${view.name}`} action-label="Save" busy-label="Saving…" .submit=${this.submitRenameView} @ui-close=${close}>
+              <ui-text-field slot="fields" name="name" label="Name" required maxlength="60" .value=${view.name}
+                .validate=${nameCheck(open.views.filter((v) => v.id !== view.id).map((v) => v.name), 'view', true, 60)}></ui-text-field>
+            </ui-dialog>`
+          : nothing;
+      }
+      case 'delete-view': {
+        const view = this.currentView;
+        return view
+          ? html`<ui-dialog open danger eyebrow="View" heading=${`Delete ${view.name}?`} action-label="Delete" busy-label="Deleting…" .submit=${this.submitDeleteView} @ui-close=${close}>
+              <p>It leaves the side rail for everyone. No documents are touched.</p>
+            </ui-dialog>`
+          : nothing;
+      }
       default:
         return nothing;
     }
@@ -552,6 +1004,11 @@ export class FolioApp extends LitElement {
         folio-app .folio-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
         folio-app .folio-actions { display: flex; gap: var(--space-2); }
         folio-app .folio-note { margin: 0; min-height: 1.5em; font-size: var(--type-small); color: var(--ink-muted); }
+        folio-app .folio-more { display: flex; justify-content: center; }
+        folio-app .folio-add { display: flex; flex-direction: column; gap: var(--space-3); }
+        folio-app .folio-add-tag { display: flex; align-items: flex-end; gap: var(--space-3); }
+        folio-app .folio-add-tag ui-text-field { flex: 1; }
+        folio-app .folio-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
       </style>
       ${this.rail()}
       <main class="folio-main">${this.main()}</main>

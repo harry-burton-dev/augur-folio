@@ -25,8 +25,19 @@ A library belongs to the floor it was made on, and is seen only there.
 | Upload a document | yes | yes |
 | Add a version, retitle, move or delete a document | the ones they added | any |
 | Download any version's original | yes | yes |
+| Tag a document | the ones they added | any |
+| Add a tag to the library | when it takes free tags | yes |
+| Rename or remove the library's tags, or let it take free tags | | yes |
+| Save a view | yes | yes |
+| Rename or delete a view | the ones they saved | any |
 
 On your own floor you are its lead. A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
+
+## Tags, filters and views
+
+Each library has its own tags, and the org has tags every library shares (such as Policy or Finance). The org's tags are kept by the leads on the org's floor. A library's tag can't take an org tag's name, and a new org tag takes in the libraries' tags of its name: their documents and saved views carry the org's tag from then on. Removing a tag takes it off every document and view that had it.
+
+The list can be narrowed by tags (all of those chosen), file type, who added it and when it last changed, and sorted by title, newest or most recently changed. Once a filter is on, the list looks in every folder below where you are. A set of filters can be saved as a view, which goes in the library's side rail for everyone there; "the past month" stays the past month, not the month it was saved.
 
 ## On the record
 
@@ -40,16 +51,23 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | --- | --- |
 | `GET /libraries` | The floor's libraries, and whether the caller can make one |
 | `POST /libraries` `{name, description?}` | A new library (leads) |
-| `GET /libraries/:id` | A library with its folders and what the caller may do there |
-| `PATCH /libraries/:id` `{name?, description?}` | Rename or describe it (leads) |
+| `GET /libraries/:id` | A library with its folders, tags (the org's and its own), authors, saved views, and what the caller may do there |
+| `PATCH /libraries/:id` `{name?, description?, freeTags?}` | Rename or describe it, or let anyone add tags (leads) |
 | `POST /libraries/:id/archive` | Take it off the floor's list (leads) |
 | `POST /libraries/:id/folders` `{name, parent?}` | A new folder, at the top or inside another, at most 6 deep |
 | `PATCH /libraries/:id/folders/:folder` `{name}` | Rename a folder |
 | `DELETE /libraries/:id/folders/:folder` | Remove an empty folder |
-| `GET /libraries/:id/documents?folder=` | The documents in a folder, or at the top without one |
-| `POST /libraries/:id/documents?filename=&title=&folder=` | Upload a document: the body is the file, its `Content-Type` its type |
+| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type` and `author` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `sort` is title, newest or updated |
+| `POST /libraries/:id/documents?filename=&title=&folder=&tag=` | Upload a document: the body is the file, its `Content-Type` its type; `tag` repeats |
+| `PUT /libraries/:id/documents/:doc/tags` `{tags}` | Give a document exactly these tags |
 | `GET /libraries/:id/documents/:doc` | A document with its versions, newest first |
 | `PATCH /libraries/:id/documents/:doc` `{title?, folder?}` | Retitle it, or move it (`folder: null` is the top) |
 | `DELETE /libraries/:id/documents/:doc` | Take it out of the library |
 | `POST /libraries/:id/documents/:doc/versions?filename=` | Its next version, sent as above |
 | `GET /libraries/:id/documents/:doc/versions/:n/original` | Version n's file as it was uploaded |
+| `GET /tags` | The org's tags, and whether the caller keeps them |
+| `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
+| `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |
+| `PATCH /libraries/:id/tags/:tag` `{name}`, `DELETE /libraries/:id/tags/:tag` | Rename or remove one of its tags (leads) |
+| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?}` |
+| `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |

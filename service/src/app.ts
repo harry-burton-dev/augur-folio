@@ -3,7 +3,8 @@ import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, signedCa
 import { auditFromEnv, type Audit } from './audit.ts';
 import { documentRoutes } from './documents.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
-import { BadParentError, MemoryFolioStore, NameTakenError, NotEmptyError, type FolioStore, type Library } from './store.ts';
+import { BadParentError, BadTagError, MemoryFolioStore, NameTakenError, NotEmptyError, type FolioStore, type Library } from './store.ts';
+import { tagRoutes } from './tags.ts';
 
 /** The major version of the API this service serves. Its routes go under /v1, as the platform's do. */
 export const API_VERSION = 'v1';
@@ -29,6 +30,8 @@ export interface LibraryRights {
   addFolders: boolean;
   /** Upload documents: anyone on the floor. */
   addDocuments: boolean;
+  /** Make new tags for the library: its leads, or anyone when it takes free tags. */
+  addTags: boolean;
 }
 
 export type OnFloor = Caller & { workspace: CallerWorkspace };
@@ -39,7 +42,10 @@ const DESCRIPTION = { type: 'string', maxLength: 500 } as const;
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] } as const;
 const FOLDER_PARAMS = { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, folder: { type: 'string', maxLength: 64 } }, required: ['id', 'folder'] } as const;
 
-export const rightsOn = (caller: OnFloor): LibraryRights => ({ manage: caller.workspace.role === 'lead', addFolders: true, addDocuments: true });
+export const rightsOn = (caller: OnFloor, library?: Pick<Library, 'freeTags'>): LibraryRights => {
+  const manage = caller.workspace.role === 'lead';
+  return { manage, addFolders: true, addDocuments: true, addTags: manage || Boolean(library?.freeTags) };
+};
 
 export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes }: Options = {}) => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
@@ -84,6 +90,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
   const refused = (err: unknown, reply: FastifyReply) => {
     if (err instanceof NameTakenError || err instanceof NotEmptyError) return reply.code(409).send({ error: err instanceof NameTakenError ? 'name-taken' : 'not-empty', message: err.message });
     if (err instanceof BadParentError) return reply.code(400).send({ error: 'bad-parent', message: err.message });
+    if (err instanceof BadTagError) return reply.code(400).send({ error: 'bad-tag', message: err.message });
     throw err;
   };
 
@@ -116,19 +123,25 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         if (!caller) return reply;
         const library = await libraryFor(caller, req.params.id, reply);
         if (!library) return reply;
-        return { ...library, folders: await store.folders(library.id), can: rightsOn(caller) };
+        const [folders, tags, authors, views] = await Promise.all([store.folders(library.id), store.tags(library.id), store.authors(library.id), store.views(library.id)]);
+        return { ...library, folders, tags, authors, views, can: rightsOn(caller, library) };
       });
 
-      app.patch<{ Params: { id: string }; Body: { name?: string; description?: string } }>(
+      app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; freeTags?: boolean } }>(
         '/libraries/:id',
-        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, minProperties: 1, properties: { name: NAME, description: DESCRIPTION } } } },
+        {
+          schema: {
+            params: ID_PARAMS,
+            body: { type: 'object', additionalProperties: false, minProperties: 1, properties: { name: NAME, description: DESCRIPTION, freeTags: { type: 'boolean' } } },
+          },
+        },
         async (req, reply) => {
           const caller = onFloor(req, reply);
           if (!caller) return reply;
           const library = await libraryFor(caller, req.params.id, reply);
           if (!library || !leadsOnly(caller, reply)) return reply;
           try {
-            return await store.updateLibrary(library.id, { name: req.body.name?.trim(), description: req.body.description?.trim() });
+            return await store.updateLibrary(library.id, { name: req.body.name?.trim(), description: req.body.description?.trim(), freeTags: req.body.freeTags });
           } catch (err) {
             return refused(err, reply);
           }
@@ -205,6 +218,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
       });
 
       await documentRoutes(app, { store, objects, audit: record, onFloor, libraryFor, refused, log: app.log, maxUploadBytes });
+      await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
     },
     { prefix: `/${API_VERSION}` },
   );
