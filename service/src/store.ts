@@ -93,6 +93,24 @@ export type RenditionResult =
 /** A version's renditions, under its own prefix in the bucket. */
 export const renditionPrefix = (version: string) => `renditions/${version}/`;
 
+/** Every file a version left in the bucket: the original, and its reader copy, thumbnail and pictures. */
+const keysOfVersion = (v: { id: string; objectKey: string; readerKey?: string | null; thumbnailKey?: string | null; images?: string[] | null }) => [
+  v.objectKey,
+  ...(v.readerKey ? [v.readerKey] : []),
+  ...(v.thumbnailKey ? [v.thumbnailKey] : []),
+  ...(v.images ?? []).map((name) => `${renditionPrefix(v.id)}images/${name}`),
+];
+
+/** A deleted document past its retention period, with every file of it still in the bucket. */
+export interface PurgeableDocument {
+  id: string;
+  workspace: string;
+  library: string;
+  title: string;
+  deletedAt: string;
+  keys: string[];
+}
+
 /** A version as the store keeps it: with where its file is in the bucket. */
 export interface StoredVersion extends DocumentVersion {
   objectKey: string;
@@ -395,6 +413,13 @@ export interface FolioStore {
   updateDocument(id: string, change: { title?: string; folder?: string | null }): Promise<FolioDocument | undefined>;
   /** Takes a document out of its library, keeping its files and versions. */
   deleteDocument(id: string, by: string): Promise<boolean>;
+  /** Deleted documents, oldest deletion first, deleted before `before` and not yet cleared away. */
+  purgeable(before: string, limit: number): Promise<PurgeableDocument[]>;
+  /**
+   * Records that a deleted document's files are gone, and forgets its text. Its record stays, for
+   * the audit log to name. False when it was already cleared (another instance got there first).
+   */
+  markPurged(id: string): Promise<boolean>;
   /** Gives a document exactly these tags. Each must be the org's or its library's. */
   setDocumentTags(id: string, tags: string[]): Promise<FolioDocument | undefined>;
   /** The tags a library's documents can have: the org's and its own, by name. */
@@ -582,7 +607,7 @@ const pageOf = (query: DocumentQuery) => ({ limit: Math.min(query.limit ?? MAX_P
 export class MemoryFolioStore implements FolioStore {
   private readonly shelves = new Map<string, Library & { archivedAt?: string }>();
   private readonly folderList: Folder[] = [];
-  private readonly docs = new Map<string, Omit<FolioDocument, 'latest' | 'tags' | 'state' | 'published'> & { deletedAt?: string }>();
+  private readonly docs = new Map<string, Omit<FolioDocument, 'latest' | 'tags' | 'state' | 'published'> & { deletedAt?: string; purgedAt?: string }>();
   private readonly versionList: Omit<StoredVersion, 'reader'>[] = [];
   private readonly renditions = new Map<string, Rendition>();
   private readonly tagList: Tag[] = [];
@@ -793,6 +818,32 @@ export class MemoryFolioStore implements FolioStore {
     }
     doc.updatedAt = new Date().toISOString();
     return this.withLatest(doc);
+  }
+
+  async purgeable(before: string, limit: number) {
+    return [...this.docs.values()]
+      .filter((d) => d.deletedAt && !d.purgedAt && d.deletedAt < before)
+      .sort((a, b) => a.deletedAt!.localeCompare(b.deletedAt!))
+      .slice(0, limit)
+      .map((d) => ({
+        id: d.id,
+        workspace: d.workspace,
+        library: d.library,
+        title: d.title,
+        deletedAt: d.deletedAt!,
+        keys: this.versionList.filter((v) => v.document === d.id).flatMap((v) => keysOfVersion({ ...v, ...this.renditions.get(v.id) })),
+      }));
+  }
+
+  async markPurged(id: string) {
+    const doc = this.docs.get(id);
+    if (!doc?.deletedAt || doc.purgedAt) return false;
+    doc.purgedAt = new Date().toISOString();
+    for (const v of this.versionList.filter((v) => v.document === id)) {
+      const r = this.renditions.get(v.id);
+      if (r) delete r.text;
+    }
+    return true;
   }
 
   async deleteDocument(id: string) {
@@ -1419,6 +1470,13 @@ export const migrations: { id: string; sql: string }[] = [
         published_at timestamptz not null
       );`,
   },
+  {
+    id: '009_retention',
+    sql: `
+      -- When a deleted document's files were cleared from the bucket and its text forgotten, past the retention period.
+      alter table folio.documents add column purged_at timestamptz;
+      create index documents_purgeable on folio.documents (deleted_at) where deleted_at is not null and purged_at is null;`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; created_by: string; created_at: Date; updated_at: Date };
@@ -1960,6 +2018,39 @@ export class PgFolioStore implements FolioStore {
       return undefined;
     }
     return this.document(id);
+  }
+
+  async purgeable(before: string, limit: number) {
+    const { rows } = await this.pool.query<{
+      id: string;
+      workspace_id: string;
+      library_id: string;
+      title: string;
+      deleted_at: Date;
+      versions: { id: string; objectKey: string; readerKey: string | null; thumbnailKey: string | null; images: string[] | null }[];
+    }>(
+      `select d.id, d.workspace_id, d.library_id, d.title, d.deleted_at,
+              coalesce(json_agg(json_build_object('id', v.id, 'objectKey', v.object_key, 'readerKey', r.reader_key, 'thumbnailKey', r.thumbnail_key, 'images', r.images))
+                filter (where v.id is not null), '[]') as versions
+         from folio.documents d
+         left join folio.document_versions v on v.document_id = d.id
+         left join folio.renditions r on r.version_id = v.id
+        where d.deleted_at < $1 and d.purged_at is null
+        group by d.id
+        order by d.deleted_at
+        limit $2`,
+      [before, limit],
+    );
+    return rows.map((r) => ({ id: r.id, workspace: r.workspace_id, library: r.library_id, title: r.title, deletedAt: r.deleted_at.toISOString(), keys: r.versions.flatMap(keysOfVersion) }));
+  }
+
+  async markPurged(id: string) {
+    return this.inTransaction(async (client) => {
+      const { rowCount } = await client.query('update folio.documents set purged_at = now() where id = $1 and deleted_at is not null and purged_at is null', [id]);
+      if (!rowCount) return false;
+      await client.query('update folio.renditions set text = null where version_id in (select id from folio.document_versions where document_id = $1)', [id]);
+      return true;
+    });
   }
 
   async deleteDocument(id: string, by: string) {
