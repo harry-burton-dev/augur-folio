@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { appCredentialsFromEnv, appStorageFromEnv, outboxRelay, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
+import { notifyFromEnv } from './notices.ts';
+import { remindLate } from './series.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
@@ -14,8 +16,14 @@ const store = databaseUrl ? await PgFolioStore.connect(databaseUrl) : new Memory
 const objects = bucket ? new S3ObjectStore(bucket) : new MemoryObjectStore();
 // With Postgres the rendition worker (apps/folio/worker) makes reader copies; without it, a stand-in does.
 if (store instanceof MemoryFolioStore) store.onQueued = devRenderer(store, objects);
-const app = await buildApp({ store, objects });
+const notify = notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
+const app = await buildApp({ store, objects, notify });
 await app.listen({ port, host: '0.0.0.0' });
+
+// Remind each series' owner when an issue is late. Every instance checks; the store lets one tell them.
+const remind = () => remindLate({ store, notify, log: app.log }).catch((err: Error) => app.log.error({ err: err.message }, 'could not check for late issues'));
+setInterval(remind, 15 * 60 * 1000).unref();
+void remind();
 
 // Put Folio in the platform's catalogue, so the shell can offer it.
 // It signs in as itself with SERVICE_CLIENT_SECRET (issued for it by an admin in Admin, Apps).

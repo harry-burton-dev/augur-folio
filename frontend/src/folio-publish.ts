@@ -1,6 +1,8 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, type ListItem, type SelectOption } from '@augur/ui-kit';
-import type { FolioApi, Found, Principal, Publication, Publications } from './api.js';
+import type { FolioApi, Principal, Publication, Publications } from './api.js';
+import './folio-audience.js';
+import type { Chosen } from './folio-audience.js';
 import { whoWords } from './folio-share.js';
 
 /** When, in a sentence: "just now", "4 min ago". */
@@ -18,12 +20,6 @@ export const audienceWords = (audience: readonly Principal[]) => {
 /** How a publication ended, or that it's out. */
 const endWords = (p: Publication<Principal>) =>
   !p.ended ? 'Out now' : p.ended.as === 'withdrawn' ? `Withdrawn ${agoWords(p.ended.at)}${p.ended.reason ? `: ${p.ended.reason}` : ''}` : `Replaced ${agoWords(p.ended.at)}`;
-
-/** A principal as the audience list shows it before it's saved: named from what the person picked. */
-interface Chosen {
-  principal: string;
-  name: string;
-}
 
 /**
  * Publishing a document: what's out now and to whom, putting a version out
@@ -43,9 +39,6 @@ export class FolioPublish extends LitElement {
     failure: { state: true },
     version: { state: true },
     chosen: { state: true },
-    query: { state: true },
-    found: { state: true },
-    below: { state: true },
     withdrawing: { state: true },
     busy: { state: true },
     note: { state: true },
@@ -63,17 +56,10 @@ export class FolioPublish extends LitElement {
   /** The version to publish. */
   declare version: number;
   declare chosen: Chosen[];
-  declare query: string;
-  declare found: Found | undefined;
-  /** A team found and added takes the teams below it too. */
-  declare below: boolean;
   /** Asking why before taking it back. */
   declare withdrawing: boolean;
   declare busy: boolean;
   declare note: string;
-
-  private searchTimer?: ReturnType<typeof setTimeout>;
-  private asked = 0;
 
   constructor() {
     super();
@@ -83,8 +69,6 @@ export class FolioPublish extends LitElement {
     this.failure = '';
     this.version = 0;
     this.chosen = [];
-    this.query = '';
-    this.below = true;
     this.withdrawing = false;
     this.busy = false;
     this.note = '';
@@ -97,11 +81,6 @@ export class FolioPublish extends LitElement {
   override willUpdate(changed: Map<string, unknown>) {
     if ((changed.has('api') || changed.has('library') || changed.has('document')) && this.api && this.library && this.document) void this.load();
     if (changed.has('versions') && !this.versions.includes(this.version)) this.version = this.versions[0] ?? 0;
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    clearTimeout(this.searchTimer);
   }
 
   private async load() {
@@ -123,32 +102,6 @@ export class FolioPublish extends LitElement {
     if (floor.kind === 'tree') return [{ principal: floor.principal, name: whoWords(floor) }];
     if (floor.kind === 'org' && history.can.publishToOrg) return [{ principal: 'org', name: 'Everyone in the org' }];
     return [];
-  }
-
-  private search(q: string) {
-    this.query = q;
-    clearTimeout(this.searchTimer);
-    if (!q.trim()) {
-      this.found = undefined;
-      return;
-    }
-    const asked = ++this.asked;
-    this.searchTimer = setTimeout(async () => {
-      try {
-        const found = await this.api.people(q.trim());
-        if (asked === this.asked) this.found = found;
-      } catch (err) {
-        if (asked === this.asked) this.note = (err as Error).message;
-      }
-    }, 200);
-  }
-
-  private add(principal: string, name: string) {
-    const id = principal.slice(principal.indexOf(':') + 1);
-    // One way in for each team: just it, or it and those below.
-    this.chosen = [...this.chosen.filter((c) => c.principal !== `team:${id}` && c.principal !== `tree:${id}`), { principal, name }];
-    this.query = '';
-    this.found = undefined;
   }
 
   private async publish() {
@@ -200,36 +153,17 @@ export class FolioPublish extends LitElement {
     </div>`;
   }
 
-  private teamRows(): ListItem[] {
-    return (this.found?.teams ?? []).map((t) => ({ id: t.id, title: t.name, detail: t.within.length ? `Team in ${t.within.join(' / ')}` : 'Team', icon: 'people' }));
-  }
-
   private form() {
     const history = this.history!;
     if (!history.can.publish) return nothing;
     const out = history.publications.find((p) => !p.ended);
     const versionOptions: SelectOption[] = this.versions.map((n, i) => ({ value: String(n), label: `Version ${n}${i === 0 ? ', the newest' : ''}`, ...(out?.version === n ? { detail: 'Out now' } : {}) }));
-    const chosen: ListItem[] = this.chosen.map((c) => ({ id: c.principal, title: c.name, icon: c.principal === 'org' ? 'org' : 'people', actions: [{ id: 'remove', label: 'Remove' }] }));
     const own = this.floor?.kind === 'person';
     return html`<section class="folio-publish-form" aria-label="Publish a version">
       <ui-select label="Version" .options=${versionOptions} .value=${String(this.version)} @ui-change=${(e: CustomEvent<{ value: string }>) => (this.version = Number(e.detail.value))}></ui-select>
-      <ui-list label="Who it goes to" density="compact" .noun=${['audience', 'audiences']} .items=${chosen}
+      <folio-audience .api=${this.api} .chosen=${this.chosen} ?org=${history.can.publishToOrg}
         empty=${own && !history.can.publishToOrg ? 'Publishing from your own floor needs the publisher role. Share it instead.' : 'Add a team, or the whole org.'}
-        @ui-action=${(e: CustomEvent<{ item: ListItem }>) => (this.chosen = this.chosen.filter((c) => c.principal !== e.detail.item.id))}></ui-list>
-      <div class="folio-publish-add">
-        <ui-text-field label="Add a team" placeholder="A team’s name" .value=${this.query} @ui-input=${(e: CustomEvent<{ value: string }>) => this.search(e.detail.value)}></ui-text-field>
-        <ui-toggle label="And the teams below it" .checked=${this.below} @ui-change=${(e: CustomEvent<{ checked: boolean }>) => (this.below = e.detail.checked)}></ui-toggle>
-      </div>
-      ${this.found
-        ? html`<ui-list label="Teams found" density="compact" .noun=${['team', 'teams']} .items=${this.teamRows()} empty="No team by that name."
-            @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
-              const team = e.detail.item;
-              this.add(`${this.below ? 'tree' : 'team'}:${team.id}`, this.below ? `${team.title} and the teams below it` : `${team.title} (just that team)`);
-            }}></ui-list>`
-        : nothing}
-      ${history.can.publishToOrg && !this.chosen.some((c) => c.principal === 'org')
-        ? html`<div class="folio-actions"><ui-button kind="ghost" size="sm" @click=${() => this.add('org', 'Everyone in the org')}>Add the whole org</ui-button></div>`
-        : nothing}
+        @folio-change=${(e: CustomEvent<{ chosen: Chosen[] }>) => (this.chosen = e.detail.chosen)}></folio-audience>
       <ui-text-field name="publish-note" label="A word about it" optional multiline maxlength="500" hint="It goes with the notification, and stays with the version."></ui-text-field>
       <div class="folio-actions">
         <ui-button kind="primary" size="sm" ?disabled=${!this.chosen.length || !this.version} ?busy=${this.busy} busy-label="Publishing…" @click=${() => void this.publish()}>
@@ -256,8 +190,6 @@ export class FolioPublish extends LitElement {
         folio-publish .folio-publish-lead { display: flex; align-items: center; gap: var(--space-3); margin: 0; }
         folio-publish .folio-publish-out, folio-publish .folio-publish-form { display: flex; flex-direction: column; gap: var(--space-4); }
         folio-publish .folio-publish-said { margin: 0; color: var(--ink-muted); }
-        folio-publish .folio-publish-add { display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
-        folio-publish .folio-publish-add ui-text-field { flex: 1; min-width: 12rem; }
         folio-publish .folio-publish-hint { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
       </style>
       ${this.out()} ${this.form()}

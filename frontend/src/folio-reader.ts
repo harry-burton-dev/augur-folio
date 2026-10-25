@@ -58,6 +58,9 @@ const PICTURE = /^images\/(\d{1,5}\.png)$/;
  * @fires folio-publish - see how it's published, and publish or withdraw it when the person manages it
  * @fires folio-download - detail `{ version }`, the original of a version
  * @fires folio-retry - detail `{ version }`, ask again for a reader copy that failed
+ * @fires folio-issue - detail `{ library, document }`, to read the issue before or after this one
+ * @fires folio-series - detail `{ series }`, to open this issue's series
+ * @fires folio-follow - detail `{ following }`, to be told of each new issue, or not
  */
 export class FolioReader extends LitElement {
   static override properties = {
@@ -223,6 +226,29 @@ export class FolioReader extends LitElement {
     </section>`;
   }
 
+  /** Where an issue comes in its series, following it, and the way to the series. */
+  private series() {
+    const { run, issue } = this.doc;
+    if (!run || !issue) return nothing;
+    const at = issue.period.startsWith('Issue') ? `Issue ${issue.number}` : `Issue ${issue.number}, ${issue.period}`;
+    return html`<section class="folio-reader-series" aria-label="Series">
+      <p class="folio-reader-said"><ui-icon name="series" size="18"></ui-icon><span>${at}, in <button class="folio-link" @click=${() => this.emit('folio-series', { series: run.id })}>${run.name}</button></span></p>
+      <ui-toggle label="Tell me of each new issue" ?checked=${run.following} @ui-change=${(e: CustomEvent<{ checked: boolean }>) => this.emit('folio-follow', { following: e.detail.checked })}></ui-toggle>
+    </section>`;
+  }
+
+  /** The issues either side, under the title. */
+  private turns() {
+    const { run } = this.doc;
+    if (!run?.previous && !run?.next) return nothing;
+    return html`<nav class="folio-reader-turns" aria-label="Other issues">
+      ${run.previous
+        ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-issue', { library: run.previous!.library, document: run.previous!.id })}>Previous: ${run.previous.period}</ui-button>`
+        : html`<span></span>`}
+      ${run.next ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-issue', { library: run.next!.library, document: run.next!.id })}>Next: ${run.next.period}</ui-button>` : nothing}
+    </nav>`;
+  }
+
   private side(v: DocumentVersion) {
     const doc = this.doc;
     const newest = doc.latest.number;
@@ -248,7 +274,7 @@ export class FolioReader extends LitElement {
         ${doc.can.change ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-manage')}>Change it</ui-button>` : nothing}
         ${doc.only ? nothing : html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-share')}>${doc.can.share ? 'Share' : 'Who can see it'}</ui-button>`}
       </div>
-      ${this.publishing()}
+      ${this.publishing()} ${this.series()}
       ${doc.tags.length
         ? html`<div class="folio-tags" aria-label="Tags">${doc.tags.map((t) => {
             const tag = this.tags.find((x) => x.id === t);
@@ -283,6 +309,8 @@ export class FolioReader extends LitElement {
         folio-reader .folio-reader-head h1 { margin: 0; font-size: var(--type-title-s); line-height: var(--leading-title-s); font-weight: 300; }
         folio-reader .folio-reader-head p { margin: 0; color: var(--ink-muted); font-size: var(--type-meta); line-height: var(--leading-meta); }
         folio-reader .folio-reader-old { color: var(--ink); }
+        folio-reader .folio-reader-series { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+        folio-reader .folio-reader-turns { display: flex; justify-content: space-between; gap: var(--space-3); }
         folio-reader .folio-reader-publishing { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
         folio-reader .folio-reader-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); }
         folio-reader .folio-reader-note { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
@@ -312,6 +340,7 @@ export class FolioReader extends LitElement {
                 <button class="folio-link" @click=${() => this.emit('folio-read')}>Read the newest</button>
               </p>`
             : nothing}
+          ${this.turns()}
         </header>
         ${this.body(v)}
       </div>

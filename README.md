@@ -44,11 +44,21 @@ Folio tells other apps what happened through the platform's events (`events:publ
 
 A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
 
+## Series
+
+A series is a named run of documents in one library that comes out on a cadence, such as a weekly cash report: weekly, monthly, quarterly, or now and then. It has the tags each issue starts with, and the audience each issue goes to. Whoever manages the library keeps its series; the audience must be one they could publish to.
+
+Each issue is an ordinary document with a number and a period ("Week 43, 2026", "October 2026", "Q4 2026"). Adding the next one takes one file: drop it on the series' page and the series names it ("Cash report: Week 44, 2026"), numbers it, tags it and, when the person adding it may publish to the series' audience, publishes it. Anyone else's issue waits as a draft for whoever manages the library. The next issue is for the period after the last one, but never more than one period behind now, so a series picked up after a break carries on from last period. Periods are in UTC.
+
+Its library's readers and its audience can follow a series, to be told of each issue that's published to them, with a **Read** button; an issue goes only to the followers in its audience, not to everyone in it. When an issue is late (a day after a week ends, three after a month, seven after a quarter), the series' owner, who made it, is told once. The reader shows where an issue comes in its series, with the issues either side that the person may read.
+
+A series with no issues can be removed; one with issues stays, so its issues keep their place.
+
 ## Tags, filters and views
 
 Each library has its own tags, and the org has tags every library shares (such as Policy or Finance). The org's tags are kept by the leads on the org's floor. A library's tag can't take an org tag's name, and a new org tag takes in the libraries' tags of its name: their documents and saved views carry the org's tag from then on. Removing a tag takes it off every document and view that had it.
 
-The list can be narrowed by tags (all of those chosen), file type, who added it and when it last changed, and sorted by title, newest or most recently changed. Once a filter is on, the list looks in every folder below where you are. A set of filters can be saved as a view, which goes in the library's side rail for everyone there; "the past month" stays the past month, not the month it was saved.
+The list can be narrowed by tags (all of those chosen), file type, who added it, when it last changed, whether it's published and which series it's in, and sorted by title, newest, most recently changed or series period. Once a filter is on, the list looks in every folder below where you are. A set of filters can be saved as a view, which goes in the library's side rail for everyone there; "the past month" stays the past month, not the month it was saved.
 
 ## Reader copies
 
@@ -62,7 +72,7 @@ Opening a document opens its reader page: the reader copy as a page of text, set
 
 ## On the record
 
-Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
+Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a series made or removed, a document uploaded (with its series and issue number when it's an issue), a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
 
 ## API
 
@@ -72,16 +82,16 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | --- | --- |
 | `GET /libraries` | The floor's libraries, and whether the caller can make one |
 | `POST /libraries` `{name, description?}` | A new library (the floor's leads) |
-| `GET /libraries/:id` | A library with its folders, tags (the org's and its own), authors, saved views, and what the caller may do there |
+| `GET /libraries/:id` | A library with its folders, tags (the org's and its own), authors, saved views, series, and what the caller may do there |
 | `PATCH /libraries/:id` `{name?, description?, freeTags?}` | Rename or describe it, or let anyone add tags (leads) |
 | `POST /libraries/:id/archive` | Take it off the floor's list (leads) |
 | `POST /libraries/:id/folders` `{name, parent?}` | A new folder, at the top or inside another, at most 6 deep |
 | `PATCH /libraries/:id/folders/:folder` `{name}` | Rename a folder |
 | `DELETE /libraries/:id/folders/:folder` | Remove an empty folder |
-| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&state=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type`, `author` and `state` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `state` is draft, published or withdrawn; `sort` is title, newest or updated |
-| `POST /libraries/:id/documents?filename=&title=&folder=&tag=` | Upload a document: the body is the file, its `Content-Type` its type; `tag` repeats |
+| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&state=&series=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type`, `author` and `state` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `state` is draft, published or withdrawn; `series` is one series' issues; `sort` is title, newest, updated or period |
+| `POST /libraries/:id/documents?filename=&title=&folder=&tag=&series=` | Upload a document: the body is the file, its `Content-Type` its type; `tag` repeats. With `series`, it's that series' next issue: named, numbered, tagged and published to its audience when the uploader may (otherwise a draft, with why in `draft`) |
 | `PUT /libraries/:id/documents/:doc/tags` `{tags}` | Give a document exactly these tags |
-| `GET /libraries/:id/documents/:doc` | A document with its versions, newest first, its `state` and what's `published`. To its audience alone: only the version that's out, as `only` |
+| `GET /libraries/:id/documents/:doc` | A document with its versions, newest first, its `state` and what's `published`. To its audience alone: only the version that's out, as `only`. An issue has its `issue` (number and period) and `run`: its series, the issues either side the caller may read, and whether they follow it |
 | `PATCH /libraries/:id/documents/:doc` `{title?, folder?}` | Retitle it, or move it (`folder: null` is the top) |
 | `DELETE /libraries/:id/documents/:doc` | Take it out of the library |
 | `POST /libraries/:id/documents/:doc/versions?filename=` | Its next version, sent as above |
@@ -100,9 +110,15 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
 | `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
 | `GET /documents/:doc` | Where a document is (`{id, library, title}`), for `document.open`, which gives only its id |
+| `GET /libraries/:id/series` | The library's series, each with the issue it expects next (`next`, with `dueBy` and `overdue`), whether the caller follows it and what they may do |
+| `POST /libraries/:id/series` `{name, cadence, description?, audience?, tags?}` | A new series (whoever manages the library). `cadence` is weekly, monthly, quarterly or adhoc |
+| `PATCH /libraries/:id/series/:series` `{name?, cadence?, description?, audience?, tags?}`, `DELETE …` | Change a series, or remove one with no issues (whoever manages the library) |
+| `GET /series/:series` | A series with its audience named, for its library's readers and its audience |
+| `GET /series/:series/issues?limit=&offset=` | The issues the caller may read, newest period first |
+| `PUT /series/:series/follow` `{following}` | Be told of each issue published to you, or stop |
 | `GET /tags` | The org's tags, and whether the caller keeps them |
 | `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
 | `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |
 | `PATCH /libraries/:id/tags/:tag` `{name}`, `DELETE /libraries/:id/tags/:tag` | Rename or remove one of its tags (leads) |
-| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?}` |
+| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?, series?}` |
 | `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |

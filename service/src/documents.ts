@@ -3,8 +3,10 @@ import { Transform, type Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
+import { nextIssue } from './cadence.ts';
 import type { CallerPrincipals } from './people.ts';
 import type { ObjectStore } from './objects.ts';
+import type { Publisher } from './publishing.ts';
 import { furthest, levelFrom, objectKeyFor, reaches, SINCE, type DocumentSort, type DocumentState, type FolioDocument, type FolioStore, type Level, type NewVersion, type Since } from './store.ts';
 import { renditionRoutes } from './renditions.ts';
 import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
@@ -46,6 +48,8 @@ export interface DocumentDeps {
   principalsOf: CallerPrincipals;
   refused(err: unknown, reply: FastifyReply): unknown;
   log: { error(obj: object, msg: string): void };
+  /** Publishes a series' new issue to its audience. */
+  publisher: Publisher;
   /** The most one upload may be; MAX_UPLOAD_BYTES unless a test says less. */
   maxUploadBytes?: number;
 }
@@ -59,8 +63,11 @@ const FILE_QUERY = {
     folder: { type: 'string', maxLength: 64 },
   },
 } as const;
-/** An upload may come tagged: `tag` once for each. */
-const UPLOAD_QUERY = { ...FILE_QUERY, properties: { ...FILE_QUERY.properties, tag: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 64 } } } } as const;
+/** An upload may come tagged (`tag` once for each), or as a series' next issue. */
+const UPLOAD_QUERY = {
+  ...FILE_QUERY,
+  properties: { ...FILE_QUERY.properties, tag: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 64 } }, series: { type: 'string', maxLength: 64 } },
+} as const;
 
 /** The document list's filters: the view query's, one value of each in the address, and paging. */
 const LIST_QUERY = {
@@ -77,6 +84,7 @@ const LIST_QUERY = {
     to: VIEW_QUERY.properties.to,
     sort: VIEW_QUERY.properties.sort,
     state: VIEW_QUERY.properties.states,
+    series: VIEW_QUERY.properties.series,
     limit: { type: 'integer', minimum: 1, maximum: 200 },
     offset: { type: 'integer', minimum: 0 },
   },
@@ -93,6 +101,7 @@ type ListQuery = {
   to?: string;
   sort?: DocumentSort;
   state?: DocumentState[];
+  series?: string;
   limit?: number;
   offset?: number;
 };
@@ -153,7 +162,7 @@ const VERSION_PARAMS = {
  * Documents: uploading them, new versions, and their original files. Uploads stream
  * straight into Folio's bucket, counted and hashed on the way; nothing is held in memory.
  */
-export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, reach, libraryFor, principalsOf, refused, log, maxUploadBytes = MAX_UPLOAD_BYTES }: DocumentDeps) => {
+export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, reach, libraryFor, principalsOf, refused, log, publisher, maxUploadBytes = MAX_UPLOAD_BYTES }: DocumentDeps) => {
   // Every upload reaches its route as a stream, whatever it says it is; the route decides what it takes.
   app.removeContentTypeParser('text/plain');
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
@@ -236,6 +245,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         to,
         sort: q.sort,
         states: q.state,
+        series: q.series,
         limit: q.limit,
         offset: q.offset,
         readers,
@@ -245,7 +255,12 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
     },
   );
 
-  app.post<{ Params: { id: string }; Querystring: { filename: string; title?: string; folder?: string; tag?: string[] } }>(
+  /**
+   * A new document, or with `series` that series' next issue: its title is the
+   * series' and the period's, it starts with the series' tags, and it goes out
+   * to the series' audience when the uploader may publish it there.
+   */
+  app.post<{ Params: { id: string }; Querystring: { filename: string; title?: string; folder?: string; tag?: string[]; series?: string } }>(
     '/libraries/:id/documents',
     { schema: { params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } }, required: ['id'] }, querystring: UPLOAD_QUERY } },
     async (req, reply) => {
@@ -259,10 +274,13 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       if (!mediaType) return reply;
       if (folder && !(await store.folders(library.id)).some((f) => f.id === folder))
         return reply.code(400).send({ error: 'bad-parent', message: 'That folder isn’t in this library.' });
-      // Checked before the file goes up, so a wrong tag costs no upload.
-      const tags = [...new Set(req.query.tag ?? [])];
+      // Checked before the file goes up, so a wrong tag or series costs no upload.
       const known = new Set((await store.tags(library.id)).map((t) => t.id));
-      if (tags.some((t) => !known.has(t))) return reply.code(400).send({ error: 'bad-tag', message: 'That tag isn’t the org’s or this library’s.' });
+      if (req.query.tag?.some((t) => !known.has(t))) return reply.code(400).send({ error: 'bad-tag', message: 'That tag isn’t the org’s or this library’s.' });
+      const run = req.query.series ? await store.series(req.query.series) : undefined;
+      if (req.query.series && run?.library !== library.id) return reply.code(400).send({ error: 'bad-series', message: 'That series isn’t in this library.' });
+      // A tag the series had may have gone since; the issue starts with the ones still here.
+      const tags = [...new Set([...(run?.tags.filter((t) => known.has(t)) ?? []), ...(req.query.tag ?? [])])];
       const id = randomUUID();
       try {
         const first = await receive(req, id, filename, mediaType, caller.id);
@@ -270,19 +288,39 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
           await objects.delete(first.objectKey);
           return reply.code(400).send({ error: 'empty', message: 'That file is empty.' });
         }
-        const title = req.query.title?.trim() || titleFrom(filename);
+        const title = req.query.title?.trim() || (run ? `${run.name}: ${nextIssue(run.cadence, run.last).period}` : titleFrom(filename));
         await store.notePerson({ id: caller.id, name: caller.name });
-        const doc = await store.createDocument({ id, library: library.id, folder: folder || undefined, title, createdBy: caller.id, tags }, first).catch(async (err) => {
-          await objects.delete(first.objectKey).catch(() => undefined);
-          throw err;
+        const doc = await store
+          .createDocument({ id, library: library.id, folder: folder || undefined, title, createdBy: caller.id, tags, series: run?.id }, first)
+          .catch(async (err) => {
+            await objects.delete(first.objectKey).catch(() => undefined);
+            throw err;
+          });
+        await recorded({
+          actor: caller.id,
+          action: 'document.uploaded',
+          target: doc.id,
+          workspace: library.workspace,
+          detail: { library: library.id, title, version: 1, size: first.size, sha256: first.sha256, ...(doc.issue ? { series: doc.issue.series, issue: doc.issue.number } : {}) },
         });
-        await recorded({ actor: caller.id, action: 'document.uploaded', target: doc.id, workspace: library.workspace, detail: { library: library.id, title, version: 1, size: first.size, sha256: first.sha256 } });
-        return reply.code(201).send({ ...doc, can: { change: true, share: rightsOn(caller, library).share } });
+        const can = { change: true, share: rightsOn(caller, library).share, publish: rightsOn(caller, library).manage };
+        if (!run?.audience.length) return reply.code(201).send({ ...doc, can });
+        // The next issue goes straight out, when its uploader may put it there; otherwise it waits as a draft.
+        const refusal = can.publish ? await publisher.audienceRefusal(caller, library, run.audience) : { message: 'Only whoever manages this library publishes its issues.' };
+        if (refusal) return reply.code(201).send({ ...doc, can, draft: refusal.message });
+        await publisher.publish(caller, { ...doc, level: 'manage', shelf: library }, { version: 1, audience: run.audience });
+        return reply.code(201).send({ ...(await store.document(doc.id)), can });
       } catch (err) {
         return uploadFailed(err, reply);
       }
     },
   );
+
+  /** An issue's series as its reader shows it: the issues either side that the caller may read, and whether they follow it. */
+  const runOf = async (caller: OnFloor, doc: HeldDocument) => {
+    const [run, around, followers] = await Promise.all([store.series(doc.issue!.series), store.neighbours(doc.id, await principalsOf(caller)), store.followers(doc.issue!.series)]);
+    return { id: doc.issue!.series, name: run?.name ?? '', cadence: run?.cadence, ...around, following: followers.includes(caller.id) };
+  };
 
   app.get<{ Params: { id: string; doc: string } }>('/libraries/:id/documents/:doc', { schema: { params: DOC_PARAMS } }, async (req, reply) => {
     const caller = onFloor(req, reply);
@@ -296,6 +334,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
       ...(doc.only ? { latest: versions[0] } : {}),
       libraryName: doc.shelf.name,
       versions,
+      ...(doc.issue ? { run: await runOf(caller, doc) } : {}),
       can: documentRights(caller, doc),
     };
   });

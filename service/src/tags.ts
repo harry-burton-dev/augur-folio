@@ -29,6 +29,7 @@ export const VIEW_QUERY = {
     to: { type: 'string', maxLength: 40 },
     sort: { type: 'string', enum: DOCUMENT_SORTS },
     states: { type: 'array', maxItems: 3, items: { type: 'string', enum: DOCUMENT_STATES } },
+    series: ID,
   },
 } as const;
 

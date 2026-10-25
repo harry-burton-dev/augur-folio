@@ -22,6 +22,9 @@ const travelTag = tag('t-trv', 'Travel', 'l-1');
 const leaveDoc = { ...travel, id: 'd-2', title: 'Annual leave', folder: 'f-leave', tags: ['t-pol'] };
 const recent = { id: 'vw-1', library: 'l-1', name: 'Recent policy', query: { tags: ['t-pol'], sort: 'updated' }, createdBy: 'u1', createdAt: '' };
 
+const CASH = { id: 's-1', workspace: 'w-fin', library: 'l-1', name: 'Cash report', description: 'Where the money is', cadence: 'weekly', audience: ['tree:w-fin'], tags: [] as string[], createdBy: 'u1', createdAt: '', updatedAt: '', issues: 2, last: { document: 'd-6', number: 2, periodStart: '2026-10-19', period: 'Week 43, 2026' } };
+const issue = (id: string, number: number, period: string) => ({ ...travel, id, title: `Cash report: ${period}`, state: 'published', issue: { series: 's-1', number, periodStart: '', period } });
+
 /** A stand-in for Folio's service, answering what the app asks through ctx.fetch. */
 const FINANCE = { principal: 'tree:w-fin', kind: 'tree', name: 'Finance', within: [] };
 const KIM = { principal: 'person:u3', kind: 'person', name: 'Kim Lee', email: 'kim@example.org', level: 'read', createdBy: 'u1', createdAt: new Date().toISOString() };
@@ -34,6 +37,7 @@ const service = ({
   documents = [] as (typeof travel & { folder?: string })[],
   views = [recent] as (typeof recent)[],
   shared = NO_SHARED,
+  series = [] as unknown[],
 } = {}) => {
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
@@ -55,6 +59,19 @@ const service = ({
       const found = documents.filter((d) => !deleted.has(d.id) && (params.get('below') ? true : d.folder === (params.get('folder') ?? undefined)) && tags.every((t) => d.tags.includes(t)));
       return Response.json({ documents: found, total: found.length });
     }
+    if (method === 'GET' && where === '/series/s-1')
+      return Response.json({ ...CASH, audience: [FINANCE], libraryName: 'Policies', following: false, next: { number: 3, periodStart: '2026-10-26', period: 'Week 44, 2026', dueBy: '2026-11-02', overdue: false }, can: { manage: lead, addIssue: true, publish: lead } });
+    if (method === 'GET' && where === '/series/s-1/issues') return Response.json({ documents: [issue('d-6', 2, 'Week 43, 2026'), issue('d-5', 1, 'Week 42, 2026')], total: 2 });
+    if (method === 'PUT' && where === '/series/s-1/follow') return Response.json(body);
+    if (method === 'POST' && where === '/libraries/l-1/series') return Response.json({ ...CASH, id: 's-new', name: body.name, issues: 0 }, { status: 201 });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-5')
+      return Response.json({
+        ...issue('d-5', 1, 'Week 42, 2026'),
+        libraryName: 'Policies',
+        versions: [v(2)],
+        run: { id: 's-1', name: 'Cash report', cadence: 'weekly', following: true, next: { id: 'd-6', library: 'l-1', title: 'Cash report: Week 43, 2026', number: 2, period: 'Week 43, 2026' } },
+      });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-5/versions/2/reader') return new Response('# Cash\n\nPlenty.', { headers: { 'content-type': 'text/markdown' } });
     if (method === 'PUT' && where === '/libraries/l-1/documents/d-1/tags') return Response.json({ ...travel, tags: body.tags });
     if (method === 'POST' && where === '/libraries/l-1/tags') return Response.json(tag('t-new', body.name, 'l-1'), { status: 201 });
     if (method === 'GET' && where === '/tags') return Response.json({ tags: [policyTag], can: { manage: false } });
@@ -62,6 +79,7 @@ const service = ({
     if (method === 'PATCH' && where === '/libraries/l-1') return Response.json({ ...policies, ...body });
     if (method === 'POST' && where === '/libraries/l-1/documents') {
       if (params.get('filename') === 'big.pdf') return new Response('Payload Too Large', { status: 413 });
+      if (params.get('series')) return Response.json({ ...issue('d-7', 3, 'Week 44, 2026'), state: lead ? 'published' : 'draft', ...(lead ? {} : { draft: 'Only whoever manages this library publishes its issues.' }) }, { status: 201 });
       return Response.json({ ...travel, id: 'd-new', title: params.get('filename'), latest: v(1, params.get('filename')!) }, { status: 201 });
     }
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1')
@@ -126,6 +144,7 @@ const service = ({
             tags: mine ? [policyTag, travelTag] : [policyTag],
             authors: [{ id: 'u2', name: 'Alex Rivera' }],
             views: mine ? views : [],
+            series: mine ? series : [],
             can: { manage: lead, addFolders: true, addDocuments: true, addTags: lead, share: lead },
           })
         : Response.json({ message: 'Not here' }, { status: 404 });
@@ -196,6 +215,8 @@ describe('folio paths', () => {
     expect(addressFor('/@finance/folio/libraries', '/libraries', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
     expect(addressFor('/@finance/folio', '/', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
     expect(addressFor('/elsewhere', '/libraries', {})).toBeUndefined();
+    expect(placeFor('/libraries/l-1/series/s-1')).toEqual({ library: 'l-1', series: 's-1', adding: false });
+    expect(pathFor({ library: 'l-1', series: 's-1' })).toBe('/libraries/l-1/series/s-1');
     expect(placeFor('/published')).toEqual({ published: true, adding: false });
     expect(pathFor({ published: true })).toBe('/published');
   });
@@ -708,5 +729,65 @@ describe('folio', () => {
     await settle(el);
     expect(calls.some(([, p]) => p === '/api/folio/v1/documents/d-9')).toBe(true);
     expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
+  });
+});
+
+describe('folio series', () => {
+  it('lists a library’s series in the rail and opens one on its own page', async () => {
+    const { fetch } = service({ series: [CASH] });
+    const el = await mounted(fetch);
+    const rail = trees(el).find((t) => t.heading === 'Series')!;
+    expect(rail.items.map((i) => [i.label, i.icon])).toEqual([['Cash report', 'series']]);
+    rail.dispatchEvent(new CustomEvent('ui-select', { detail: { item: rail.items[0] } }));
+    await settle(el);
+    const page = el.querySelector('folio-series')!;
+    expect(page.series).toBe('s-1');
+    expect(page.querySelector('ui-heading')!.getAttribute('heading')).toBe('Cash report');
+    expect(page.querySelector('.folio-series-facts')!.textContent!.replace(/\s+/g, ' ').trim()).toBe(
+      'Every week. Each issue goes out to Finance and the teams below it as it’s added. Next: Week 44, 2026, due by Monday 2 November.',
+    );
+    expect(page.querySelector<UiList>('ui-list')!.items.map((i) => [i.title, i.detail])).toEqual([
+      ['Cash report: Week 43, 2026', 'Issue 2 · Week 43, 2026 · Published'],
+      ['Cash report: Week 42, 2026', 'Issue 1 · Week 42, 2026 · Published'],
+    ]);
+  });
+
+  it('adds the next issue from one file, and follows the series', async () => {
+    const { fetch, calls } = service({ series: [CASH] });
+    const el = await mounted(fetch, '/libraries/l-1/series/s-1');
+    const page = el.querySelector('folio-series')!;
+    const zone = page.querySelector('ui-drop-zone')!;
+    expect(zone.getAttribute('heading')).toBe('Drop the issue for Week 44, 2026 here');
+    zone.dispatchEvent(new CustomEvent('ui-files', { detail: { files: [new File(['%PDF'], 'cash.pdf')] } }));
+    await settle(el);
+    expect(calls.some(([m, p]) => m === 'POST' && p === '/api/folio/v1/libraries/l-1/documents?filename=cash.pdf&series=s-1')).toBe(true);
+    expect(page.querySelector('.folio-note')!.textContent).toBe('Cash report: Week 44, 2026 is out to Finance and the teams below it.');
+    page.querySelector('ui-toggle')!.dispatchEvent(new CustomEvent('ui-change', { detail: { checked: true } }));
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/series/s-1/follow', { following: true }]);
+  });
+
+  it('makes a series with a cadence, tags and audience', async () => {
+    const { fetch, calls } = service({ series: [CASH] });
+    const el = await mounted(fetch);
+    button(el, 'New series')!.click();
+    await settle(el);
+    const dialog = el.querySelector<UiDialog>('ui-dialog')!;
+    expect(dialog.heading).toBe('New series');
+    await dialog.submit!({ name: ' Board pack ', description: '', cadence: 'monthly', tags: 't-pol', audience: 'tree:w-fin' }, dialog);
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/series', { name: 'Board pack', description: '', cadence: 'monthly', tags: ['t-pol'], audience: ['tree:w-fin'] }]);
+    expect(el.querySelector('folio-series')!.series).toBe('s-new');
+  });
+
+  it('reads an issue with the ones either side, and goes to its series', async () => {
+    const { fetch, calls } = service({ series: [CASH] });
+    const el = await mounted(fetch, '/libraries/l-1/documents/d-5');
+    const reader = el.querySelector('folio-reader')!;
+    expect(reader.querySelector('.folio-reader-series')!.textContent!.replace(/\s+/g, ' ')).toContain('Issue 1, Week 42, 2026, in Cash report');
+    expect(button(reader, 'Previous: Week 41, 2026')).toBeUndefined();
+    button(reader, 'Next: Week 43, 2026')!.click();
+    await settle(el);
+    expect(calls.some(([, p]) => p === '/api/folio/v1/libraries/l-1/documents/d-6')).toBe(true);
   });
 });

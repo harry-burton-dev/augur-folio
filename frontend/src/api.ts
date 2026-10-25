@@ -24,7 +24,7 @@ export interface Tag {
   createdAt: string;
 }
 
-export type DocumentSort = 'title' | 'newest' | 'updated';
+export type DocumentSort = 'title' | 'newest' | 'updated' | 'period';
 export type Since = 'week' | 'month' | 'quarter' | 'year';
 
 /** Where a document is in being published: never yet, out now, or taken back. */
@@ -39,6 +39,8 @@ export interface ViewQuery {
   since?: Since;
   sort?: DocumentSort;
   states?: DocumentState[];
+  /** Issues of this series. */
+  series?: string;
 }
 
 export interface SavedView {
@@ -179,6 +181,52 @@ export interface DocumentVersion {
   reader: ReaderState;
 }
 
+/** How often a series comes out. An ad hoc one has issues but no periods. */
+export type Cadence = 'weekly' | 'monthly' | 'quarterly' | 'adhoc';
+
+/** One issue's place in its series: "Week 43, 2026", from the period's first day. */
+export interface IssuePlace {
+  number: number;
+  periodStart: string;
+  period: string;
+}
+
+/** A named run of documents in one library, such as a weekly report. */
+export interface Series {
+  id: string;
+  workspace: string;
+  library: string;
+  name: string;
+  description: string;
+  cadence: Cadence;
+  /** Who each issue is published to as it's added: principals, or named from the series' own call. */
+  audience: string[];
+  tags: string[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  issues: number;
+  last?: IssuePlace & { document: string };
+}
+
+/** A series as the caller sees it: the issue it expects next, and what they may do. */
+export interface SeriesView extends Series {
+  libraryName: string;
+  /** `dueBy` is the last day it's on time, once the series has had an issue. */
+  next: IssuePlace & { dueAt?: string; dueBy?: string; overdue: boolean };
+  following: boolean;
+  can: { manage: boolean; addIssue: boolean; publish: boolean };
+}
+
+/** An issue either side of the one being read. */
+export interface IssueLink {
+  id: string;
+  library: string;
+  title: string;
+  number: number;
+  period: string;
+}
+
 export interface FolioDocument {
   id: string;
   workspace: string;
@@ -194,6 +242,10 @@ export interface FolioDocument {
   state: DocumentState;
   /** The version out now, when it's published. */
   published?: Publication;
+  /** Its place in its series, when it's an issue. */
+  issue?: IssuePlace & { series: string };
+  /** Why a new issue wasn't published as it was added. */
+  draft?: string;
   /** Whether the caller may add versions, retag, retitle, move or delete it, share it, and publish it. */
   can: { change: boolean; share: boolean; publish?: boolean };
 }
@@ -205,6 +257,8 @@ export interface OpenDocument extends FolioDocument {
   libraryName: string;
   /** The caller reaches it only as the audience it's published to: this version, and no other. */
   only?: number;
+  /** For an issue: its series, the issues either side the caller may read, and whether they follow it. */
+  run?: { id: string; name: string; cadence?: Cadence; previous?: IssueLink; next?: IssueLink; following: boolean };
 }
 
 /** What Folio takes, by file ending, and the media type each is sent as. */
@@ -245,6 +299,7 @@ export interface OpenLibrary extends Library {
   /** Who added its documents. */
   authors: Person[];
   views: SavedView[];
+  series: Series[];
   can: LibraryRights;
 }
 
@@ -259,6 +314,7 @@ export const listParams = (q: ListQuery) => {
   if (q.since) params.set('since', q.since);
   if (q.sort && q.sort !== 'title') params.set('sort', q.sort);
   for (const s of q.states ?? []) params.append('state', s);
+  if (q.series) params.set('series', q.series);
   if (q.limit) params.set('limit', String(q.limit));
   if (q.offset) params.set('offset', String(q.offset));
   return params;
@@ -351,6 +407,38 @@ export class FolioApi {
 
   upload(library: string, file: File, folder?: string, tags: readonly string[] = []) {
     return this.sendFile<FolioDocument>(`/libraries/${encodeURIComponent(library)}/documents`, file, { folder }, tags);
+  }
+
+  /** A series' next issue: the series names, tags and publishes it. */
+  addIssue(library: string, series: string, file: File) {
+    return this.sendFile<FolioDocument>(`/libraries/${encodeURIComponent(library)}/documents`, file, { series });
+  }
+
+  /** A series, with its audience named, wherever the caller reaches it from. */
+  series(id: string) {
+    return this.call<Omit<SeriesView, 'audience'> & { audience: Principal[] }>('GET', `/series/${encodeURIComponent(id)}`);
+  }
+
+  /** The issues of a series the caller may read, newest period first. */
+  issues(series: string) {
+    return this.call<{ documents: FolioDocument[]; total: number }>('GET', `/series/${encodeURIComponent(series)}/issues`);
+  }
+
+  createSeries(library: string, series: { name: string; description?: string; cadence: Cadence; audience?: string[]; tags?: string[] }) {
+    return this.call<SeriesView>('POST', `/libraries/${encodeURIComponent(library)}/series`, series);
+  }
+
+  updateSeries(library: string, id: string, change: { name?: string; description?: string; cadence?: Cadence; audience?: string[]; tags?: string[] }) {
+    return this.call<SeriesView>('PATCH', `/libraries/${encodeURIComponent(library)}/series/${encodeURIComponent(id)}`, change);
+  }
+
+  deleteSeries(library: string, id: string) {
+    return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/series/${encodeURIComponent(id)}`);
+  }
+
+  /** Starts or stops being told of each new issue. */
+  follow(series: string, following: boolean) {
+    return this.call<{ following: boolean }>('PUT', `/series/${encodeURIComponent(series)}/follow`, { following });
   }
 
   setTags(library: string, document: string, tags: string[]) {
@@ -482,12 +570,14 @@ export class FolioApi {
 
 /**
  * Where a path inside Folio points: `/libraries`, `/libraries/new`, `/libraries/<id>`,
- * `/libraries/<id>/<folder>`, or a saved view, `/libraries/<id>/views/<view>`.
+ * `/libraries/<id>/<folder>`, a saved view, `/libraries/<id>/views/<view>`, or a
+ * series, `/libraries/<id>/series/<series>`.
  */
 export interface Place {
   library?: string;
   folder?: string;
   view?: string;
+  series?: string;
   /** A document being read, and which version of it (the newest when there's none). */
   document?: string;
   version?: number;
@@ -507,13 +597,15 @@ export const placeFor = (path: string): Place => {
     return { library: second, document: fourth, ...(version ? { version } : {}), adding: false };
   }
   if (third === 'views') return { library: second, ...(fourth ? { view: fourth } : {}), adding: false };
+  if (third === 'series') return { library: second, ...(fourth ? { series: fourth } : {}), adding: false };
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder, view, document, version, published }: Omit<Place, 'adding'>) => {
+export const pathFor = ({ library, folder, view, series, document, version, published }: Omit<Place, 'adding'>) => {
   if (published && !document) return '/published';
   if (!library) return '/libraries';
   const at = `/libraries/${encodeURIComponent(library)}`;
   if (document) return `${at}/documents/${encodeURIComponent(document)}${version ? `/versions/${version}` : ''}`;
+  if (series) return `${at}/series/${encodeURIComponent(series)}`;
   return view ? `${at}/views/${encodeURIComponent(view)}` : folder ? `${at}/${encodeURIComponent(folder)}` : at;
 };
