@@ -60,6 +60,9 @@ describe('folio in the shell', () => {
       { id: travel.id, title: travel.title, detail: 'Published to you from Policies', path: `/libraries/${fin}/documents/${travel.id}` },
     ]);
     expect((await call(sam, 'GET', '/v1/search?q=travel')).statusCode).toBe(400);
+
+    // The picker finds the same, as whole documents.
+    expect((await call(legal, 'GET', '/v1/find?q=travel')).json().documents).toMatchObject([{ id: travel.id, libraryName: 'Policies', audienceOnly: true, published: { version: 1 } }]);
   });
 
   it('gives Home what’s new since the person last looked, and the floor’s drafts to its leads', async () => {

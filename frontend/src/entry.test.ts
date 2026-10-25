@@ -105,6 +105,10 @@ const service = ({
         documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', state: 'published', published: { id: 'p-9', version: 2, audience: ['team:w-fin'], publishedAt: new Date().toISOString(), note: 'For Monday' } }],
         total: 1,
       });
+    if (method === 'GET' && where === '/find')
+      return Response.json({
+        documents: params.get('q') === 'plan' ? [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', audienceOnly: true, state: 'published', published: { id: 'p-9', version: 1, audience: ['org'], publishedAt: '' } }] : [],
+      });
     if (method === 'PUT' && where === '/published/looked') return new Response(null, { status: 204 });
     if (method === 'GET' && where === '/home')
       return Response.json({
@@ -234,6 +238,8 @@ describe('folio paths', () => {
     expect(placeForIntent(undefined)).toBeUndefined();
     expect(placeForIntent({ type: 'folio.open', payload: { path: '/published' } })).toEqual({ published: true, adding: false });
     expect(placeForIntent({ type: 'folio.open', payload: {} })).toBeUndefined();
+    expect(placeForIntent({ type: 'library.open', payload: { app: 'folio', id: 'l-2', name: 'Reports' } })).toEqual({ library: 'l-2', adding: false });
+    expect(placeForIntent({ type: 'library.open', payload: { app: 'other', id: 'l-2', name: 'Theirs' } })).toBeUndefined();
   });
 
   it('nests folders and finds the way down to one', () => {
@@ -835,5 +841,52 @@ describe('folio on Home', () => {
     const { fetch } = service({ lead: false });
     const { el } = await card(fetch);
     expect(el.querySelector<HTMLElement & { items: unknown[] }>('ui-facts')!.items).toEqual([{ value: 1, label: 'New to you' }]);
+  });
+});
+
+describe('folio as a picker', () => {
+  const picker = async (fetch: MountContext['fetch'], payload: object) => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const reply = { respond: vi.fn(), cancel: vi.fn() };
+    await app.mount(el, { ...ctx(fetch, '/'), intent: { type: 'document.pick', payload }, reply });
+    const settled = async () => {
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r));
+        await el.querySelector('folio-picker')?.updateComplete;
+      }
+    };
+    await settled();
+    return { el, reply, settled };
+  };
+
+  it('answers another app with the document picked from a library, in the kinds it takes', async () => {
+    const pdf = { ...travel, latest: v(2) };
+    const notes = { ...travel, id: 'd-3', title: 'Notes', latest: { ...v(1, 'notes.md'), mediaType: 'text/markdown' } };
+    const { fetch, calls } = service({ documents: [pdf, notes] });
+    const { el, reply } = await picker(fetch, { purpose: 'Attach a policy', accept: ['application/pdf'] });
+    expect(el.querySelector('folio-app')).toBeNull();
+    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Attach a policy');
+    expect(calls.some(([, p]) => p.startsWith('/api/folio/v1/libraries/l-1/documents?') && p.includes('below=true'))).toBe(true);
+    const rows = list(el);
+    expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Travel policy', 'In Policies · Version 2 · PDF']]);
+    expect(el.querySelector('.folio-note')!.textContent).toBe('One other isn’t the kind of file asked for.');
+    rows.dispatchEvent(new CustomEvent('ui-open', { detail: { item: rows.items[0] } }));
+    expect(reply.respond).toHaveBeenCalledWith({ app: 'folio', id: 'd-1', version: '2', title: 'Travel policy' });
+  });
+
+  it('finds by what’s typed, picks the version published to the person, and cancels', async () => {
+    const { fetch } = service();
+    const { el, reply, settled } = await picker(fetch, {});
+    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Pick a document');
+    el.querySelector('ui-text-field')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'plan' } }));
+    await new Promise((r) => setTimeout(r, 250));
+    await settled();
+    const rows = list(el);
+    expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Shared plan', 'In Ops runbooks · Version 1 · PDF']]);
+    rows.dispatchEvent(new CustomEvent('ui-open', { detail: { item: rows.items[0] } }));
+    expect(reply.respond).toHaveBeenCalledWith({ app: 'folio', id: 'd-9', version: '1', title: 'Shared plan' });
+    button(el, 'Cancel')!.click();
+    expect(reply.cancel).toHaveBeenCalled();
   });
 });

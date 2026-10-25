@@ -76,6 +76,15 @@ Folio's card on Home (on every kind of floor) says how much has been published t
 
 Find (`search: true`) asks `GET /v1/search?q=` as you type. It answers with up to ten documents you may read, or that have been published to you, that have every word you typed as the start of a word in their title, their tags or their text, best first: a word in the title counts most, then in a tag, then in the text. Its readers search a document's newest version; its audience searches only the version published to them. The text is the version's own (the rendition worker's), up to its first 400,000 characters. A document in a library on another team's floor you're on opens there; anything else opens where you are.
 
+## Other apps
+
+Folio handles the standard intents, so another app can use its documents without knowing about Folio:
+
+- `document.open` opens a document to read, at the version asked for.
+- `library.open` opens one of its libraries.
+- `document.pick` opens Folio over the asking app as a picker. The person finds a document by what they type (as Find does) or looks through a library on this floor or shared with them, newest first. Only the kinds of file the asking app takes (`accept`) are offered. Folio answers with a `DocumentRef`: the newest version, or for someone who only has a document because it was published to them, the version published to them. Closing the picker cancels the request.
+- `folio.open` `{ path }` opens Folio at a place in it, as its address has it. Its card on Home uses it.
+
 ## On the record
 
 Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a series made or removed, a document uploaded (with its series and issue number when it's an issue), a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
@@ -116,6 +125,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
 | `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
 | `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them, matching every word by title, tag or text |
+| `GET /find?q=` | The same search for the picker, as whole documents with their `libraryName` and `audienceOnly` (only the version published to them is theirs) |
 | `GET /home` | Home's card: what's been published to the caller since they last looked (`published.new`, the newest three), and for the floor's leads its `drafts` |
 | `PUT /published/looked` | The caller has looked at what's published to them: Home stops counting it as new. The app sends it when "Published to you" opens |
 | `GET /documents/:doc` | Where a document is (`{id, library, title}`), for `document.open`, which gives only its id |
