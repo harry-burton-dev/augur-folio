@@ -344,6 +344,60 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect((await store.publishedTo(['org'])).total).toBe(0);
   });
 
+  it('finds documents by every word typed, in their title, tags or text, only where the person may read', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const old = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Old', createdBy: 'u-1' });
+    const ready = (version: string, text: string) =>
+      store.finishRendition(version, { state: 'ready', engine: 'docling', engineVersion: '2.14.0', readerKey: `renditions/${version}/reader.md`, images: [], text });
+    const { id: hr } = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'Human resources', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel policy', createdBy: 'u-1', tags: [hr] }, file('d-1', 'v-1'));
+    await ready('v-1', 'Book trains before flights.');
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'Expenses', createdBy: 'u-1' }, file('d-2', 'v-2'));
+    await ready('v-2', 'Claims for travelling go through payroll.');
+    await store.createDocument({ id: 'd-3', library: old.id, title: 'Travel 2019', createdBy: 'u-1' }, file('d-3', 'v-3'));
+    await store.archiveLibrary(old.id, 'u-1');
+    const found = async (principals: string[], q: string) => (await store.search(principals, q)).map((h) => h.document.id);
+
+    // The title counts most, then the text; every word must be found, each as the start of a word.
+    expect(await found(['tree:w-fin'], 'trav')).toEqual(['d-1', 'd-2']);
+    expect(await found(['tree:w-fin'], 'travel trains')).toEqual(['d-1']);
+    expect(await found(['tree:w-fin'], 'human')).toEqual(['d-1']);
+    expect(await found(['tree:w-fin'], 'rains')).toEqual([]);
+    expect(await found(['tree:w-fin'], '  ?! ')).toEqual([]);
+    expect(await store.search(['tree:w-fin'], 'expenses')).toMatchObject([{ document: { id: 'd-2', title: 'Expenses' }, libraryName: 'Policies', audienceOnly: false }]);
+    expect(await found(['tree:w-legal', 'org'], 'travel')).toEqual([]);
+
+    // Its audience finds only the version published to them.
+    await store.publish({ document: 'd-1', version: 1, audience: ['team:w-legal'], by: 'u-1' });
+    await store.addVersion('d-1', file('d-1', 'v-4'));
+    await ready('v-4', 'Trains, flights and taxis.');
+    expect(await found(['tree:w-fin'], 'taxis')).toEqual(['d-1']);
+    expect(await found(['team:w-legal'], 'taxis')).toEqual([]);
+    expect(await store.search(['team:w-legal'], 'trains')).toMatchObject([{ document: { id: 'd-1' }, audienceOnly: true }]);
+  });
+
+  it('remembers when someone last looked at what’s published to them, and lists a floor’s drafts', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'Expenses', createdBy: 'u-1' }, file('d-2', 'v-2'));
+    await store.createDocument({ id: 'd-3', library: lib.id, title: 'Leave', createdBy: 'u-1' }, file('d-3', 'v-3'));
+    expect(await store.lookedAt('u-5')).toBeUndefined();
+    await store.publish({ document: 'd-1', version: 1, audience: ['org'], by: 'u-1' });
+    await tick();
+    await store.markLooked('u-5');
+    const looked = await store.lookedAt('u-5');
+    expect(looked).toBeDefined();
+    await tick();
+    await store.publish({ document: 'd-2', version: 1, audience: ['org'], by: 'u-1' });
+    expect((await store.publishedTo(['org'], { since: looked })).documents.map((d) => d.title)).toEqual(['Expenses']);
+    // An older look never undoes a newer one.
+    await store.markLooked('u-5', '2020-01-01T00:00:00.000Z');
+    expect(await store.lookedAt('u-5')).toBe(looked);
+
+    expect(await store.draftsOn('w-fin')).toMatchObject({ total: 1, documents: [{ id: 'd-3', libraryName: 'Policies' }] });
+    expect((await store.draftsOn('w-legal')).total).toBe(0);
+  });
+
   it('numbers a series’ issues in turn, a period each, and finds the ones either side', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Reports', createdBy: 'u-1' });
     const other = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Other', createdBy: 'u-1' });
@@ -460,7 +514,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
@@ -468,7 +522,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {

@@ -105,6 +105,12 @@ const service = ({
         documents: [{ ...travel, id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', state: 'published', published: { id: 'p-9', version: 2, audience: ['team:w-fin'], publishedAt: new Date().toISOString(), note: 'For Monday' } }],
         total: 1,
       });
+    if (method === 'PUT' && where === '/published/looked') return new Response(null, { status: 204 });
+    if (method === 'GET' && where === '/home')
+      return Response.json({
+        published: { new: 1, since: '2026-10-20T00:00:00.000Z', documents: [{ id: 'd-9', library: 'l-9', title: 'Shared plan', libraryName: 'Ops runbooks', at: new Date().toISOString() }] },
+        ...(lead ? { drafts: { total: 4, documents: [{ id: 'd-1', library: 'l-1', title: 'Travel policy', libraryName: 'Policies', at: new Date().toISOString() }] } } : {}),
+      });
     if (method === 'GET' && where === '/documents/d-9') return Response.json({ id: 'd-9', library: 'l-9', title: 'Shared plan', only: 2 });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader') return new Response(TRAVEL_MD, { headers: { 'content-type': 'text/markdown' } });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader/images/1.png') return new Response('png', { headers: { 'content-type': 'image/png' } });
@@ -226,6 +232,8 @@ describe('folio paths', () => {
     expect(placeForIntent({ type: 'document.open', payload: { app: 'other', id: 'd-9', title: 'Theirs' } })).toBeUndefined();
     expect(placeForIntent({ type: 'document.open', payload: { id: 'd-9' } })).toBeUndefined();
     expect(placeForIntent(undefined)).toBeUndefined();
+    expect(placeForIntent({ type: 'folio.open', payload: { path: '/published' } })).toEqual({ published: true, adding: false });
+    expect(placeForIntent({ type: 'folio.open', payload: {} })).toBeUndefined();
   });
 
   it('nests folders and finds the way down to one', () => {
@@ -713,6 +721,7 @@ describe('folio', () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch, '/published');
     expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Published to you');
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/published/looked']);
     const rows = list(el);
     expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Shared plan', 'In Ops runbooks · Version 2 · For Monday']]);
     rows.dispatchEvent(new CustomEvent('ui-open', { detail: { item: rows.items[0] } }));
@@ -789,5 +798,42 @@ describe('folio series', () => {
     button(reader, 'Next: Week 43, 2026')!.click();
     await settle(el);
     expect(calls.some(([, p]) => p === '/api/folio/v1/libraries/l-1/documents/d-6')).toBe(true);
+  });
+});
+
+describe('folio on Home', () => {
+  const card = async (fetch: MountContext['fetch']) => {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const context = ctx(fetch, '/');
+    await app.surfaces!['./Glance'].mount(el, context);
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r));
+      await el.querySelector('folio-glance')?.updateComplete;
+    }
+    return { el, context };
+  };
+
+  it('says what’s new to the person and, for a lead, the drafts waiting, and opens them', async () => {
+    const { fetch } = service();
+    const { el, context } = await card(fetch);
+    expect(el.querySelector<HTMLElement & { items: unknown[] }>('ui-facts')!.items).toEqual([
+      { value: 1, label: 'New to you' },
+      { value: 4, label: 'Drafts' },
+    ]);
+    const rows = list(el);
+    expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Shared plan', 'From Ops runbooks']]);
+    rows.dispatchEvent(new CustomEvent('ui-open', { detail: { item: rows.items[0] } }));
+    expect(context.raise).toHaveBeenCalledWith({ type: 'document.open', payload: { app: 'folio', id: 'd-9', title: 'Shared plan' } });
+    button(el, 'Published to you')!.click();
+    expect(context.raise).toHaveBeenCalledWith({ type: 'folio.open', payload: { path: '/published' } });
+    app.surfaces!['./Glance'].unmount!(el);
+    expect(el.querySelector('folio-glance')).toBeNull();
+  });
+
+  it('leaves drafts out for members', async () => {
+    const { fetch } = service({ lead: false });
+    const { el } = await card(fetch);
+    expect(el.querySelector<HTMLElement & { items: unknown[] }>('ui-facts')!.items).toEqual([{ value: 1, label: 'New to you' }]);
   });
 });

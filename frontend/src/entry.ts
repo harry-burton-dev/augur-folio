@@ -1,8 +1,9 @@
-import { DOCUMENT_OPEN, defineMicroFrontend, isDocumentRef, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, defineMicroFrontend, isDocumentRef, openDocument, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
-import { FolioApi, pathFor, placeFor, type Place } from './api.js';
+import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
 import './folio-app.js';
+import './folio-glance.js';
 
 /**
  * Where Folio is in the address bar, so a place in it can be shared, and Back
@@ -14,12 +15,19 @@ export const addressFor = (pathname: string, mountedAt: string, place: Omit<Plac
   return `${pathname.slice(0, pathname.length - inner.length)}${pathFor(place)}`;
 };
 
+/** Opens Folio at a place in it, `{ path }` as its address has it: how its card on Home goes in. */
+export const FOLIO_OPEN = 'folio.open';
+
 /**
- * Where an intent asks Folio to start: `document.open` for one of Folio's own
- * documents opens it to read, at the version asked for. Its library is found
- * from the document.
+ * Where an intent asks Folio to start: `folio.open` at the path it names, or
+ * `document.open` for one of Folio's own documents opens it to read, at the
+ * version asked for. Its library is found from the document.
  */
 export const placeForIntent = (intent: Intent | undefined): Place | undefined => {
+  if (intent?.type === FOLIO_OPEN) {
+    const path = (intent.payload as { path?: unknown } | undefined)?.path;
+    return typeof path === 'string' ? placeFor(path) : undefined;
+  }
   if (intent?.type !== DOCUMENT_OPEN || !isDocumentRef(intent.payload) || intent.payload.app !== 'folio') return undefined;
   const version = /^[1-9]\d*$/.test(intent.payload.version ?? '') ? Number(intent.payload.version) : undefined;
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
@@ -50,5 +58,23 @@ export default defineMicroFrontend({
   },
   unmount(el: HTMLElement) {
     render(html``, el);
+  },
+  surfaces: {
+    /** The card on Home: what's new to the person, and the floor's drafts for its leads. */
+    './Glance': {
+      mount(el: HTMLElement, ctx: MountContext) {
+        render(
+          html`<folio-glance
+            .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
+            @folio-open-document=${(e: CustomEvent<{ document: Brief }>) => void openDocument(ctx, { app: 'folio', id: e.detail.document.id, title: e.detail.document.title })}
+            @folio-open-published=${() => void ctx.raise({ type: FOLIO_OPEN, payload: { path: '/published' } })}
+          ></folio-glance>`,
+          el,
+        );
+      },
+      unmount(el: HTMLElement) {
+        render(html``, el);
+      },
+    },
   },
 });

@@ -19,6 +19,7 @@ import { accessRoutes } from './access.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipalOf, peopleFromEnv, type CallerPrincipals } from './people.ts';
 import { publisherFor, publishingRoutes } from './publishing.ts';
+import { homeRoutes } from './home.ts';
 import { seriesRoutes } from './series.ts';
 import { BadParentError, BadTagError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { tagRoutes } from './tags.ts';
@@ -291,6 +292,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
       await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
       await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log, publisher });
       await seriesRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, publisher, refused });
+      await homeRoutes(app, { store, onFloor, principalsOf });
     },
     { prefix: `/${API_VERSION}` },
   );
