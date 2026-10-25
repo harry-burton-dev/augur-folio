@@ -314,6 +314,24 @@ export class FolioApi {
     return this.call<ReaderState>('POST', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}/reader/retry`);
   }
 
+  /** A version's reader copy, as Markdown. */
+  async reader(library: string, document: string, number: number): Promise<string> {
+    const res = await this.fetchOnFloor(`${this.versionPath(library, document, number)}/reader`);
+    if (!res.ok) await this.answer(res);
+    return res.text();
+  }
+
+  /** A picture a version's reader copy shows, by its name there (`1.png`). */
+  async readerImage(library: string, document: string, number: number, name: string): Promise<Blob> {
+    const res = await this.fetchOnFloor(`${this.versionPath(library, document, number)}/reader/images/${encodeURIComponent(name)}`);
+    if (!res.ok) await this.answer(res);
+    return res.blob();
+  }
+
+  private versionPath(library: string, document: string, number: number) {
+    return `/api/folio/v1/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}`;
+  }
+
   /** A version's file exactly as it was uploaded. Each download goes in the audit log. */
   async original(library: string, document: string, number: number): Promise<Blob> {
     const res = await this.fetchOnFloor(`/api/folio/v1/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}/original`);
@@ -330,20 +348,28 @@ export interface Place {
   library?: string;
   folder?: string;
   view?: string;
+  /** A document being read, and which version of it (the newest when there's none). */
+  document?: string;
+  version?: number;
   /** Open "New library" straight away (the menu's item). */
   adding: boolean;
 }
 
 export const placeFor = (path: string): Place => {
-  const [first, second, third, fourth] = path.split('/').filter(Boolean).map(decodeURIComponent);
+  const [first, second, third, fourth, fifth, sixth] = path.split('/').filter(Boolean).map(decodeURIComponent);
   if (first !== 'libraries' || !second) return { adding: false };
   if (second === 'new') return { adding: true };
+  if (third === 'documents' && fourth) {
+    const version = fifth === 'versions' && /^[1-9]\d*$/.test(sixth ?? '') ? Number(sixth) : undefined;
+    return { library: second, document: fourth, ...(version ? { version } : {}), adding: false };
+  }
   if (third === 'views') return { library: second, ...(fourth ? { view: fourth } : {}), adding: false };
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder, view }: Omit<Place, 'adding'>) => {
+export const pathFor = ({ library, folder, view, document, version }: Omit<Place, 'adding'>) => {
   if (!library) return '/libraries';
   const at = `/libraries/${encodeURIComponent(library)}`;
+  if (document) return `${at}/documents/${encodeURIComponent(document)}${version ? `/versions/${version}` : ''}`;
   return view ? `${at}/views/${encodeURIComponent(view)}` : folder ? `${at}/${encodeURIComponent(folder)}` : at;
 };

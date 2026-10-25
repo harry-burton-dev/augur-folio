@@ -48,6 +48,10 @@ Every version gets a reader copy: the rendition worker turns its file into Markd
 
 The worker leases one version at a time from Folio's `renditions` table, so any number can run side by side, and hears of new versions straight away (Postgres `LISTEN`). Under `pnpm dev:app` there's no worker: Markdown and plain text are their own reader copies, and other files say the worker isn't running.
 
+## Reading
+
+Opening a document opens its reader page: the reader copy as a page of text, set in the kit's type and the floor's colours, light or dark. Its headings make the contents down the side, which follow along as you read and take you to a heading in one press. Every heading and paragraph has a stable anchor (`#claims`, `#b12`), so a link can point into a document. The text can be made smaller or larger, and the page wide or narrow; Folio remembers that for you, on that browser. It also remembers where you got to in each version and takes you back there next time. The side panel has the document's versions (an older one says so, with a way to the newest), its tags, and "Download the original" one press away. Until a version's reader copy is ready, the page says it's being made; if it failed, it says why, and whoever may change the document can try again.
+
 ## On the record
 
 Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a document uploaded, a version added, a document deleted, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.

@@ -1,5 +1,5 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
-import type { UiDialog, UiFilterBar, UiList, UiTagPicker, UiTree } from '@augur/ui-kit';
+import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor } from './entry.js';
@@ -11,6 +11,7 @@ const reports = { ...policies, id: 'l-2', name: 'Reports', description: '' };
 const hr = { id: 'f-hr', library: 'l-1', name: 'HR', createdBy: 'u1', createdAt: '' };
 const leave = { id: 'f-leave', library: 'l-1', parent: 'f-hr', name: 'Leave', createdBy: 'u2', createdAt: '' };
 const it_ = { id: 'f-it', library: 'l-1', name: 'IT', createdBy: 'u2', createdAt: '' };
+const TRAVEL_MD = '# Travel policy\n\nBook through the travel desk.\n\n## Claims\n\nClaim within 30 days.\n\n![A map](images/1.png)\n\n![](https://tracker.example/x.gif)\n';
 const READY = { state: 'ready', pages: 3, thumbnail: true } as ReaderState;
 const DAMAGED = { state: 'failed', error: 'The file is damaged.', thumbnail: false } as ReaderState;
 const v = (number: number, filename = 'travel.pdf', size = 1_234_567, reader = READY) => ({ id: `v-${number}`, document: 'd-1', number, filename, mediaType: 'application/pdf', size, sha256: 'ab', createdBy: 'u2', createdAt: new Date().toISOString(), reader });
@@ -25,6 +26,7 @@ const recent = { id: 'vw-1', library: 'l-1', name: 'Recent policy', query: { tag
 const service = ({ lead = true, libraries = [policies, reports], folders = [hr, leave, it_], documents = [] as (typeof travel & { folder?: string })[], views = [recent] as (typeof recent)[] } = {}) => {
   const calls: [string, string, unknown?][] = [];
   let retried = false;
+  const deleted = new Set<string>();
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     const raw = init?.body;
@@ -35,7 +37,7 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
     const params = new URLSearchParams(query);
     if (method === 'GET' && /^\/libraries\/[^/]+\/documents$/.test(where)) {
       const tags = params.getAll('tag');
-      const found = documents.filter((d) => (params.get('below') ? true : d.folder === (params.get('folder') ?? undefined)) && tags.every((t) => d.tags.includes(t)));
+      const found = documents.filter((d) => !deleted.has(d.id) && (params.get('below') ? true : d.folder === (params.get('folder') ?? undefined)) && tags.every((t) => d.tags.includes(t)));
       return Response.json({ documents: found, total: found.length });
     }
     if (method === 'PUT' && where === '/libraries/l-1/documents/d-1/tags') return Response.json({ ...travel, tags: body.tags });
@@ -48,6 +50,8 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
       return Response.json({ ...travel, id: 'd-new', title: params.get('filename'), latest: v(1, params.get('filename')!) }, { status: 201 });
     }
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, versions: [v(2), v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED)] });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader') return new Response(TRAVEL_MD, { headers: { 'content-type': 'text/markdown' } });
+    if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/2/reader/images/1.png') return new Response('png', { headers: { 'content-type': 'image/png' } });
     if (method === 'POST' && where === '/libraries/l-1/documents/d-1/versions/1/reader/retry') {
       retried = true;
       return Response.json({ state: 'queued', thumbnail: false }, { status: 202 });
@@ -55,7 +59,10 @@ const service = ({ lead = true, libraries = [policies, reports], folders = [hr, 
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/versions/1/original') return new Response('%PDF old', { headers: { 'content-type': 'application/pdf' } });
     if (method === 'POST' && where === '/libraries/l-1/documents/d-1/versions') return Response.json(v(3), { status: 201 });
     if (method === 'PATCH' && where === '/libraries/l-1/documents/d-1') return Response.json({ ...travel, ...body });
-    if (method === 'DELETE' && where === '/libraries/l-1/documents/d-1') return new Response(null, { status: 204 });
+    if (method === 'DELETE' && where === '/libraries/l-1/documents/d-1') {
+      deleted.add('d-1');
+      return new Response(null, { status: 204 });
+    }
     if (method === 'GET' && route === '/libraries') return Response.json({ libraries, can: { create: lead } });
     const one = route.match(/^\/libraries\/([^/]+)$/);
     if (method === 'GET' && one) {
@@ -96,6 +103,13 @@ const ctx = (fetch: MountContext['fetch'], path = '/libraries'): MountContext =>
   fetch,
 });
 
+/** Opens Travel policy on its page, then its details, to change it. */
+const details = async (el: HTMLElement) => {
+  list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+  await settle(el);
+  button(el, 'Change it')!.click();
+  await settle(el);
+};
 const settle = async (el: HTMLElement) => {
   for (let i = 0; i < 6; i++) {
     await new Promise((r) => setTimeout(r));
@@ -115,6 +129,7 @@ const button = (el: HTMLElement, text: string) => [...el.querySelectorAll<HTMLEl
 
 afterEach(() => {
   document.body.innerHTML = '';
+  localStorage.clear();
   window.history.replaceState(null, '', '/');
 });
 
@@ -178,15 +193,14 @@ describe('folio', () => {
   it('renames or moves a document, and deletes one', async () => {
     const { fetch, calls } = service({ documents: [travel] });
     const el = await mounted(fetch);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
-    await settle(el);
+    await details(el);
     button(el, 'Rename or move')!.click();
     await settle(el);
     let dialog = el.querySelector<UiDialog>('ui-dialog')!;
     expect(dialog.querySelector('ui-select')!.options.map((o) => (typeof o === 'string' ? o : o.label))).toEqual(['Policies (the top)', 'HR', 'HR / Leave', 'IT']);
     await dialog.submit!({ title: ' Travel ', folder: 'f-hr' }, dialog);
     expect(calls).toContainEqual(['PATCH', '/api/folio/v1/libraries/l-1/documents/d-1', { title: 'Travel', folder: 'f-hr' }]);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    button(el, 'Change it')!.click();
     await settle(el);
     button(el, 'Delete')!.click();
     await settle(el);
@@ -195,6 +209,8 @@ describe('folio', () => {
     await dialog.submit!({}, dialog);
     await settle(el);
     expect(calls).toContainEqual(['DELETE', '/api/folio/v1/libraries/l-1/documents/d-1']);
+    // Back in the library, without it.
+    expect(el.querySelector('folio-reader')).toBeNull();
     expect(list(el).items.map((i) => i.title)).toEqual(['HR', 'IT']);
   });
 
@@ -214,8 +230,7 @@ describe('folio', () => {
     URL.createObjectURL = vi.fn(() => 'blob:x');
     URL.revokeObjectURL = vi.fn();
     const el = await mounted(fetch);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
-    await settle(el);
+    await details(el);
     const dialog = el.querySelector<UiDialog>('ui-dialog')!;
     expect(dialog.heading).toBe('Travel policy');
     const versions = dialog.querySelector<UiList>('ui-list')!;
@@ -234,13 +249,75 @@ describe('folio', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens a document on its own page to read, with its contents, versions and the original', async () => {
+    window.history.replaceState(null, '', '/@finance/folio/libraries');
+    URL.createObjectURL = vi.fn(() => 'blob:map');
+    URL.revokeObjectURL = vi.fn();
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/documents/d-1');
+    const page = el.querySelector('folio-reader')!;
+    expect(page.querySelector('h1')!.textContent).toBe('Travel policy');
+    expect(page.querySelector('.folio-reader-head p')!.textContent).toContain('Version 2 · PDF');
+    const reader = page.querySelector<UiReader>('ui-reader')!;
+    expect(reader.markdown).toBe('# Travel policy\n\nBook through the travel desk.\n\n## Claims\n\nClaim within 30 days.\n\n![A map](images/1.png)\n\n![](https://tracker.example/x.gif)\n');
+    // Its own first heading only repeats the title above it, so the contents start below it.
+    expect(page.querySelector<UiContents>('ui-contents')!.items.map((i) => i.text)).toEqual(['Claims']);
+    // Its own pictures come from Folio; nothing else is fetched.
+    expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/reader/images/1.png']);
+    expect(calls.some(([, p]) => p.includes('tracker'))).toBe(false);
+    expect(reader.shadowRoot!.querySelector('img')!.getAttribute('src')).toBe('blob:map');
+    expect(page.querySelector<UiList>('ui-list')!.items.map((i) => i.title)).toEqual(['Version 2, reading', 'Version 1']);
+    page.querySelector<HTMLButtonElement>('.folio-crumb')!.click();
+    await settle(el);
+    expect(el.querySelector('folio-reader')).toBeNull();
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1');
+  });
+
+  it('opens straight at an older version from its path, and says there is a newer one', async () => {
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch, '/libraries/l-1/documents/d-1/versions/1');
+    const page = el.querySelector('folio-reader')!;
+    expect(page.querySelector('.folio-reader-old')!.textContent).toContain('This is version 1. The newest is version 2.');
+    // Its reader copy failed: why, and a way to ask again.
+    const state = page.querySelector('ui-state')!;
+    expect([state.getAttribute('heading'), state.getAttribute('body'), state.getAttribute('action')]).toEqual(['There’s no reader copy of this version', 'The file is damaged.', 'Try again']);
+    state.dispatchEvent(new CustomEvent('ui-action'));
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/documents/d-1/versions/1/reader/retry']);
+    page.querySelector<HTMLButtonElement>('.folio-reader-old .folio-link')!.click();
+    await settle(el);
+    expect(el.querySelector<UiReader>('ui-reader')).not.toBeNull();
+  });
+
+  it('remembers how a person likes to read, and where they got to', async () => {
+    const { fetch } = service({ documents: [travel] });
+    let el = await mounted(fetch, '/libraries/l-1/documents/d-1');
+    let reader = el.querySelector<UiReader>('ui-reader')!;
+    expect([reader.size, reader.width]).toEqual(['medium', 'narrow']);
+    button(el, 'Larger')!.click();
+    await settle(el);
+    expect(reader.size).toBe('large');
+    reader.dispatchEvent(new CustomEvent('ui-position', { detail: { anchor: 'b4' }, bubbles: true }));
+    await settle(el);
+    expect(el.querySelector<UiContents>('ui-contents')!.current).toBe('claims');
+    el.remove();
+
+    el = await mounted(fetch, '/libraries/l-1/documents/d-1');
+    reader = el.querySelector<UiReader>('ui-reader')!;
+    expect(reader.size).toBe('large');
+    expect(reader.position).toBe('b4');
+    expect(el.querySelector<UiContents>('ui-contents')!.current).toBe('claims');
+  });
+
   it('asks again for a reader copy that failed, and looks again until it is made', async () => {
     const App = customElements.get('folio-app') as unknown as { readerPollMs: number };
     App.readerPollMs = 10;
     const { fetch, calls } = service({ documents: [travel] });
     const el = await mounted(fetch);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
-    await settle(el);
+    await details(el);
     const versions = () => el.querySelector<UiDialog>('ui-dialog')!.querySelector<UiList>('ui-list')!;
     versions().dispatchEvent(new CustomEvent('ui-action', { detail: { item: { id: '1' }, action: { id: 'retry' } } }));
     await settle(el);
@@ -406,8 +483,7 @@ describe('folio', () => {
   it('tags a document from its dialog, and adds a new tag when the library allows', async () => {
     const { fetch, calls } = service({ documents: [travel] });
     const el = await mounted(fetch);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
-    await settle(el);
+    await details(el);
     const picker = el.querySelector<UiTagPicker>('ui-dialog ui-tag-picker')!;
     expect(picker.creatable).toBe(true);
     picker.dispatchEvent(new CustomEvent('ui-change', { detail: { values: ['t-pol'] } }));
