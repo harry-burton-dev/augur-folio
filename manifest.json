@@ -42,6 +42,8 @@
   ],
   "handles": [
     "document.open",
+    "document.pick",
+    "library.open",
     "folio.open"
   ],
   "maxUpload": 200,

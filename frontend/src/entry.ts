@@ -1,9 +1,11 @@
-import { DOCUMENT_OPEN, defineMicroFrontend, isDocumentRef, openDocument, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, DOCUMENT_PICK, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isLibraryRef, openDocument, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
 import './folio-app.js';
 import './folio-glance.js';
+import './folio-picker.js';
+import type { Picked } from './folio-picker.js';
 
 /**
  * Where Folio is in the address bar, so a place in it can be shared, and Back
@@ -19,15 +21,17 @@ export const addressFor = (pathname: string, mountedAt: string, place: Omit<Plac
 export const FOLIO_OPEN = 'folio.open';
 
 /**
- * Where an intent asks Folio to start: `folio.open` at the path it names, or
- * `document.open` for one of Folio's own documents opens it to read, at the
- * version asked for. Its library is found from the document.
+ * Where an intent asks Folio to start: `folio.open` at the path it names,
+ * `library.open` at one of Folio's libraries, or `document.open` for one of
+ * Folio's own documents opens it to read, at the version asked for. Its
+ * library is found from the document.
  */
 export const placeForIntent = (intent: Intent | undefined): Place | undefined => {
   if (intent?.type === FOLIO_OPEN) {
     const path = (intent.payload as { path?: unknown } | undefined)?.path;
     return typeof path === 'string' ? placeFor(path) : undefined;
   }
+  if (intent?.type === LIBRARY_OPEN) return isLibraryRef(intent.payload) && intent.payload.app === 'folio' ? { library: intent.payload.id, adding: false } : undefined;
   if (intent?.type !== DOCUMENT_OPEN || !isDocumentRef(intent.payload) || intent.payload.app !== 'folio') return undefined;
   const version = /^[1-9]\d*$/.test(intent.payload.version ?? '') ? Number(intent.payload.version) : undefined;
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
@@ -36,6 +40,22 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
 /** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
 export default defineMicroFrontend({
   mount(el: HTMLElement, ctx: MountContext) {
+    // Another app asked for a document: Folio opens over it as a picker, and answers with the one chosen.
+    if (ctx.intent?.type === DOCUMENT_PICK && ctx.reply) {
+      const reply = ctx.reply;
+      const pick = (ctx.intent.payload ?? {}) as DocumentPick;
+      render(
+        html`<folio-picker
+          .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
+          purpose=${typeof pick.purpose === 'string' ? pick.purpose : ''}
+          .accept=${Array.isArray(pick.accept) ? pick.accept.filter((a) => typeof a === 'string') : []}
+          @folio-picked=${(e: CustomEvent<{ document: Picked }>) => reply.respond(e.detail.document)}
+          @folio-cancel=${() => reply.cancel()}
+        ></folio-picker>`,
+        el,
+      );
+      return;
+    }
     let mountedAt = ctx.path;
     const moved = (e: CustomEvent<Omit<Place, 'adding'>>) => {
       const to = addressFor(window.location.pathname, mountedAt, e.detail);

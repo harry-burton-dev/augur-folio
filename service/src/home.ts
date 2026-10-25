@@ -18,6 +18,8 @@ interface SearchAnswer {
 const ON_CARD = 3;
 /** How many results Find shows from one app. */
 const FOUND = 10;
+/** How many the picker lists for what's typed. */
+const PICKED = 30;
 
 /** A document as Home's card names it. */
 const brief = (d: FolioDocument & { libraryName: string }) => ({ id: d.id, library: d.library, title: d.title, libraryName: d.libraryName, at: d.published?.publishedAt ?? d.updatedAt });
@@ -48,6 +50,18 @@ export const homeRoutes = async (app: FastifyInstance, { store, onFloor, princip
           ...(!audienceOnly && d.workspace !== caller.workspace.id && principals.includes(`team:${d.workspace}`) ? { workspace: d.workspace } : {}),
         })),
       } satisfies SearchAnswer;
+    },
+  );
+
+  /** The same search for Folio's own picker (`document.pick`): whole documents, with their library and whether only a published version is the caller's to pick. */
+  app.get<{ Querystring: { q?: string } }>(
+    '/find',
+    { schema: { querystring: { type: 'object', properties: { q: { type: 'string', maxLength: 200 } } } } },
+    async (req, reply) => {
+      const caller = onFloor(req, reply);
+      if (!caller) return reply;
+      const hits = await store.search(await principalsOf(caller), req.query.q ?? '', PICKED);
+      return { documents: hits.map(({ document, libraryName, audienceOnly }) => ({ ...document, libraryName, audienceOnly })) };
     },
   );
 

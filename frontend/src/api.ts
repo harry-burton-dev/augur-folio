@@ -27,6 +27,9 @@ export interface Tag {
 export type DocumentSort = 'title' | 'newest' | 'updated' | 'period';
 export type Since = 'week' | 'month' | 'quarter' | 'year';
 
+/** A document the picker found: with its library, and whether only the version published to the caller is theirs to pick. */
+export type Findable = FolioDocument & { libraryName: string; audienceOnly: boolean };
+
 /** A document as Home's card names it. */
 export interface Brief {
   id: string;
@@ -551,6 +554,11 @@ export class FolioApi {
   /** Notes that the caller has looked at what's published to them, so Home stops counting it as new. */
   looked() {
     return this.call<void>('PUT', '/published/looked');
+  }
+
+  /** Documents the caller may read, or has had published to them, matching every word of `q`: for the picker. */
+  find(q: string) {
+    return this.call<{ documents: Findable[] }>('GET', `/find?q=${encodeURIComponent(q)}`);
   }
 
   /** What Home's card shows on this floor. */
