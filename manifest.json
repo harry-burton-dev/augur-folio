@@ -12,6 +12,24 @@
     "team",
     "org"
   ],
+  "surfaces": [
+    {
+      "floor": "personal",
+      "slot": "card",
+      "module": "./Glance"
+    },
+    {
+      "floor": "team",
+      "slot": "card",
+      "module": "./Glance"
+    },
+    {
+      "floor": "org",
+      "slot": "card",
+      "module": "./Glance"
+    }
+  ],
+  "search": true,
   "storage": {
     "database": true,
     "bucket": true
@@ -23,7 +41,8 @@
     "events:publish"
   ],
   "handles": [
-    "document.open"
+    "document.open",
+    "folio.open"
   ],
   "maxUpload": 200,
   "menu": [

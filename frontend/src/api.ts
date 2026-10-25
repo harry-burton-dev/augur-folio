@@ -27,6 +27,22 @@ export interface Tag {
 export type DocumentSort = 'title' | 'newest' | 'updated' | 'period';
 export type Since = 'week' | 'month' | 'quarter' | 'year';
 
+/** A document as Home's card names it. */
+export interface Brief {
+  id: string;
+  library: string;
+  title: string;
+  libraryName: string;
+  /** When it was published, or for a draft last changed (ISO). */
+  at: string;
+}
+
+/** What Home's card shows: what's new to the person since they last looked, and the floor's drafts for its leads. */
+export interface HomeGlance {
+  published: { new: number; since?: string; documents: Brief[] };
+  drafts?: { total: number; documents: Brief[] };
+}
+
 /** Where a document is in being published: never yet, out now, or taken back. */
 export type DocumentState = 'draft' | 'published' | 'withdrawn';
 
@@ -530,6 +546,16 @@ export class FolioApi {
   /** What's out to the caller now, newest first. */
   published() {
     return this.call<PublishedPage>('GET', '/published');
+  }
+
+  /** Notes that the caller has looked at what's published to them, so Home stops counting it as new. */
+  looked() {
+    return this.call<void>('PUT', '/published/looked');
+  }
+
+  /** What Home's card shows on this floor. */
+  home() {
+    return this.call<HomeGlance>('GET', '/home');
   }
 
   /** Where a document is, from its id alone, as another app passes it. */

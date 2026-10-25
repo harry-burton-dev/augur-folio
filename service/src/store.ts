@@ -443,7 +443,15 @@ export interface FolioStore {
   /** A document's publications, newest first. */
   publications(document: string): Promise<Publication[]>;
   /** What is out now to anyone who stands for these principals, newest first, with each one's library's name. */
-  publishedTo(principals: readonly string[], page?: { limit?: number; offset?: number }): Promise<PublishedPage>;
+  publishedTo(principals: readonly string[], page?: { limit?: number; offset?: number; since?: string }): Promise<PublishedPage>;
+  /** When someone last looked at what's published to them (ISO), if they ever have. */
+  lookedAt(person: string): Promise<string | undefined>;
+  /** Notes that someone has just looked at what's published to them. */
+  markLooked(person: string, at?: string): Promise<void>;
+  /** Drafts in the floor's libraries in use, the most recently changed first, with each one's library's name. */
+  draftsOn(workspace: string, page?: { limit?: number }): Promise<{ documents: (FolioDocument & { libraryName: string })[]; total: number }>;
+  /** Documents someone who stands for these principals may read, or has had published to them, matching every word of `q` (by title, tag or text), best first. */
+  search(principals: readonly string[], q: string, limit?: number): Promise<SearchHit[]>;
   /** A library's series, by name. */
   seriesIn(library: string): Promise<Series[]>;
   series(id: string): Promise<Series | undefined>;
@@ -475,6 +483,23 @@ export interface NewDocument {
   /** Makes it this series' next issue. */
   series?: string;
 }
+
+/** A document Find turned up: its library, and whether the person reaches it only as the audience it's published to. */
+export interface SearchHit {
+  document: FolioDocument;
+  libraryName: string;
+  /** Read only as its audience: Find matched the version published to them, not the newest. */
+  audienceOnly: boolean;
+}
+
+/** The most words Find looks for at once. */
+const MAX_SEARCH_WORDS = 8;
+
+/** What someone typed, as the words Find looks for: lower case, letters and digits, each the start of a word. */
+export const searchWords = (q: string) => [...new Set((q.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).map((w) => w.slice(0, 64)))].slice(0, MAX_SEARCH_WORDS);
+
+/** The words as a Postgres text-search query: every one, each as a prefix. */
+const tsQueryOf = (words: readonly string[]) => words.map((w) => `${w}:*`).join(' & ');
 
 /** Documents published to someone, newest first, and how many there are in all. */
 export interface PublishedPage {
@@ -568,6 +593,7 @@ export class MemoryFolioStore implements FolioStore {
   private readonly pubs: Publication[] = [];
   private readonly seriesList: (Omit<Series, 'issues' | 'last'> & { remindedFor?: string })[] = [];
   private readonly following = new Map<string, Set<string>>();
+  private readonly looked = new Map<string, string>();
   /** What Folio would have told other apps, oldest first: there's no relay without Postgres. */
   readonly outbox: OutboxEvent[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
@@ -987,9 +1013,9 @@ export class MemoryFolioStore implements FolioStore {
     return this.publicationsOf(document).map(copyPublication);
   }
 
-  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number } = {}): Promise<PublishedPage> {
+  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number; since?: string } = {}): Promise<PublishedPage> {
     const live = this.pubs
-      .filter((p) => !p.ended && p.audience.some((a) => principals.includes(a)))
+      .filter((p) => !p.ended && p.audience.some((a) => principals.includes(a)) && (!page.since || p.publishedAt > page.since))
       .flatMap((p) => {
         const doc = this.docs.get(p.document);
         const shelf = this.shelves.get(p.library);
@@ -1086,6 +1112,60 @@ export class MemoryFolioStore implements FolioStore {
     if (!run || run.remindedFor === periodStart) return false;
     run.remindedFor = periodStart;
     return true;
+  }
+
+  async lookedAt(person: string) {
+    return this.looked.get(person);
+  }
+
+  async markLooked(person: string, at = new Date().toISOString()) {
+    const before = this.looked.get(person);
+    if (!before || at > before) this.looked.set(person, at);
+  }
+
+  async draftsOn(workspace: string, page: { limit?: number } = {}) {
+    const drafts = [...this.docs.values()]
+      .filter((d) => d.workspace === workspace && !d.deletedAt && !this.shelves.get(d.library)?.archivedAt)
+      .map((d) => this.withLatest(d))
+      .filter((d) => d.state === 'draft')
+      .sort(newestFirst('updatedAt'));
+    const { limit } = pageOf(page);
+    return { documents: drafts.slice(0, limit).map((d) => ({ ...d, libraryName: this.shelves.get(d.library)!.name })), total: drafts.length };
+  }
+
+  async search(principals: readonly string[], q: string, limit = 10) {
+    const words = searchWords(q);
+    if (!words.length) return [];
+    const wordsOf = (text = '') => text.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    const has = (text: string | undefined, w: string) => wordsOf(text).some((t) => t.startsWith(w));
+    const hits: (SearchHit & { score: number })[] = [];
+    for (const d of this.docs.values()) {
+      const shelf = this.shelves.get(d.library);
+      if (d.deletedAt || !shelf || shelf.archivedAt) continue;
+      const reader = this.readersOf(d.library, d.id).some((p) => principals.includes(p));
+      const [last] = this.publicationsOf(d.id);
+      const live = last && !last.ended && last.audience.some((a) => principals.includes(a)) ? last : undefined;
+      if (!reader && !live) continue;
+      // Its readers search its newest version; its audience only the version published to them.
+      const versions = this.versionList.filter((v) => v.document === d.id);
+      const version = reader ? versions.reduce((a, b) => (b.number > a.number ? b : a)) : versions.find((v) => v.number === live!.version);
+      const text = version && this.renditions.get(version.id)?.text;
+      const tags = [...(this.docTags.get(d.id) ?? [])].map((id) => this.tagList.find((t) => t.id === id)?.name).join(' ');
+      let score = 0;
+      for (const w of words) {
+        const found = (has(d.title, w) ? 4 : 0) + (has(tags, w) ? 2 : 0) + (has(text, w) ? 1 : 0);
+        if (!found) {
+          score = 0;
+          break;
+        }
+        score += found;
+      }
+      if (score) hits.push({ document: this.withLatest(d), libraryName: shelf.name, audienceOnly: !reader, score });
+    }
+    return hits
+      .sort((a, b) => b.score - a.score || b.document.updatedAt.localeCompare(a.document.updatedAt))
+      .slice(0, limit)
+      .map(({ score: _, ...hit }) => hit);
   }
 }
 
@@ -1322,6 +1402,21 @@ export const migrations: { id: string; sql: string }[] = [
         workspace_id text not null,
         created_at timestamptz not null default now(),
         primary key (series_id, person_id)
+      );`,
+  },
+  {
+    id: '008_search',
+    sql: `
+      -- Find matches every word as the start of one in a document's title, its tags or its version's text.
+      alter table folio.documents add column title_words tsvector generated always as (to_tsvector('english', title)) stored;
+      create index documents_title_words on folio.documents using gin (title_words);
+      -- A version's words, from the start of its text: a tsvector holds at most 1 MB.
+      alter table folio.renditions add column words tsvector generated always as (to_tsvector('english', left(coalesce(text, ''), 400000))) stored;
+      create index renditions_words on folio.renditions using gin (words);
+      -- When each person last looked at what's published to them, so Home can say what's new since.
+      create table folio.looked (
+        person_id text primary key,
+        published_at timestamptz not null
       );`,
   },
 ];
@@ -2212,17 +2307,17 @@ export class PgFolioStore implements FolioStore {
     return rows.map(fromPublicationRow);
   }
 
-  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number } = {}): Promise<PublishedPage> {
+  async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number; since?: string } = {}): Promise<PublishedPage> {
     const { limit, offset } = pageOf(page);
     const { rows } = await this.pool.query<DocumentRow & { library_name: string }>(
-      `${DOCUMENT_SELECT}
+      `${DOCUMENT_SELECT.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name')}
         join folio.libraries l on l.id = d.library_id and l.archived_at is null
         join folio.publications live on live.document_id = d.id and live.ended_at is null and live.audience && $1::text[]
-        where d.deleted_at is null
-        order by live.published_at desc, d.id desc limit $2 offset $3`.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name'),
-      [principals, limit, offset],
+        where d.deleted_at is null and ($4::timestamptz is null or live.published_at > $4)
+        order by live.published_at desc, d.id desc limit $2 offset $3`,
+      [principals, limit, offset, page.since ?? null],
     );
-    const total = rows[0] ? Number(rows[0].total) : offset ? (await this.publishedTo(principals, { limit: 1 })).total : 0;
+    const total = rows[0] ? Number(rows[0].total) : offset ? (await this.publishedTo(principals, { limit: 1, since: page.since })).total : 0;
     return { documents: rows.map((r) => ({ ...(fromDocumentRow(r) as FolioDocument & { published: Publication }), libraryName: r.library_name })), total };
   }
 
@@ -2331,6 +2426,55 @@ export class PgFolioStore implements FolioStore {
   async markReminded(series: string, periodStart: string) {
     const { rowCount } = await this.pool.query('update folio.series set reminded_for = $2 where id = $1 and reminded_for is distinct from $2::date', [series, periodStart]);
     return rowCount === 1;
+  }
+
+  async lookedAt(person: string) {
+    const { rows } = await this.pool.query<{ published_at: Date }>('select published_at from folio.looked where person_id = $1', [person]);
+    return rows[0]?.published_at.toISOString();
+  }
+
+  async markLooked(person: string, at = new Date().toISOString()) {
+    await this.pool.query(
+      `insert into folio.looked (person_id, published_at) values ($1, $2)
+        on conflict (person_id) do update set published_at = greatest(folio.looked.published_at, excluded.published_at)`,
+      [person, at],
+    );
+  }
+
+  async draftsOn(workspace: string, page: { limit?: number } = {}) {
+    const { limit } = pageOf(page);
+    const { rows } = await this.pool.query<DocumentRow & { library_name: string }>(
+      `${DOCUMENT_SELECT.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name')}
+        join folio.libraries l on l.id = d.library_id and l.archived_at is null
+        where d.workspace_id = $1 and d.deleted_at is null and not exists (select 1 from folio.publications p where p.document_id = d.id)
+        order by d.updated_at desc, d.id desc limit $2`,
+      [workspace, limit],
+    );
+    return { documents: rows.map((r) => ({ ...fromDocumentRow(r), libraryName: r.library_name })), total: rows[0] ? Number(rows[0].total) : 0 };
+  }
+
+  async search(principals: readonly string[], q: string, limit = 10) {
+    const words = searchWords(q);
+    if (!words.length) return [];
+    // Its readers search its newest version (v); its audience only the version published to them.
+    const { rows } = await this.pool.query<DocumentRow & { library_name: string; audience_only: boolean }>(
+      `${DOCUMENT_SELECT.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name, rd.document_id is null as audience_only')}
+        join folio.libraries l on l.id = d.library_id and l.archived_at is null
+        cross join (select to_tsquery('english', $2) as q) s
+        left join folio.readers rd on rd.document_id = d.id and rd.principals && $1::text[]
+        left join folio.publications live on live.document_id = d.id and live.ended_at is null and live.audience && $1::text[]
+        left join folio.renditions rt on rt.version_id = case when rd.document_id is not null then v.id else live.version_id end
+        cross join lateral (
+          select to_tsvector('english', coalesce(string_agg(t.name, ' '), '')) as words
+          from folio.document_tags dt join folio.tags t on t.id = dt.tag_id where dt.document_id = d.id
+        ) tg
+        where d.deleted_at is null and (rd.document_id is not null or live.id is not null)
+          and (d.title_words || tg.words || coalesce(rt.words, ''::tsvector)) @@ s.q
+        order by ts_rank(d.title_words, s.q) * 4 + ts_rank(tg.words, s.q) * 2 + coalesce(ts_rank(rt.words, s.q), 0) desc, d.updated_at desc, d.id
+        limit $3`,
+      [principals, tsQueryOf(words), Math.min(limit, MAX_PAGE)],
+    );
+    return rows.map((r) => ({ document: fromDocumentRow(r), libraryName: r.library_name, audienceOnly: r.audience_only }));
   }
 
   /** A connection pool whose search path is Folio's schema, for the outbox relay, which names its table plainly. */

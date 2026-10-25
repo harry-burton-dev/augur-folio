@@ -70,6 +70,12 @@ The worker leases one version at a time from Folio's `renditions` table, so any 
 
 Opening a document opens its reader page: the reader copy as a page of text, set in the kit's type and the floor's colours, light or dark. Its headings make the contents down the side, which follow along as you read and take you to a heading in one press. Every heading and paragraph has a stable anchor (`#claims`, `#b12`), so a link can point into a document. The text can be made smaller or larger, and the page wide or narrow; Folio remembers that for you, on that browser. It also remembers where you got to in each version and takes you back there next time. The side panel has the document's versions (an older one says so, with a way to the newest), its tags, and "Download the original" one press away. Until a version's reader copy is ready, the page says it's being made; if it failed, it says why, and whoever may change the document can try again.
 
+## Home and Find
+
+Folio's card on Home (on every kind of floor) says how much has been published to you since you last opened "Published to you", names the newest of it, and opens it in one press; the floor's leads also see how many drafts are waiting to be published in its libraries. The card counts drafts on the floor it's on and not the teams below, as a lead manages only their own floor's libraries.
+
+Find (`search: true`) asks `GET /v1/search?q=` as you type. It answers with up to ten documents you may read, or that have been published to you, that have every word you typed as the start of a word in their title, their tags or their text, best first: a word in the title counts most, then in a tag, then in the text. Its readers search a document's newest version; its audience searches only the version published to them. The text is the version's own (the rendition worker's), up to its first 400,000 characters. A document in a library on another team's floor you're on opens there; anything else opens where you are.
+
 ## On the record
 
 Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a series made or removed, a document uploaded (with its series and issue number when it's an issue), a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
@@ -109,6 +115,9 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `POST /libraries/:id/documents/:doc/withdraw` `{reason?}` | Take back what's out (whoever manages it) |
 | `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
 | `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
+| `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them, matching every word by title, tag or text |
+| `GET /home` | Home's card: what's been published to the caller since they last looked (`published.new`, the newest three), and for the floor's leads its `drafts` |
+| `PUT /published/looked` | The caller has looked at what's published to them: Home stops counting it as new. The app sends it when "Published to you" opens |
 | `GET /documents/:doc` | Where a document is (`{id, library, title}`), for `document.open`, which gives only its id |
 | `GET /libraries/:id/series` | The library's series, each with the issue it expects next (`next`, with `dueBy` and `overdue`), whether the caller follows it and what they may do |
 | `POST /libraries/:id/series` `{name, cadence, description?, audience?, tags?}` | A new series (whoever manages the library). `cadence` is weekly, monthly, quarterly or adhoc |

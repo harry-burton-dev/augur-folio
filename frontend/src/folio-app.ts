@@ -360,6 +360,8 @@ export class FolioApp extends LitElement {
     this.run = undefined;
     try {
       this.inbox = await this.api.published();
+      // Seen now: Home stops counting these as new.
+      void this.api.looked().catch(() => undefined);
       if (tell) this.tell();
     } catch (err) {
       this.note = (err as Error).message;
