@@ -112,6 +112,24 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.deleteFolder(lib.id, hr.id)).toBe(true);
   });
 
+  it('hands over deleted documents past their retention with every file of theirs, once', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Leave', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await store.addVersion('d-1', file('d-1', 'v-2'));
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'Kept', createdBy: 'u-1' }, file('d-2', 'v-3'));
+    await store.finishRendition('v-1', { state: 'ready', engine: 'docling', engineVersion: '2.14.0', readerKey: 'renditions/v-1/reader.md', thumbnailKey: 'renditions/v-1/thumbnail.png', images: ['1.png'], text: 'Leave' });
+    await store.deleteDocument('d-1', 'u-1');
+    const later = new Date(Date.now() + 60_000).toISOString();
+    expect(await store.purgeable(new Date(Date.now() - 60_000).toISOString(), 10)).toEqual([]);
+    const [due] = await store.purgeable(later, 10);
+    expect(due).toMatchObject({ id: 'd-1', workspace: 'w-fin', library: lib.id, title: 'Leave' });
+    expect(due.keys.sort()).toEqual([objectKeyFor('d-1', 'v-1'), objectKeyFor('d-1', 'v-2'), 'renditions/v-1/images/1.png', 'renditions/v-1/reader.md', 'renditions/v-1/thumbnail.png'].sort());
+    expect(await store.markPurged('d-1')).toBe(true);
+    expect(await store.markPurged('d-1')).toBe(false);
+    expect(await store.markPurged('d-2')).toBe(false);
+    expect(await store.purgeable(later, 10)).toEqual([]);
+  });
+
   it('keeps the org’s tags and each library’s, one of each name, and takes free tags only when asked', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     const other = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Reports', createdBy: 'u-1' });
@@ -522,7 +540,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {

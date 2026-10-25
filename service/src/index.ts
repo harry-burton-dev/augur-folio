@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { appCredentialsFromEnv, appStorageFromEnv, outboxRelay, registerApp } from '@augur/service-kit';
+import { appCredentialsFromEnv, appSettings, appStorageFromEnv, outboxRelay, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
+import { auditFromEnv } from './audit.ts';
 import { notifyFromEnv } from './notices.ts';
+import { clearDeleted, DEFAULT_RETENTION_DAYS, RETENTION_SETTING } from './retention.ts';
 import { remindLate } from './series.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
@@ -39,6 +41,23 @@ if (REGISTRY_URL && credentials) {
 } else {
   app.log.info('REGISTRY_URL or the app’s sign-in (SERVICE_CLIENT_SECRET) is not set, so Folio is not in the catalogue (fine under pnpm dev:app).');
 }
+
+// Clear away deleted documents once they're past the retention period an admin set in Admin, Apps
+// (Folio's retentionDays setting). When the registry can't say what it is, nothing is cleared that
+// round: an admin may have asked for longer than the default.
+const retentionDays = async () => {
+  if (!REGISTRY_URL || !credentials) return DEFAULT_RETENTION_DAYS;
+  const settings = await appSettings({ registryUrl: REGISTRY_URL, credentials, app: 'folio' });
+  return settings[RETENTION_SETTING] ?? DEFAULT_RETENTION_DAYS;
+};
+const audit = auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
+const clear = () =>
+  retentionDays()
+    .then((days) => clearDeleted({ store, objects, days, audit, log: app.log }))
+    .then((cleared) => cleared && app.log.info({ cleared }, 'cleared deleted documents past their retention'))
+    .catch((err: Error) => app.log.error({ err: err.message }, 'could not clear deleted documents'));
+setInterval(clear, 60 * 60 * 1000).unref();
+void clear();
 
 // Tell other apps what happened (folio.document.*), from the outbox, once each change has committed.
 const { EVENTS_URL } = process.env;

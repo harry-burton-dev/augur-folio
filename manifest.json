@@ -47,6 +47,18 @@
     "folio.open"
   ],
   "maxUpload": 200,
+  "settings": [
+    {
+      "id": "retentionDays",
+      "label": "Keep deleted documents for",
+      "detail": "After this, a deleted document’s files and text are removed for good. The activity log still names it.",
+      "type": "integer",
+      "unit": "days",
+      "min": 1,
+      "max": 3650,
+      "default": 30
+    }
+  ],
   "menu": [
     {
       "id": "libraries",

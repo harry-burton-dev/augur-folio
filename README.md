@@ -89,6 +89,10 @@ Folio handles the standard intents, so another app can use its documents without
 - `document.pick` opens Folio over the asking app as a picker. The person finds a document by what they type (as Find does) or looks through a library on this floor or shared with them, newest first. Only the kinds of file the asking app takes (`accept`) are offered. Folio answers with a `DocumentRef`: the newest version, or for someone who only has a document because it was published to them, the version published to them. Closing the picker cancels the request.
 - `folio.open` `{ path }` opens Folio at a place in it, as its address has it. Its card on Home uses it.
 
+## Keeping deleted documents
+
+A deleted document drops out of sight straight away, but its files stay in the bucket for the retention period: 30 days, or what an admin sets as "Keep deleted documents for" in Admin, Apps, Folio (1 to 3650 days). Once a deleted document is older than that, Folio's service removes every file of it (each version's original, reader copy, thumbnail and pictures) and forgets its text, then records `document.purged` in the activity log; its record stays so the log can still name it. It looks once an hour. While the registry can't say what the period is, nothing is removed. Files go first, so a document whose files couldn't all be removed is tried again next time.
+
 ## On the record
 
 Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a series made or removed, a document uploaded (with its series and issue number when it's an issue), a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
