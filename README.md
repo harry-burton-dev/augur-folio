@@ -4,6 +4,8 @@ AUGUR's first pillar app: libraries of documents on every floor (your own, a tea
 
 Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to 200 MB each; uploads stream straight through to the bucket.
 
+This README is for developers. To use Folio, or run it as an admin, see [the Folio guide](../../docs/folio.md).
+
 | Path | What it is |
 | --- | --- |
 | `manifest.json` | How the registry lists Folio: its route, menu, floors and the storage it keeps |
