@@ -1,14 +1,14 @@
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { OnFloor } from './app.ts';
-import { mayChange, type HeldDocument } from './documents.ts';
+import { mayChange, mayRead, type DocumentFor } from './documents.ts';
 import type { ObjectStore } from './objects.ts';
 import { renditionPrefix, type FolioStore, type StoredVersion } from './store.ts';
 
 export interface RenditionDeps {
   store: FolioStore;
   objects: ObjectStore;
-  documentFor(caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply): Promise<HeldDocument | undefined>;
+  documentFor: DocumentFor;
   onFloor(req: FastifyRequest, reply: FastifyReply): OnFloor | undefined;
 }
 
@@ -39,9 +39,10 @@ export const renditionRoutes = async (app: FastifyInstance, { store, objects, do
   const renditionFor = async (params: VersionParams, reply: FastifyReply) => {
     const caller = onFloor(reply.request, reply);
     if (!caller) return undefined;
-    const doc = await documentFor(caller, params, reply);
+    // Its audience reads the version that's out, as everyone else does.
+    const doc = await documentFor(caller, params, reply, { audience: true });
     if (!doc) return undefined;
-    const version = await store.version(doc.id, params.number);
+    const version = mayRead(doc, params.number) ? await store.version(doc.id, params.number) : undefined;
     const rendition = version && (await store.rendition(version.id));
     if (!version || !rendition) return void noVersion(reply);
     return { caller, doc, version, rendition };

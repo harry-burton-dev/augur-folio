@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { HeldLibrary, LibraryRights, OnFloor } from './app.ts';
-import { DOCUMENT_SORTS, SINCE, type FolioStore, type SavedView, type Tag } from './store.ts';
+import { DOCUMENT_SORTS, DOCUMENT_STATES, SINCE, type FolioStore, type SavedView, type Tag } from './store.ts';
 
 /** File kinds as people filter by them, and the media type each is kept as. */
 export const KINDS: Record<string, string> = {
@@ -28,6 +28,7 @@ export const VIEW_QUERY = {
     from: { type: 'string', maxLength: 40 },
     to: { type: 'string', maxLength: 40 },
     sort: { type: 'string', enum: DOCUMENT_SORTS },
+    states: { type: 'array', maxItems: 3, items: { type: 'string', enum: DOCUMENT_STATES } },
   },
 } as const;
 

@@ -1,5 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, type ListItem, type OutlineItem, type ReaderSize, type UiReader } from '@augur/ui-kit';
+import { agoWords } from './folio-publish.js';
 import { fileTypeOf, sizeWords, type DocumentVersion, type FolioApi, type OpenDocument, type Tag } from './api.js';
 
 /** How a person likes to read, kept in their browser for every document. */
@@ -54,6 +55,7 @@ const PICTURE = /^images\/(\d{1,5}\.png)$/;
  * @fires folio-back - back to the library
  * @fires folio-manage - open the document's details, to change it
  * @fires folio-share - see who can see it, and share it when the person manages it
+ * @fires folio-publish - see how it's published, and publish or withdraw it when the person manages it
  * @fires folio-download - detail `{ version }`, the original of a version
  * @fires folio-retry - detail `{ version }`, ask again for a reader copy that failed
  */
@@ -204,6 +206,23 @@ export class FolioReader extends LitElement {
     }
   }
 
+  /** Where it is in being published, and the way to publish it for whoever manages it. */
+  private publishing() {
+    const doc = this.doc;
+    const words = doc.only
+      ? `Version ${doc.only} was published to you${doc.published ? ` ${agoWords(doc.published.publishedAt)}` : ''}.`
+      : doc.state === 'published' && doc.published
+        ? `Version ${doc.published.version} was published ${agoWords(doc.published.publishedAt)}.`
+        : doc.state === 'withdrawn'
+          ? 'It was published, and has been withdrawn.'
+          : 'A draft: it hasn’t been published.';
+    return html`<section class="folio-reader-publishing" aria-label="Publishing">
+      <p class="folio-reader-said"><ui-icon name=${doc.state === 'published' ? 'publish' : doc.state === 'withdrawn' ? 'withdraw' : 'document'} size="18"></ui-icon>${words}</p>
+      ${doc.published?.note && doc.only ? html`<p class="folio-reader-note">“${doc.published.note}”</p>` : nothing}
+      ${doc.can.publish ? html`<ui-button kind="secondary" size="sm" @click=${() => this.emit('folio-publish')}>${doc.state === 'published' ? 'Publishing' : 'Publish'}</ui-button>` : nothing}
+    </section>`;
+  }
+
   private side(v: DocumentVersion) {
     const doc = this.doc;
     const newest = doc.latest.number;
@@ -211,7 +230,7 @@ export class FolioReader extends LitElement {
       id: String(x.number),
       title: x.number === v.number ? `Version ${x.number}, reading` : `Version ${x.number}`,
       icon: 'document',
-      detail: `${sizeWords(x.size)}${x.number === newest ? ' · newest' : ''}`,
+      detail: [sizeWords(x.size), x.number === newest ? 'newest' : '', x.number === doc.published?.version ? 'published' : ''].filter(Boolean).join(' · '),
       meta: ago(x.createdAt),
     }));
     const size = SIZES.indexOf(this.prefs.size);
@@ -227,8 +246,9 @@ export class FolioReader extends LitElement {
       <div class="folio-reader-row">
         <ui-button kind="secondary" size="sm" @click=${() => this.emit('folio-download', { version: v.number })}>Download the original</ui-button>
         ${doc.can.change ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-manage')}>Change it</ui-button>` : nothing}
-        <ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-share')}>${doc.can.share ? 'Share' : 'Who can see it'}</ui-button>
+        ${doc.only ? nothing : html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-share')}>${doc.can.share ? 'Share' : 'Who can see it'}</ui-button>`}
       </div>
+      ${this.publishing()}
       ${doc.tags.length
         ? html`<div class="folio-tags" aria-label="Tags">${doc.tags.map((t) => {
             const tag = this.tags.find((x) => x.id === t);
@@ -263,6 +283,9 @@ export class FolioReader extends LitElement {
         folio-reader .folio-reader-head h1 { margin: 0; font-size: var(--type-title-s); line-height: var(--leading-title-s); font-weight: 300; }
         folio-reader .folio-reader-head p { margin: 0; color: var(--ink-muted); font-size: var(--type-meta); line-height: var(--leading-meta); }
         folio-reader .folio-reader-old { color: var(--ink); }
+        folio-reader .folio-reader-publishing { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+        folio-reader .folio-reader-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); }
+        folio-reader .folio-reader-note { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
         folio-reader .folio-reader-side { position: sticky; top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); }
         folio-reader .folio-reader-facts { display: flex; flex-direction: column; gap: var(--space-2); }
         folio-reader .folio-reader-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }

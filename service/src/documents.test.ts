@@ -85,7 +85,7 @@ describe('folio documents', () => {
     const opened = (await json(member(kim), 'GET', at)).json();
     expect(opened.latest.number).toBe(3);
     expect(opened.versions.map((v: { number: number }) => v.number)).toEqual([3, 2, 1]);
-    expect(opened.can).toEqual({ change: false, share: false });
+    expect(opened.can).toEqual({ change: false, share: false, publish: false });
     const original = await app.inject({ method: 'GET', url: `${at}/versions/2/original`, headers: callerHeaders(member(kim)) });
     expect(original.statusCode).toBe(200);
     expect(original.body).toBe('version two');

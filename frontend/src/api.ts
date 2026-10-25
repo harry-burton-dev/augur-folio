@@ -27,6 +27,9 @@ export interface Tag {
 export type DocumentSort = 'title' | 'newest' | 'updated';
 export type Since = 'week' | 'month' | 'quarter' | 'year';
 
+/** Where a document is in being published: never yet, out now, or taken back. */
+export type DocumentState = 'draft' | 'published' | 'withdrawn';
+
 /** A set of filters, as a saved view keeps it. */
 export interface ViewQuery {
   folder?: string;
@@ -35,6 +38,7 @@ export interface ViewQuery {
   authors?: string[];
   since?: Since;
   sort?: DocumentSort;
+  states?: DocumentState[];
 }
 
 export interface SavedView {
@@ -115,6 +119,36 @@ export interface Found {
   teams: { id: string; name: string; within: string[] }[];
 }
 
+/**
+ * One version put out to an audience. On a document its audience is principals;
+ * from the publishing calls it comes named.
+ */
+export interface Publication<A = string> {
+  id: string;
+  document: string;
+  library: string;
+  version: number;
+  /** `team:<id>`, `tree:<id>` or `org`. */
+  audience: A[];
+  note?: string;
+  publishedBy: string;
+  publishedAt: string;
+  ended?: { as: 'withdrawn' | 'replaced'; by: string; at: string; reason?: string };
+}
+
+/** Every time a document was published, newest first, and what the caller may do. */
+export interface Publications {
+  publications: Publication<Principal>[];
+  /** `publishToOrg`: they have the publisher role, so the org and any team are open to them. */
+  can: { publish: boolean; publishToOrg: boolean };
+}
+
+/** What's out to the caller now, from any floor. */
+export interface PublishedPage {
+  documents: (FolioDocument & { published: Publication; libraryName: string })[];
+  total: number;
+}
+
 /** Shared with the caller from other floors. */
 export interface Shared {
   libraries: (Library & { level: Level })[];
@@ -157,8 +191,11 @@ export interface FolioDocument {
   latest: DocumentVersion;
   /** Tag ids: the org's or its library's. */
   tags: string[];
-  /** Whether the caller may add versions, retag, retitle, move or delete it, and share it. */
-  can: { change: boolean; share: boolean };
+  state: DocumentState;
+  /** The version out now, when it's published. */
+  published?: Publication;
+  /** Whether the caller may add versions, retag, retitle, move or delete it, share it, and publish it. */
+  can: { change: boolean; share: boolean; publish?: boolean };
 }
 
 export interface OpenDocument extends FolioDocument {
@@ -166,6 +203,8 @@ export interface OpenDocument extends FolioDocument {
   versions: DocumentVersion[];
   /** The name of its library, which the caller may not otherwise see. */
   libraryName: string;
+  /** The caller reaches it only as the audience it's published to: this version, and no other. */
+  only?: number;
 }
 
 /** What Folio takes, by file ending, and the media type each is sent as. */
@@ -219,6 +258,7 @@ export const listParams = (q: ListQuery) => {
   for (const a of q.authors ?? []) params.append('author', a);
   if (q.since) params.set('since', q.since);
   if (q.sort && q.sort !== 'title') params.set('sort', q.sort);
+  for (const s of q.states ?? []) params.append('state', s);
   if (q.limit) params.set('limit', String(q.limit));
   if (q.offset) params.set('offset', String(q.offset));
   return params;
@@ -384,6 +424,31 @@ export class FolioApi {
     return this.call<Shared>('GET', '/shared');
   }
 
+  /** Every time a document was published, with who it went to by name. */
+  publications(library: string, document: string) {
+    return this.call<Publications>('GET', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/publications`);
+  }
+
+  /** Puts a version out to an audience, replacing what was out. */
+  publish(library: string, document: string, version: number, audience: string[], note?: string) {
+    return this.call<Publication<Principal>>('POST', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/publish`, { version, audience, ...(note ? { note } : {}) });
+  }
+
+  /** Takes back what's out, saying why if there's a reason. */
+  withdraw(library: string, document: string, reason?: string) {
+    return this.call<Publication<Principal>>('POST', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/withdraw`, reason ? { reason } : {});
+  }
+
+  /** What's out to the caller now, newest first. */
+  published() {
+    return this.call<PublishedPage>('GET', '/published');
+  }
+
+  /** Where a document is, from its id alone, as another app passes it. */
+  locate(document: string) {
+    return this.call<{ id: string; library: string; title: string; only?: number }>('GET', `/documents/${encodeURIComponent(document)}`);
+  }
+
   /** Asks again for a reader copy that failed. */
   retryReader(library: string, document: string, number: number) {
     return this.call<ReaderState>('POST', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}/reader/retry`);
@@ -428,10 +493,13 @@ export interface Place {
   version?: number;
   /** Open "New library" straight away (the menu's item). */
   adding: boolean;
+  /** What's been published to the person (`/published`). */
+  published?: boolean;
 }
 
 export const placeFor = (path: string): Place => {
   const [first, second, third, fourth, fifth, sixth] = path.split('/').filter(Boolean).map(decodeURIComponent);
+  if (first === 'published') return { published: true, adding: false };
   if (first !== 'libraries' || !second) return { adding: false };
   if (second === 'new') return { adding: true };
   if (third === 'documents' && fourth) {
@@ -442,7 +510,8 @@ export const placeFor = (path: string): Place => {
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder, view, document, version }: Omit<Place, 'adding'>) => {
+export const pathFor = ({ library, folder, view, document, version, published }: Omit<Place, 'adding'>) => {
+  if (published && !document) return '/published';
   if (!library) return '/libraries';
   const at = `/libraries/${encodeURIComponent(library)}`;
   if (document) return `${at}/documents/${encodeURIComponent(document)}${version ? `/versions/${version}` : ''}`;
