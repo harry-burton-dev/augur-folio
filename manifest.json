@@ -3,7 +3,7 @@
   "name": "Folio",
   "route": "/folio",
   "entry": "/apps/folio/entry.js",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "sdk": "^1.1.1",
   "description": "Libraries of documents for you, your teams and the org",
   "icon": "library",
