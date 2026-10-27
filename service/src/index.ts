@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appCredentialsFromEnv, appSettings, appStorageFromEnv, outboxRelay, publishFrontend, registerApp } from '@augur/service-kit';
+import { appCredentialsFromEnv, appSettings, appStorageFromEnv, commonSettings, loadConfigOrExit, outboxRelay, publishFrontend, registerApp } from '@augur/service-kit';
 import { buildApp } from './app.ts';
 import { auditFromEnv } from './audit.ts';
 import { notifyFromEnv } from './notices.ts';
@@ -10,6 +10,20 @@ import { remindLate } from './series.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
+
+// Every setting Folio reads, checked before it starts (in production, a missing one stops it).
+loadConfigOrExit('folio', [
+  commonSettings.database,
+  commonSettings.registry,
+  commonSettings.events,
+  commonSettings.issuer,
+  commonSettings.issuerInside,
+  commonSettings.clientSecret,
+  commonSettings.gateway,
+  { name: 'S3_ENDPOINT', about: 'the object store Folio keeps files in.', required: true },
+  { name: 'S3_BUCKET', about: 'Folio’s bucket.', required: true },
+  { name: 'S3_SECRET_ACCESS_KEY', about: 'the secret of Folio’s bucket key.', required: true, secret: true },
+]);
 
 const port = Number(process.env.PORT ?? 8083);
 // Folio keeps its libraries in its own schema and its files in its own bucket (docs/app-storage.md).
