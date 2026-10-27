@@ -1,5 +1,21 @@
 # @apps/folio
 
+## 0.2.0
+
+### Minor Changes
+
+- 70df61e: Folio is called Artifacts wherever people see it: its name in the manifest and every message it shows. It opens straight into its own side menu (`"orbit": false`) rather than the shell's Orbit. Its id, route, schema, bucket, containers and `FOLIO_*` settings are unchanged.
+
+### Patch Changes
+
+- ef587a4: Apps' frontends are kept by version. An app's service gives the registry each version's built frontend before registering it (`publishFrontend` in the service kit, `PUT /v1/apps/{id}/versions/{version}/frontend`), the registry writes it to the new `augur-frontends` bucket that the storage container makes, and the front door serves it from Garage at `/apps/<id>/<version>/`. The manifest the shell is given then points at that version's own copy, so holding an app at an older version in Admin, Apps holds its code too. A version's frontend never changes once given. Folio gives its own on every start. Needs `FRONTENDS_BUCKET_SECRET` in `.env` (docs/upgrade.md); without it apps are served from their manifests' entry as before.
+- Updated dependencies [57d3760]
+- Updated dependencies [476907a]
+- Updated dependencies [ef587a4]
+- Updated dependencies [a6b6bca]
+- Updated dependencies [948526d]
+  - @augur/service-kit@0.7.0
+
 ## 0.1.0
 
 ### Minor Changes

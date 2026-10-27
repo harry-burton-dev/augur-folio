@@ -1,5 +1,18 @@
 # @apps/folio-frontend
 
+## 0.2.0
+
+### Minor Changes
+
+- 70df61e: Folio is called Artifacts wherever people see it: its name in the manifest and every message it shows. It opens straight into its own side menu (`"orbit": false`) rather than the shell's Orbit. Its id, route, schema, bucket, containers and `FOLIO_*` settings are unchanged.
+
+### Patch Changes
+
+- Updated dependencies [70df61e]
+- Updated dependencies [aa0f0f4]
+  - @augur/mfe-sdk@1.4.0
+  - @augur/ui-kit@1.3.0
+
 ## 0.1.0
 
 ### Minor Changes
