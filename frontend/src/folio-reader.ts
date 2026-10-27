@@ -192,7 +192,7 @@ export class FolioReader extends LitElement {
       case 'running':
         return html`<ui-state kind="loading" heading="Making the reader copy" body="It shows here as soon as it’s ready. The original can be downloaded now."></ui-state>`;
       case 'failed':
-        return html`<ui-state kind="error" heading="There’s no reader copy of this version" body=${v.reader.error ?? 'Folio couldn’t make one.'}
+        return html`<ui-state kind="error" heading="There’s no reader copy of this version" body=${v.reader.error ?? 'Artifacts couldn’t make one.'}
             action=${this.doc.can.change ? 'Try again' : ''} @ui-action=${() => this.emit('folio-retry', { version: v.number })}></ui-state>`;
       default:
         if (this.failure) return html`<ui-state kind="error" heading="The reader copy didn’t load" body=${this.failure}></ui-state>`;

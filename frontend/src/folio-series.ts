@@ -157,7 +157,7 @@ export class FolioSeries extends LitElement {
             .multiple=${false}
             ?busy=${this.adding}
             @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.add(e.detail.files[0])}
-            @ui-reject=${() => (this.note = 'Folio takes PDF, Word (.docx), HTML, Markdown and plain text.')}
+            @ui-reject=${() => (this.note = 'Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text.')}
           ></ui-drop-zone>`
         : nothing}
       <ui-surface>

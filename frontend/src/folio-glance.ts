@@ -52,7 +52,7 @@ export class FolioGlance extends LitElement {
   }
 
   override render() {
-    if (this.failure) return html`<ui-state kind="error" heading="Couldn’t reach Folio" body=${this.failure} action="Try again" @ui-action=${() => void this.load()}></ui-state>`;
+    if (this.failure) return html`<ui-state kind="error" heading="Couldn’t reach Artifacts" body=${this.failure} action="Try again" @ui-action=${() => void this.load()}></ui-state>`;
     const glance = this.glance;
     if (!glance) return html`<ui-facts loading count="2"></ui-facts>`;
     const { published, drafts } = glance;

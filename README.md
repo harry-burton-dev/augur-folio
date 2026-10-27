@@ -1,14 +1,16 @@
 # Folio
 
+People see Folio as **Artifacts**: that's its name in the manifest and in everything it says to them. Folio stays its id, route, schema, bucket, containers and code name.
+
 AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), kept in folders, then published for people to read. It is built only on the public app contract, like any other app.
 
 Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to 200 MB each; uploads stream straight through to the bucket.
 
-This README is for developers. To use Folio, or run it as an admin, see [the Folio guide](../../docs/folio.md).
+This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](../../docs/folio.md).
 
 | Path | What it is |
 | --- | --- |
-| `manifest.json` | How the registry lists Folio: its route, menu, floors and the storage it keeps |
+| `manifest.json` | How the registry lists Folio: its name, its route, its menu (kept inside it, `"orbit": false`), floors and the storage it keeps |
 | `frontend/` | The micro frontend the shell mounts at `/folio` (`@apps/folio-frontend`) |
 | `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
 | `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |

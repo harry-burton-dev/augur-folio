@@ -369,7 +369,7 @@ export class FolioApi {
       const problem = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
       // The gateway stops a file past the app's limit before Folio sees it, in its own words.
       if (res.status === 413) throw new FolioError(problem.error === 'too-large' && problem.message ? problem.message : `A file can be ${MAX_UPLOAD_MB} MB at most.`, 413, 'too-large');
-      throw new FolioError(res.status >= 500 || !problem.message ? 'Folio isn’t answering. Try again in a moment.' : problem.message, res.status, problem.error);
+      throw new FolioError(res.status >= 500 || !problem.message ? 'Artifacts isn’t answering. Try again in a moment.' : problem.message, res.status, problem.error);
     }
     return (res.status === 204 ? undefined : await res.json()) as T;
   }
@@ -377,7 +377,7 @@ export class FolioApi {
   /** Sends a file as it is, streamed, typed by its ending. */
   private async sendFile<T>(path: string, file: File, query: Record<string, string | undefined>, tags: readonly string[] = []): Promise<T> {
     const kind = fileTypeOf(file.name);
-    if (!kind) throw new FolioError('Folio takes PDF, Word (.docx), HTML, Markdown and plain text files.', 415, 'unsupported-type');
+    if (!kind) throw new FolioError('Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text files.', 415, 'unsupported-type');
     const params = new URLSearchParams(Object.entries({ filename: file.name, ...query }).filter((e): e is [string, string] => Boolean(e[1])));
     for (const t of tags) params.append('tag', t);
     return this.answer<T>(await this.fetchOnFloor(`/api/folio/v1${path}?${params}`, { method: 'POST', headers: { 'content-type': kind.type }, body: file }));

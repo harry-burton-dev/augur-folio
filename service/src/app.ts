@@ -103,7 +103,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
   const onFloor = (req: FastifyRequest, reply: FastifyReply): OnFloor | undefined => {
     const caller = callerFromHeaders(req.headers);
     if (!caller) {
-      reply.code(401).send({ error: 'unauthenticated', message: 'Sign in to use Folio.' });
+      reply.code(401).send({ error: 'unauthenticated', message: 'Sign in to use Artifacts.' });
       return undefined;
     }
     if (!caller.workspace) {
@@ -153,7 +153,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
       app.setErrorHandler((err, req, reply) => {
         if (!(err instanceof PeopleUnavailable)) return reply.send(err);
         req.log.error({ err: err.message }, 'could not ask identity who the caller is');
-        return reply.code(503).send({ error: 'unavailable', message: 'Folio can’t check who you are right now. Try again in a moment.' });
+        return reply.code(503).send({ error: 'unavailable', message: 'Artifacts can’t check who you are right now. Try again in a moment.' });
       });
 
       app.get('/libraries', async (req, reply) => {
