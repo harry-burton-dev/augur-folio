@@ -165,7 +165,7 @@ const service = ({
     }
     if (method === 'POST' && route === '/libraries/l-1/folders') return Response.json({ id: 'f-new', library: 'l-1', name: body.name, ...(body.parent ? { parent: body.parent } : {}), createdBy: 'u1', createdAt: '' }, { status: 201 });
     if (method === 'POST' && route.endsWith('/archive')) return new Response(null, { status: 204 });
-    return Response.json({ message: 'Folio isn’t answering.' }, { status: 502 });
+    return Response.json({ message: 'Artifacts isn’t answering.' }, { status: 502 });
   });
   return { fetch, calls };
 };
@@ -314,7 +314,7 @@ describe('folio', () => {
     const el = await mounted(service().fetch);
     el.querySelector('ui-drop-zone')!.dispatchEvent(new CustomEvent('ui-reject', { detail: { files: [new File(['x'], 'deck.pptx')] } }));
     await settle(el);
-    expect(el.querySelector('.folio-note')!.textContent).toMatch(/^Folio can’t take deck\.pptx/);
+    expect(el.querySelector('.folio-note')!.textContent).toMatch(/^Artifacts can’t take deck\.pptx/);
   });
 
   it('opens a document with its versions, downloads one, and takes the next', async () => {

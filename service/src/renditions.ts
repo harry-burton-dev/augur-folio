@@ -53,7 +53,7 @@ export const renditionRoutes = async (app: FastifyInstance, { store, objects, do
     const found = await renditionFor(params, reply);
     if (!found) return undefined;
     if (found.rendition.state !== 'ready') {
-      const message = found.rendition.state === 'failed' ? 'Folio couldn’t make a reader copy of this version.' : 'The reader copy of this version is still being made.';
+      const message = found.rendition.state === 'failed' ? 'Artifacts couldn’t make a reader copy of this version.' : 'The reader copy of this version is still being made.';
       return void reply.code(409).send({ error: 'not-ready', message, reader: found.version.reader });
     }
     return found;

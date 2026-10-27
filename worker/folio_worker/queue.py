@@ -20,7 +20,7 @@ MAX_ATTEMPTS = 3
 #: The channel Folio's service tells of new versions on.
 CHANNEL = "folio_renditions"
 
-GAVE_UP = "Folio gave up making a reader copy of this version after several tries. Ask for it again, or tell your admin if it keeps failing."
+GAVE_UP = "Artifacts gave up making a reader copy of this version after several tries. Ask for it again, or tell your admin if it keeps failing."
 
 
 @dataclass(frozen=True)

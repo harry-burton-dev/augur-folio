@@ -100,10 +100,10 @@ def render(path: Path, media_type: str, timeout: int = 1200) -> Rendered:
         try:
             text = path.read_bytes().decode("utf-8")
         except UnicodeDecodeError as err:
-            raise RenderError("This text file isn’t UTF-8, so Folio can’t read it.") from err
+            raise RenderError("This text file isn’t UTF-8, so Artifacts can’t read it.") from err
         return Rendered(markdown=_text_to_markdown(text), text=text, engine=("folio-text", "1"))
     if media_type not in _FORMATS:
-        raise RenderError(f"Folio doesn’t make reader copies of {media_type} files.")
+        raise RenderError(f"Artifacts doesn’t make reader copies of {media_type} files.")
 
     from docling.datamodel.base_models import ConversionStatus
     from docling.exceptions import BaseError
@@ -116,12 +116,12 @@ def render(path: Path, media_type: str, timeout: int = 1200) -> Rendered:
     try:
         result = _converter(timeout).convert(source, raises_on_error=False)
     except BaseError as err:
-        raise RenderError("Folio couldn’t read this file. It may be damaged, or protected by a password.") from err
+        raise RenderError("Artifacts couldn’t read this file. It may be damaged, or protected by a password.") from err
     if result.status == ConversionStatus.PARTIAL_SUCCESS:
         # Half a policy read as the whole of it is worse than none.
-        raise RenderError("Folio could read only part of this file, so it made no reader copy. It may be too long, or partly damaged.")
+        raise RenderError("Artifacts could read only part of this file, so it made no reader copy. It may be too long, or partly damaged.")
     if result.status != ConversionStatus.SUCCESS:
-        raise RenderError("Folio couldn’t read this file. It may be damaged, or protected by a password.")
+        raise RenderError("Artifacts couldn’t read this file. It may be damaged, or protected by a password.")
     doc = result.document
 
     markdown = doc.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER, image_placeholder=_PICTURE)

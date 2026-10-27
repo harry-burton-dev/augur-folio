@@ -483,7 +483,7 @@ export class FolioApp extends LitElement {
   }
 
   private rejected(files: File[]) {
-    this.note = `Folio can’t take ${files.map((f) => f.name).join(', ')}: it takes PDF, Word (.docx), HTML, Markdown and plain text.`;
+    this.note = `Artifacts can’t take ${files.map((f) => f.name).join(', ')}: it takes PDF, Word (.docx), HTML, Markdown and plain text.`;
   }
 
   /** Opens a document on its own page to read, at a version or the newest. */
@@ -959,7 +959,7 @@ export class FolioApp extends LitElement {
   private main() {
     if (this.loading) return html`<ui-state kind="loading" heading="Opening your libraries…"></ui-state>`;
     if (this.error)
-      return html`<ui-state kind="error" heading="Couldn’t open Folio" body=${this.error} action="Try again" @ui-action=${() => void this.load()}></ui-state>`;
+      return html`<ui-state kind="error" heading="Couldn’t open Artifacts" body=${this.error} action="Try again" @ui-action=${() => void this.load()}></ui-state>`;
     const open = this.open;
     if (this.reading) {
       const doc = this.doc;
@@ -1165,7 +1165,7 @@ export class FolioApp extends LitElement {
     const siblings = (except?: string) => (open?.folders ?? []).filter((f) => f.parent === (this.target ? this.target.parent : this.folder) && f.id !== except).map((f) => f.name);
     switch (this.dialog) {
       case 'new-library':
-        return html`<ui-dialog open eyebrow=${this.floorName || 'Folio'} heading="New library" summary=${this.floorKind === 'personal' ? 'Only you can see it.' : 'Everyone on this floor can see it and add folders; its leads look after it.'}
+        return html`<ui-dialog open eyebrow=${this.floorName || 'Artifacts'} heading="New library" summary=${this.floorKind === 'personal' ? 'Only you can see it.' : 'Everyone on this floor can see it and add folders; its leads look after it.'}
           action-label="Make it" busy-label="Making…" .submit=${this.submitNewLibrary} @ui-close=${close}>
           <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .validate=${nameCheck(this.libraries.map((l) => l.name), 'library')}></ui-text-field>
           <ui-text-field slot="fields" name="description" label="What it’s for" optional multiline maxlength="500"></ui-text-field>
@@ -1237,7 +1237,7 @@ export class FolioApp extends LitElement {
               void (e.detail.action.id === 'retry' ? this.retryReader(Number(e.detail.item.id)) : this.download(Number(e.detail.item.id)))}></ui-list>
           ${doc.versions
             .filter((v) => v.reader.state === 'failed')
-            .map((v) => html`<p class="folio-note">Version ${v.number} has no reader copy. ${v.reader.error ?? 'Folio couldn’t make one.'}</p>`)}
+            .map((v) => html`<p class="folio-note">Version ${v.number} has no reader copy. ${v.reader.error ?? 'Artifacts couldn’t make one.'}</p>`)}
           ${doc.can.change
             ? html`<ui-drop-zone compact heading="Drop the next version here: it becomes the newest" action="Choose a file" accept=${ACCEPT}
                   .multiple=${false} ?busy=${this.uploading > 0} @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.newVersion(e.detail.files)}

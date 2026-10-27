@@ -148,7 +148,7 @@ export class FolioPicker extends LitElement {
         folio-picker .folio-picker-find ui-text-field { flex: 2; min-width: 14rem; }
         folio-picker .folio-picker-find ui-select { flex: 1; min-width: 12rem; }
       </style>
-      <ui-heading eyebrow="Pick from Folio" heading=${this.purpose || 'Pick a document'} summary="Find one by its title, a tag or words in it, or look through a library."></ui-heading>
+      <ui-heading eyebrow="Pick from Artifacts" heading=${this.purpose || 'Pick a document'} summary="Find one by its title, a tag or words in it, or look through a library."></ui-heading>
       <div class="folio-picker-find">
         <ui-text-field label="Find" placeholder="Title, tag or words in it" .value=${this.query} @ui-input=${(e: CustomEvent<{ value: string }>) => this.search(e.detail.value)}></ui-text-field>
         ${options.length && !this.query.trim()

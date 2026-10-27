@@ -48,7 +48,7 @@ def work_one(conn: psycopg.Connection, objects: ObjectStore, render_timeout: int
         queue.fail(conn, job, str(err), final=True)
     except Exception as err:  # Anything else may pass: try again later.
         log.exception("rendering failed", extra={"version": job.version, "attempt": job.attempt})
-        queue.fail(conn, job, f"Folio couldn’t make a reader copy this time ({type(err).__name__}). It will try again.", final=False)
+        queue.fail(conn, job, f"Artifacts couldn’t make a reader copy this time ({type(err).__name__}). It will try again.", final=False)
     return True
 
 

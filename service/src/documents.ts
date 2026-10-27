@@ -23,7 +23,7 @@ export const ACCEPTED: Record<string, readonly string[]> = {
 /** The most one upload may be, as the manifest's `maxUpload` says. The gateway stops larger ones first. */
 export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
-const ACCEPTED_WORDS = 'Folio takes PDF, Word (.docx), HTML, Markdown and plain text files.';
+const ACCEPTED_WORDS = 'Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text files.';
 
 /** The media type a request says it carries, without parameters such as charset. */
 const mediaTypeOf = (req: FastifyRequest) => (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
