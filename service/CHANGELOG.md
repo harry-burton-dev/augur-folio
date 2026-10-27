@@ -1,5 +1,13 @@
 # @apps/folio
 
+## 0.2.1
+
+### Patch Changes
+
+- aa1724a: Services check their settings before they start. The service kit's `loadConfig` takes a list of the settings a service reads (`Setting`, plus `commonSettings` for the ones services share). In production, a missing required setting stops the service with one message listing every problem, instead of falling back to a `localhost` address. A secret can be given as a file in `<NAME>_FILE`. `describeConfig` reports each setting and where it came from, never a secret's value, ready for Admin → Deployment.
+- Updated dependencies [aa1724a]
+  - @augur/service-kit@0.8.0
+
 ## 0.2.0
 
 ### Minor Changes
