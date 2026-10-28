@@ -6,6 +6,7 @@ import './folio-app.js';
 import './folio-glance.js';
 import './folio-picker.js';
 import type { Picked } from './folio-picker.js';
+import type { ExplainPayload } from './folio-share.js';
 import type { MarkedPassage } from '@augur/ui-kit';
 
 /**
@@ -60,6 +61,9 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
+/** Asks whichever app explains access (Auspex) to say who can open a library or document, over Artifacts. */
+export const ACCESS_EXPLAIN = 'access.explain';
+
 /** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
 export default defineMicroFrontend({
   mount(el: HTMLElement, ctx: MountContext) {
@@ -95,6 +99,7 @@ export default defineMicroFrontend({
         floor-name=${ctx.workspace.name}
         floor-kind=${ctx.workspace.kind}
         .place=${placeForIntent(ctx.intent) ?? placeFor(ctx.path)}
+        .explain=${(payload: ExplainPayload) => ctx.request({ type: ACCESS_EXPLAIN, payload })}
         @folio-place=${moved}
       ></folio-app>`,
       el,

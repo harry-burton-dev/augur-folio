@@ -1,4 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
+import { isIntentCancelled } from '@augur/mfe-sdk';
 import { ago, type ListItem, type SelectOption } from '@augur/ui-kit';
 import type { Access, FolioApi, Found, Grant, Level, Principal } from './api.js';
 
@@ -19,6 +20,33 @@ export const whoWords = (p: Principal) => {
 
 /** The line under a name: an email, or where a team sits. */
 const detailOf = (p: Principal) => (p.kind === 'person' ? (p.email ?? '') : p.within?.length ? `In ${p.within.join(' / ')}` : p.kind === 'org' ? '' : 'Team');
+
+/** Asks another app to explain who can open something (`access.explain`), set by the entry. */
+export type Explainer = (payload: ExplainPayload) => Promise<unknown>;
+
+export interface ExplainPayload {
+  thing: { app: 'folio'; appName: string; id: string; title: string; kind: 'library' | 'document' };
+  audience: { principal: string; name?: string; level?: Level; since?: string; via: string }[];
+  change: { where: string; allowed: boolean };
+}
+
+/**
+ * What Artifacts sends with `access.explain`: everyone who can see it, and how
+ * each one reaches it: its floor, its library, or shared with it alone.
+ */
+export const explainPayload = (access: Access, thing: { id: string; title: string; document: boolean }): ExplainPayload => {
+  const shared = (g: Grant, via: string) => ({ principal: g.principal, ...(g.name ? { name: g.name } : {}), level: g.level, since: g.createdAt, via });
+  const floor = access.floor;
+  return {
+    thing: { app: 'folio', appName: 'Artifacts', id: thing.id, title: thing.title, kind: thing.document ? 'document' : 'library' },
+    audience: [
+      { principal: floor.principal, ...(floor.name ? { name: floor.name } : {}), level: floor.kind === 'person' ? 'manage' : 'read', via: 'its floor' },
+      ...(access.library ?? []).map((g) => shared(g, 'its library')),
+      ...access.grants.map((g) => shared(g, thing.document ? 'shared with this document' : 'shared with this library')),
+    ],
+    change: { where: 'Share', allowed: access.can.share },
+  };
+};
 
 const iconOf = (p: Principal) => (p.kind === 'person' ? 'account' : p.kind === 'org' ? 'org' : 'people');
 
@@ -54,7 +82,9 @@ export class FolioShare extends LitElement {
     api: { attribute: false },
     library: { type: String },
     document: { type: String },
+    name: { type: String },
     me: { type: String },
+    explain: { attribute: false },
     access: { state: true },
     failure: { state: true },
     query: { state: true },
@@ -68,6 +98,10 @@ export class FolioShare extends LitElement {
   declare library: string;
   /** Just this document; the whole library when there's none. */
   declare document: string | undefined;
+  /** What it's called, for the explanation's heading. */
+  declare name: string;
+  /** Opens "Who can open this, explained" from another app; no link without it. */
+  declare explain: Explainer | undefined;
   /** Who is signed in, so their own floor reads as theirs. */
   declare me: string;
   declare access: Access | undefined;
@@ -85,6 +119,7 @@ export class FolioShare extends LitElement {
   constructor() {
     super();
     this.library = '';
+    this.name = '';
     this.me = '';
     this.failure = '';
     this.query = '';
@@ -201,6 +236,17 @@ export class FolioShare extends LitElement {
     else void this.save(grant.principal, null, `${whoWords(grant)} can no longer see it through this.`);
   }
 
+  /** Opens the explanation over Artifacts; when no app can give one, says so here instead. */
+  private async explained(access: Access) {
+    if (!this.explain) return;
+    try {
+      await this.explain(explainPayload(access, { id: this.document ?? this.library, title: this.name, document: Boolean(this.document) }));
+    } catch (err) {
+      if (isIntentCancelled(err)) return;
+      this.note = `Couldn’t explain it: ${(err as Error).message} Who can see it is still listed here.`;
+    }
+  }
+
   private suggestions(): ListItem[] {
     const found = this.found;
     if (!found) return [];
@@ -246,6 +292,9 @@ export class FolioShare extends LitElement {
         folio-share .folio-share-who { display: flex; align-items: center; gap: var(--space-3); margin: 0; font-weight: 600; }
       </style>
       <p class="folio-share-floor">${floorWords(access.floor, document, this.me)}</p>
+      ${this.explain
+        ? html`<div class="folio-actions"><ui-button kind="tertiary" size="sm" @click=${() => void this.explained(access)}>Who can open this, explained</ui-button></div>`
+        : nothing}
       ${access.can.share ? this.form() : nothing}
       <ui-list label=${document ? 'Shared with, for this document' : 'Shared with'} density="compact" .noun=${['person or team', 'people and teams']}
         .items=${this.grantRows(access.grants, access.can.share)} empty=${document ? 'No one else has been let into this document alone.' : 'It hasn’t been shared beyond its floor.'}
