@@ -1,4 +1,4 @@
-import { DOCUMENT_OPEN, DOCUMENT_PICK, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isLibraryRef, openDocument, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, openDocument, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
@@ -6,6 +6,29 @@ import './folio-app.js';
 import './folio-glance.js';
 import './folio-picker.js';
 import type { Picked } from './folio-picker.js';
+import type { MarkedPassage } from '@augur/ui-kit';
+
+/**
+ * Offers words marked in a document to whichever app keeps entities (Data
+ * Atlas), and says in a sentence what became of them.
+ */
+export const proposeFrom =
+  (ctx: Pick<MountContext, 'request'>) =>
+  async (doc: { id: string; title: string }, passage: MarkedPassage, version: number): Promise<string> => {
+    try {
+      const receipt = await proposeEntity(ctx, {
+        source: { app: 'folio', id: doc.id, version: String(version), title: doc.title },
+        ...(passage.anchor ? { anchor: passage.anchor } : {}),
+        text: passage.text,
+        ...(passage.context ? { context: passage.context } : {}),
+      });
+      return `Sent to ${receipt.queue}. Its leads decide what it names.`;
+    } catch (err) {
+      if (isIntentCancelled(err)) return 'Not sent.';
+      if ((err as Error).message.includes(`"${ENTITY_PROPOSE}"`)) throw new Error('Data Atlas isn’t open to you on this floor, so there’s nowhere to add it.');
+      throw err;
+    }
+  };
 
 /**
  * Where Folio is in the address bar, so a place in it can be shared, and Back
@@ -67,6 +90,7 @@ export default defineMicroFrontend({
       html`<folio-app
         .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
         .userId=${ctx.user.id}
+        .propose=${proposeFrom(ctx)}
         ?publisher=${ctx.user.roles.includes('publisher')}
         floor-name=${ctx.workspace.name}
         floor-kind=${ctx.workspace.kind}

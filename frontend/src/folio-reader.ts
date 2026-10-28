@@ -1,5 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
-import { ago, type ListItem, type OutlineItem, type ReaderSize, type UiReader } from '@augur/ui-kit';
+import { ago, type ListItem, type MarkedPassage, type OutlineItem, type ReaderSize, type UiReader } from '@augur/ui-kit';
 import { agoWords } from './folio-publish.js';
 import { fileTypeOf, sizeWords, type DocumentVersion, type FolioApi, type OpenDocument, type Tag } from './api.js';
 
@@ -45,6 +45,12 @@ const placeKey = (version: string) => `folio:read:${version}`;
 /** A picture's name in a reader copy, as the worker writes them. */
 const PICTURE = /^images\/(\d{1,5}\.png)$/;
 
+/** Offers marked words to Data Atlas, and says where they went: the SDK's proposeEntity, by way of entry.ts. */
+export type Propose = (passage: MarkedPassage, version: number) => Promise<string>;
+
+/** Marked words, shortened to show beside the reader. */
+const shortWords = (text: string) => (text.length > 80 ? `${text.slice(0, 79)}…` : text);
+
 /**
  * A document to read: its reader copy in the middle, its contents beside it,
  * and beside that what it is, its versions and tags, the original to download,
@@ -74,6 +80,10 @@ export class FolioReader extends LitElement {
     outline: { state: true },
     current: { state: true },
     prefs: { state: true },
+    propose: { attribute: false },
+    passage: { state: true },
+    proposing: { state: true },
+    proposed: { state: true },
   };
 
   declare api: FolioApi;
@@ -88,6 +98,13 @@ export class FolioReader extends LitElement {
   declare outline: OutlineItem[];
   declare current: string;
   declare prefs: ReadingPrefs;
+  /** Offers marked words to Data Atlas; without it, there's no Data Atlas section. */
+  declare propose: Propose | undefined;
+  /** The words marked in the reader copy now, if any. */
+  declare passage: MarkedPassage | undefined;
+  declare proposing: boolean;
+  /** What happened to the last offer, said beside the button. */
+  declare proposed: { ok: boolean; words: string } | undefined;
 
   /** The version whose reader copy is loaded, so a refresh of the document doesn't load it again. */
   private loaded = '';
@@ -102,15 +119,47 @@ export class FolioReader extends LitElement {
     this.outline = [];
     this.current = '';
     this.prefs = readingPrefs();
+    this.proposing = false;
   }
 
   override createRenderRoot() {
     return this;
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener('selectionchange', this.onSelection);
+  }
+
   override disconnectedCallback() {
     super.disconnectedCallback();
+    document.removeEventListener('selectionchange', this.onSelection);
     this.forgetPictures();
+  }
+
+  /** Keeps what's marked in the reader copy; reaching for the button doesn't unmark it. */
+  private onSelection = () => {
+    const marked = this.reader?.marked();
+    if (marked) {
+      if (marked.text !== this.passage?.text || marked.anchor !== this.passage?.anchor) this.proposed = undefined;
+      this.passage = marked;
+    } else if (!this.querySelector('.folio-reader-atlas')?.contains(document.activeElement)) {
+      this.passage = undefined;
+    }
+  };
+
+  private async offer(v: DocumentVersion) {
+    const passage = this.passage;
+    if (!this.propose || !passage) return;
+    this.proposing = true;
+    this.proposed = undefined;
+    try {
+      this.proposed = { ok: true, words: await this.propose(passage, v.number) };
+    } catch (err) {
+      this.proposed = { ok: false, words: (err as Error).message };
+    } finally {
+      this.proposing = false;
+    }
   }
 
   /** The version being read. */
@@ -249,6 +298,20 @@ export class FolioReader extends LitElement {
     </nav>`;
   }
 
+  /** Marked words that name a thing, offered to Data Atlas's Triage. The button says what it waits for. */
+  private atlas(v: DocumentVersion) {
+    if (!this.propose || v.reader.state !== 'ready') return nothing;
+    const passage = this.passage;
+    return html`<section class="folio-reader-atlas" aria-label="Add to Data Atlas">
+      <span class="label">Data Atlas</span>
+      <p class="folio-reader-note">${passage
+        ? html`Marked: “${shortWords(passage.text)}”`
+        : 'Select the words that name a ship, port, person or organisation, then add them to Data Atlas. Its leads decide what they are.'}</p>
+      <ui-button kind="secondary" size="sm" ?disabled=${!passage || this.proposing} @click=${() => void this.offer(v)}>${this.proposing ? 'Offering…' : 'Add to Data Atlas'}</ui-button>
+      ${this.proposed ? html`<p class="folio-reader-note ${this.proposed.ok ? '' : 'folio-reader-refused'}" role=${this.proposed.ok ? 'status' : 'alert'}>${this.proposed.words}</p>` : nothing}
+    </section>`;
+  }
+
   private side(v: DocumentVersion) {
     const doc = this.doc;
     const newest = doc.latest.number;
@@ -274,7 +337,7 @@ export class FolioReader extends LitElement {
         ${doc.can.change ? html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-manage')}>Change it</ui-button>` : nothing}
         ${doc.only ? nothing : html`<ui-button kind="ghost" size="sm" @click=${() => this.emit('folio-share')}>${doc.can.share ? 'Share' : 'Who can see it'}</ui-button>`}
       </div>
-      ${this.publishing()} ${this.series()}
+      ${this.publishing()} ${this.series()} ${this.atlas(v)}
       ${doc.tags.length
         ? html`<div class="folio-tags" aria-label="Tags">${doc.tags.map((t) => {
             const tag = this.tags.find((x) => x.id === t);
@@ -314,6 +377,8 @@ export class FolioReader extends LitElement {
         folio-reader .folio-reader-publishing { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
         folio-reader .folio-reader-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); }
         folio-reader .folio-reader-note { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
+        folio-reader .folio-reader-refused { color: var(--danger); }
+        folio-reader .folio-reader-atlas { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
         folio-reader .folio-reader-side { position: sticky; top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); }
         folio-reader .folio-reader-facts { display: flex; flex-direction: column; gap: var(--space-2); }
         folio-reader .folio-reader-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }

@@ -1,6 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
 import './folio-reader.js';
+import type { Propose } from './folio-reader.js';
 import './folio-share.js';
 import './folio-publish.js';
 import './folio-series.js';
@@ -200,6 +201,7 @@ export class FolioApp extends LitElement {
     floorName: { type: String, attribute: 'floor-name' },
     floorKind: { type: String, attribute: 'floor-kind' },
     place: { attribute: false },
+    propose: { attribute: false },
     libraries: { state: true },
     canCreate: { state: true },
     open: { state: true },
@@ -234,6 +236,8 @@ export class FolioApp extends LitElement {
   declare floorKind: 'personal' | 'team' | 'org';
   /** Where to start, from the path the shell mounted Folio at. */
   declare place: Place;
+  /** Offers words marked in the open document to Data Atlas (see folio-reader). */
+  declare propose: ((doc: { id: string; title: string }, ...rest: Parameters<Propose>) => Promise<string>) | undefined;
   declare libraries: Library[];
   declare canCreate: boolean;
   declare open: OpenLibrary | undefined;
@@ -969,6 +973,7 @@ export class FolioApp extends LitElement {
         .doc=${doc}
         .version=${this.reading.version}
         .tags=${open?.tags ?? []}
+        .propose=${this.propose ? (...rest: Parameters<Propose>) => this.propose!({ id: doc.id, title: doc.title }, ...rest) : undefined}
         library-name=${open ? [open.name, ...folderTrail(open.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName}
         @folio-read=${(e: CustomEvent<{ version?: number }>) => void this.read(doc.id, e.detail.version, true, doc.library)}
         @folio-back=${() => void this.stopReading()}

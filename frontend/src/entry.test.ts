@@ -2,7 +2,7 @@ import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sd
 import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
-import app, { addressFor, placeForIntent } from './entry.js';
+import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
 import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
@@ -370,6 +370,44 @@ describe('folio', () => {
     await settle(el);
     expect(el.querySelector('folio-reader')).toBeNull();
     expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1');
+  });
+
+  it('offers marked words to Data Atlas, saying what it waits for until there are some', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:map');
+    URL.revokeObjectURL = vi.fn();
+    const { fetch } = service({ documents: [travel] });
+    const request = vi.fn(async () => ({ proposal: 'prp_1', queue: 'Finance’s Triage' }));
+    const el = document.body.appendChild(document.createElement('div'));
+    await app.mount(el, { ...ctx(fetch, '/libraries/l-1/documents/d-1'), request: request as unknown as MountContext['request'] });
+    await settle(el);
+    const page = el.querySelector('folio-reader')!;
+    await page.updateComplete;
+    const section = page.querySelector('.folio-reader-atlas')!;
+    const add = section.querySelector('ui-button') as HTMLElement & { disabled: boolean };
+    expect(add.disabled).toBe(true);
+    expect(section.textContent).toContain('Select the words that name a ship');
+    const reader = page.querySelector<UiReader>('ui-reader')!;
+    reader.marked = () => ({ text: 'travel desk', anchor: 'b2', context: 'Book through the travel desk.' });
+    document.dispatchEvent(new Event('selectionchange'));
+    await settle(el);
+    expect(section.textContent).toContain('Marked: “travel desk”');
+    expect(add.disabled).toBe(false);
+    add.click();
+    await settle(el);
+    expect(request).toHaveBeenCalledWith({
+      type: 'entity.propose',
+      payload: { source: { app: 'folio', id: 'd-1', version: '2', title: 'Travel policy' }, anchor: 'b2', text: 'travel desk', context: 'Book through the travel desk.' },
+    });
+    expect(section.querySelector('[role=status]')!.textContent).toBe('Sent to Finance’s Triage. Its leads decide what it names.');
+  });
+
+  it('says plainly when there’s no Data Atlas to offer words to', async () => {
+    const request = vi.fn(async () => {
+      throw new Error('No app you can open handles "entity.propose".');
+    });
+    await expect(proposeFrom({ request: request as unknown as MountContext['request'] })({ id: 'd-1', title: 'Travel policy' }, { text: 'travel desk', anchor: 'b2', context: '' }, 2)).rejects.toThrow(
+      'Data Atlas isn’t open to you on this floor, so there’s nowhere to add it.',
+    );
   });
 
   it('opens straight at an older version from its path, and says there is a newer one', async () => {
