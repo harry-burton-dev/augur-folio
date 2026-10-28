@@ -6,7 +6,7 @@ import './folio-publish.js';
 import './folio-series.js';
 import './folio-audience.js';
 import type { Chosen } from './folio-audience.js';
-import { whoWords } from './folio-share.js';
+import { whoWords, type Explainer } from './folio-share.js';
 import {
   ACCEPT,
   KINDS,
@@ -279,6 +279,8 @@ export class FolioApp extends LitElement {
   declare seriesEdit: (Omit<SeriesView, 'audience'> & { audience: Principal[] }) | undefined;
   /** The person has the publisher role: the whole org is theirs to publish to. */
   declare publisher: boolean;
+  /** Set by the entry: asks another app to explain who can open something. */
+  explain: Explainer | undefined;
   /** What the share dialog is about: a library, or one document of it. */
   shareTarget: { library: string; document?: string; name: string } | undefined;
 
@@ -1258,7 +1260,7 @@ export class FolioApp extends LitElement {
             close();
             this.shareTarget = undefined;
           }}>
-          <folio-share .api=${this.api} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
+          <folio-share .api=${this.api} .explain=${this.explain} name=${target.name} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
         </ui-dialog>`;
       }
       case 'publish': {
