@@ -1,6 +1,6 @@
 {
   "name": "@apps/folio-frontend",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Folio's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
