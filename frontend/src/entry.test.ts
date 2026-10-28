@@ -657,6 +657,41 @@ describe('folio', () => {
     expect(shared().map((i) => i.title)).toEqual(['Ola Bello', 'Legal (just that team)']);
   });
 
+  it('asks for who can open it, explained, and says so when nothing can explain it', async () => {
+    const { fetch } = service({ lead: false });
+    const context = ctx(fetch);
+    const el = document.createElement('div');
+    document.body.append(el);
+    await app.mount(el, context);
+    await settle(el);
+    button(el, 'Who can see it')!.click();
+    await settle(el);
+    const share = el.querySelector('folio-share')!;
+    button(share, 'Who can open this, explained')!.click();
+    await settle(el);
+    expect(context.request).toHaveBeenCalledWith({
+      type: 'access.explain',
+      payload: {
+        thing: { app: 'folio', appName: 'Artifacts', id: 'l-1', title: 'Policies', kind: 'library' },
+        audience: [
+          { principal: 'tree:w-fin', name: 'Finance', level: 'read', via: 'its floor' },
+          { principal: 'person:u3', name: 'Kim Lee', level: 'read', since: KIM.createdAt, via: 'shared with this library' },
+        ],
+        change: { where: 'Share', allowed: false },
+      },
+    });
+    vi.mocked(context.request).mockRejectedValueOnce(Object.assign(new Error('No app you can open handles "access.explain".'), { name: 'IntentError' }));
+    button(share, 'Who can open this, explained')!.click();
+    await settle(el);
+    expect(share.querySelector('[role=status]')!.textContent).toBe('Couldn’t explain it: No app you can open handles "access.explain". Who can see it is still listed here.');
+    // Closing it without an answer is no error.
+    vi.mocked(context.request).mockRejectedValueOnce(Object.assign(new Error('closed'), { name: 'IntentCancelled' }));
+    share.note = '';
+    button(share, 'Who can open this, explained')!.click();
+    await settle(el);
+    expect(share.querySelector('[role=status]')!.textContent).toBe('');
+  });
+
   it('lets someone who only reads see who can, without changing it', async () => {
     const { fetch } = service({ lead: false });
     const el = await mounted(fetch);
