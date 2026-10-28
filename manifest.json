@@ -64,12 +64,12 @@
     {
       "id": "libraries",
       "label": "Libraries",
-      "icon": "library",
+      "icon": "folder",
       "items": [
         {
           "id": "all",
           "label": "All libraries",
-          "icon": "library",
+          "icon": "list",
           "path": "/libraries",
           "detail": "Everything kept on this floor",
           "keywords": "documents folders shelves"
