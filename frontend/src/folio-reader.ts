@@ -307,7 +307,7 @@ export class FolioReader extends LitElement {
       <p class="folio-reader-note">${passage
         ? html`Marked: “${shortWords(passage.text)}”`
         : 'Select the words that name a ship, port, person or organisation, then add them to Data Atlas. Its leads decide what they are.'}</p>
-      <ui-button kind="secondary" size="sm" ?disabled=${!passage || this.proposing} @click=${() => void this.offer(v)}>${this.proposing ? 'Offering…' : 'Add to Data Atlas'}</ui-button>
+      <ui-button kind="secondary" size="sm" ?disabled=${!passage} reason="Select some words in the document first." ?busy=${this.proposing} busy-label="Offering…" @click=${() => void this.offer(v)}>Add to Data Atlas</ui-button>
       ${this.proposed ? html`<p class="folio-reader-note ${this.proposed.ok ? '' : 'folio-reader-refused'}" role=${this.proposed.ok ? 'status' : 'alert'}>${this.proposed.words}</p>` : nothing}
     </section>`;
   }
@@ -327,8 +327,8 @@ export class FolioReader extends LitElement {
       <section class="folio-reader-facts">
         <span class="label">Text size</span>
         <div class="folio-reader-row" role="group" aria-label="Text size">
-          <ui-button kind="secondary" size="sm" ?disabled=${size === 0} @click=${() => this.setPrefs({ size: SIZES[size - 1] })}>Smaller</ui-button>
-          <ui-button kind="secondary" size="sm" ?disabled=${size === SIZES.length - 1} @click=${() => this.setPrefs({ size: SIZES[size + 1] })}>Larger</ui-button>
+          <ui-button kind="secondary" size="sm" ?disabled=${size === 0} reason="It’s at the smallest size." @click=${() => this.setPrefs({ size: SIZES[size - 1] })}>Smaller</ui-button>
+          <ui-button kind="secondary" size="sm" ?disabled=${size === SIZES.length - 1} reason="It’s at the largest size." @click=${() => this.setPrefs({ size: SIZES[size + 1] })}>Larger</ui-button>
         </div>
         <ui-toggle label="Wide page" ?checked=${this.prefs.wide} @ui-change=${(e: CustomEvent<{ checked: boolean }>) => this.setPrefs({ wide: e.detail.checked })}></ui-toggle>
       </section>
