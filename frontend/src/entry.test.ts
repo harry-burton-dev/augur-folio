@@ -1,5 +1,5 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
-import type { UiContents, UiDialog, UiFilterBar, UiList, UiPageHead, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
+import type { UiContents, UiDialog, UiFilterBar, UiList, UiPageHead, UiReader, UiTagPicker, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
@@ -667,10 +667,10 @@ describe('folio', () => {
     const shared = () => [...share.querySelectorAll<UiList>('ui-list')].at(-1)!.items;
     expect(shared().map((i) => [i.title, i.meta])).toEqual([['Kim Lee', 'Can read']]);
 
-    share.querySelector<UiTextField>('ui-text-field')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'ol' } }));
-    await new Promise((r) => setTimeout(r, 250));
+    const picker = share.querySelector('ui-people-picker')!;
+    await picker.find('ol');
     await settle(el);
-    const found = share.querySelector<UiList>('ui-list')!;
+    const found = picker.shadowRoot!.querySelector<UiList>('ui-list')!;
     expect(found.items.map((i) => i.title)).toEqual(['Ola Bello', 'Legal']);
     found.dispatchEvent(new CustomEvent('ui-open', { detail: { item: found.items[0] } }));
     await settle(el);
@@ -683,10 +683,10 @@ describe('folio', () => {
     expect(share.querySelector('[role=status]')!.textContent).toBe('Ola Bello: can edit.');
 
     // A team goes with the teams below it, unless that's switched off.
-    share.querySelector<UiTextField>('ui-text-field')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'leg' } }));
-    await new Promise((r) => setTimeout(r, 250));
+    const again = share.querySelector('ui-people-picker')!;
+    await again.find('leg');
     await settle(el);
-    const teams = share.querySelector<UiList>('ui-list')!;
+    const teams = again.shadowRoot!.querySelector<UiList>('ui-list')!;
     teams.dispatchEvent(new CustomEvent('ui-open', { detail: { item: teams.items[1] } }));
     await settle(el);
     share.querySelector('ui-toggle')!.dispatchEvent(new CustomEvent('ui-change', { detail: { checked: false } }));
@@ -744,7 +744,7 @@ describe('folio', () => {
     button(el, 'Who can see it')!.click();
     await settle(el);
     const share = el.querySelector('folio-share')!;
-    expect(share.querySelector('ui-text-field')).toBeNull();
+    expect(share.querySelector('ui-people-picker')).toBeNull();
     expect(share.querySelector<UiList>('ui-list')!.items[0].actions).toBeUndefined();
   });
 
