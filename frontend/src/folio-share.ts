@@ -1,7 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { isIntentCancelled } from '@augur/mfe-sdk';
-import { ago, type ListItem, type SelectOption } from '@augur/ui-kit';
-import type { Access, FolioApi, Found, Grant, Level, Principal } from './api.js';
+import { ago, type ListItem, type Principal as Someone, type SelectOption } from '@augur/ui-kit';
+import type { Access, FolioApi, Grant, Level, Principal } from './api.js';
 
 export const LEVEL_WORDS: Record<Level, string> = { read: 'Can read', edit: 'Can edit', manage: 'Can manage' };
 
@@ -87,8 +87,6 @@ export class FolioShare extends LitElement {
     explain: { attribute: false },
     access: { state: true },
     failure: { state: true },
-    query: { state: true },
-    found: { state: true },
     pick: { state: true },
     busy: { state: true },
     note: { state: true },
@@ -106,15 +104,10 @@ export class FolioShare extends LitElement {
   declare me: string;
   declare access: Access | undefined;
   declare failure: string;
-  declare query: string;
-  declare found: Found | undefined;
   declare pick: Pick | undefined;
   declare busy: boolean;
   /** What the last change did, for screen readers and eyes. */
   declare note: string;
-
-  private searchTimer?: ReturnType<typeof setTimeout>;
-  private asked = 0;
 
   constructor() {
     super();
@@ -122,7 +115,6 @@ export class FolioShare extends LitElement {
     this.name = '';
     this.me = '';
     this.failure = '';
-    this.query = '';
     this.busy = false;
     this.note = '';
   }
@@ -135,11 +127,6 @@ export class FolioShare extends LitElement {
     if ((changed.has('api') || changed.has('library') || changed.has('document')) && this.api && this.library) void this.load();
   }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    clearTimeout(this.searchTimer);
-  }
-
   private async load() {
     this.failure = '';
     try {
@@ -149,32 +136,25 @@ export class FolioShare extends LitElement {
     }
   }
 
-  private search(q: string) {
-    this.query = q;
-    clearTimeout(this.searchTimer);
-    if (!q.trim()) {
-      this.found = undefined;
-      return;
-    }
-    const asked = ++this.asked;
-    this.searchTimer = setTimeout(async () => {
-      try {
-        const found = await this.api.people(q.trim());
-        if (asked === this.asked) this.found = found;
-      } catch (err) {
-        if (asked === this.asked) this.note = (err as Error).message;
-      }
-    }, 200);
+  /** People and teams by name, each saying how far it's already let in. */
+  private readonly search = async (q: string): Promise<Someone[]> => {
+    const found = await this.api.people(q);
+    return [
+      ...found.people.map((p): Someone => ({ kind: 'person', id: p.id, name: p.name, ...(p.email ? { detail: p.email } : {}), ...this.already(`person:${p.id}`) })),
+      ...found.teams.map((t): Someone => ({ kind: 'team', id: t.id, name: t.name, ...(t.within.length ? { detail: `In ${t.within.join(' / ')}` } : {}), ...this.already(`tree:${t.id}`, `team:${t.id}`) })),
+    ];
+  };
+
+  private already(...principals: string[]) {
+    const level = principals.map((p) => this.levelOf(p)).find(Boolean);
+    return level ? { meta: LEVEL_WORDS[level] } : {};
   }
 
-  private choose(item: ListItem) {
-    const [kind, id] = [item.id.slice(0, item.id.indexOf(':')), item.id.slice(item.id.indexOf(':') + 1)];
-    const team = kind === 'team';
-    const principal = team ? `tree:${id}` : `person:${id}`;
-    const had = this.levelOf(principal) ?? this.levelOf(`team:${id}`);
-    this.pick = { principal, name: item.title, team, below: true, level: had ?? 'read', existing: Boolean(had) };
-    this.query = '';
-    this.found = undefined;
+  private choose(found: Someone) {
+    const team = found.kind === 'team';
+    const principal = team ? `tree:${found.id}` : `person:${found.id}`;
+    const had = this.levelOf(principal) ?? this.levelOf(`team:${found.id}`);
+    this.pick = { principal, name: found.name, team, below: true, level: had ?? 'read', existing: Boolean(had) };
   }
 
   private levelOf(principal: string) {
@@ -247,25 +227,11 @@ export class FolioShare extends LitElement {
     }
   }
 
-  private suggestions(): ListItem[] {
-    const found = this.found;
-    if (!found) return [];
-    return [
-      ...found.people.map((p) => ({ id: `person:${p.id}`, title: p.name, detail: p.email ?? '', icon: 'account', ...(this.levelOf(`person:${p.id}`) ? { meta: LEVEL_WORDS[this.levelOf(`person:${p.id}`)!] } : {}) })),
-      ...found.teams.map((t) => ({ id: `team:${t.id}`, title: t.name, detail: t.within.length ? `Team in ${t.within.join(' / ')}` : 'Team', icon: 'people' })),
-    ];
-  }
-
   private form() {
     const pick = this.pick;
     if (!pick)
-      return html`<ui-text-field label="Share with" placeholder="A name, an email or a team" .value=${this.query} ?disabled=${this.busy}
-          @ui-input=${(e: CustomEvent<{ value: string }>) => this.search(e.detail.value)}></ui-text-field>
-        ${this.found
-          ? html`<ui-list label="People and teams found" density="compact" .noun=${['match', 'matches']} .items=${this.suggestions()}
-              empty="No one by that name. Try part of a name or an email."
-              @ui-open=${(e: CustomEvent<{ item: ListItem }>) => this.choose(e.detail.item)}></ui-list>`
-          : nothing}`;
+      return html`<ui-people-picker label="Share with" ?disabled=${this.busy} .search=${this.search}
+        @ui-pick=${(e: CustomEvent<{ principal: Someone }>) => this.choose(e.detail.principal)}></ui-people-picker>`;
     return html`<div class="folio-share-pick">
       <p class="folio-share-who"><ui-icon name=${pick.team ? 'people' : 'account'} size="20"></ui-icon>${pick.name}</p>
       ${pick.team
