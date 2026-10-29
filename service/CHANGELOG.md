@@ -1,5 +1,13 @@
 # @apps/folio
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [f0d02e2]
+- Updated dependencies [bbdad18]
+  - @augur/service-kit@0.9.0
+
 ## 0.2.1
 
 ### Patch Changes

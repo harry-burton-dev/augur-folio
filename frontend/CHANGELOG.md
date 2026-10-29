@@ -1,5 +1,30 @@
 # @apps/folio-frontend
 
+## 0.3.0
+
+### Minor Changes
+
+- 3b11978: Who can open this, explained: Auspex handles `access.explain` over the app that asks, counting only people the person may know about and naming everyone left out, and Artifacts raises it from Who can see it.
+- 513e2e9: Artifacts reader: mark the words that name a ship, port, person or organisation and choose Add to Data Atlas to send them to the floor's Triage. The button stays in sight and says what it waits for.
+
+### Patch Changes
+
+- 1580b6b: Artifacts' Libraries group and its All libraries page no longer repeat the app's own icon.
+- Updated dependencies [1580b6b]
+- Updated dependencies [d324552]
+- Updated dependencies [18bf27c]
+- Updated dependencies [f01fcea]
+- Updated dependencies [8f69cb5]
+- Updated dependencies [b556614]
+- Updated dependencies [513e2e9]
+- Updated dependencies [feeffdd]
+- Updated dependencies [ae92eed]
+- Updated dependencies [778b6f9]
+- Updated dependencies [513e2e9]
+- Updated dependencies [28d8775]
+  - @augur/mfe-sdk@1.5.0
+  - @augur/ui-kit@1.4.0
+
 ## 0.2.0
 
 ### Minor Changes
