@@ -1,5 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
-import { ago, filterValue, type DialogSubmit, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
+import { ago, filterValue, type ButtonKind, type DialogSubmit, type PageAction, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField } from '@augur/ui-kit';
 import './folio-reader.js';
 import type { Propose } from './folio-reader.js';
 import './folio-share.js';
@@ -899,7 +899,7 @@ export class FolioApp extends LitElement {
 
   private rail() {
     const open = this.open;
-    return html`<nav class="folio-rail" aria-label="Libraries and folders">
+    return html`<div slot="rail" class="folio-rail">
       <ui-tree
         label="Libraries"
         heading=${this.shelfName}
@@ -959,7 +959,7 @@ export class FolioApp extends LitElement {
             @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openView(e.detail.item.id)}
           ></ui-tree>`
         : nothing}
-    </nav>`;
+    </div>`;
   }
 
   private main() {
@@ -1032,33 +1032,17 @@ export class FolioApp extends LitElement {
     const where = here?.name ?? open.name;
     const changedView = view && !sameQuery(view.query, queryFrom(this.filters, this.sort, this.folder));
     const tagOpts = tagOptions(open.tags);
-    return html`<div class="folio-main-inner" aria-busy=${this.opening ? 'true' : 'false'}>
-      ${here && !view
-        ? html`<ol class="folio-trail" aria-label="Where you are">
-            <li><button class="folio-crumb" @click=${() => this.goToFolder(undefined)}>${open.name}</button></li>
-            ${trail.map(
-              (f, i) => html`<li><span aria-hidden="true">/</span><button class="folio-crumb" aria-current=${i === trail.length - 1 ? 'page' : nothing} @click=${() => this.goToFolder(f.id)}>${f.name}</button></li>`,
-            )}
-          </ol>`
-        : nothing}
-      <div class="folio-head">
-        ${view
-          ? html`<ui-heading eyebrow=${`A view in ${open.name}`} heading=${view.name} summary=${here ? `In ${trail.map((f) => f.name).join(' / ')}` : ''}></ui-heading>`
-          : html`<ui-heading eyebrow=${here ? (trail.at(-2)?.name ?? open.name) : this.shelfName} heading=${here?.name ?? open.name} summary=${here ? '' : open.description}></ui-heading>`}
-        <div class="folio-actions">
-          ${view && this.mayChangeView(view)
-            ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'rename-view')}>Rename view</ui-button>
-                <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-view')}>Delete view</ui-button>`
-            : html`${open.can.addFolders && !view ? html`<ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'new-folder')}>New folder</ui-button>` : nothing}
-                ${open.can.manage && !here && !view ? html`<ui-button kind="ghost" size="sm" @click=${() => this.newSeries()}>New series</ui-button>` : nothing}
-                <ui-button kind="ghost" size="sm" @click=${() => void this.openTags()}>Tags</ui-button>
-                ${!here ? html`<ui-button kind="ghost" size="sm" @click=${() => this.openShare({ library: open.id, name: open.name })}>${open.can.share ? 'Share' : 'Who can see it'}</ui-button>` : nothing}
-                ${open.can.manage && !here
-                  ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'edit-library')}>Rename</ui-button>
-                      <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'archive-library')}>Archive</ui-button>`
-                  : nothing}`}
-        </div>
-      </div>
+    const actions = this.libraryActions(open, view, here);
+    return html`<div class="folio-main-inner">
+      <ui-page-head
+        .trail=${here && !view ? [{ id: '', label: open.name }, ...trail.slice(0, -1).map((f) => ({ id: f.id, label: f.name }))] : []}
+        eyebrow=${view ? `A view in ${open.name}` : here ? (trail.at(-2)?.name ?? open.name) : this.shelfName}
+        heading=${view?.name ?? here?.name ?? open.name}
+        summary=${view ? (here ? `In ${trail.map((f) => f.name).join(' / ')}` : '') : here ? '' : open.description}
+        .actions=${actions}
+        @ui-trail=${(e: CustomEvent<{ step: { id: string } }>) => this.goToFolder(e.detail.step.id || undefined)}
+        @ui-action=${(e: CustomEvent<{ action: { id: string } }>) => actions.find((a) => a.id === e.detail.action.id)?.run()}
+      ></ui-page-head>
       <ui-filter-bar
         label=${`Filter what’s in ${where}`}
         .filters=${filtersFor(open)}
@@ -1122,7 +1106,7 @@ export class FolioApp extends LitElement {
             ></ui-drop-zone>
           </div>`
         : nothing}
-      <p class="folio-note" role="status">${this.uploading ? `Adding ${this.uploading} ${this.uploading === 1 ? 'file' : 'files'}…` : this.note}</p>
+      <ui-note live>${this.uploading ? `Adding ${this.uploading} ${this.uploading === 1 ? 'file' : 'files'}…` : this.note}</ui-note>
     </div>`;
   }
 
@@ -1137,6 +1121,26 @@ export class FolioApp extends LitElement {
   }
 
   /** What's out to the person now, from any floor: each opens at the version that's out. */
+  /** What can be done with the library, folder or view on screen: two show, the rest go in ⋯. */
+  private libraryActions(open: OpenLibrary, view: SavedView | undefined, here: unknown) {
+    const acts: (PageAction & { run: () => void })[] = [];
+    const add = (id: string, label: string, kind: ButtonKind, run: () => void) => acts.push({ id, label, kind, run });
+    if (view && this.mayChangeView(view)) {
+      add('rename-view', 'Rename view', 'secondary', () => (this.dialog = 'rename-view'));
+      add('delete-view', 'Delete view', 'ghost', () => (this.dialog = 'delete-view'));
+      return acts;
+    }
+    if (open.can.addFolders && !view) add('new-folder', 'New folder', 'secondary', () => (this.dialog = 'new-folder'));
+    if (!here) add('share', open.can.share ? 'Share' : 'Who can see it', 'ghost', () => this.openShare({ library: open.id, name: open.name }));
+    add('tags', 'Tags', 'ghost', () => void this.openTags());
+    if (open.can.manage && !here && !view) add('new-series', 'New series', 'ghost', () => this.newSeries());
+    if (open.can.manage && !here) {
+      add('rename', 'Rename', 'ghost', () => (this.dialog = 'edit-library'));
+      add('archive', 'Archive', 'ghost', () => (this.dialog = 'archive-library'));
+    }
+    return acts;
+  }
+
   private inboxPage(inbox: PublishedPage) {
     const rows: ListItem[] = inbox.documents.map((d) => ({
       id: `${DOC}${d.library}/${d.id}/${d.published.version}`,
@@ -1146,9 +1150,7 @@ export class FolioApp extends LitElement {
       meta: ago(d.published.publishedAt),
     }));
     return html`<div class="folio-main-inner">
-      <div class="folio-head">
-        <ui-heading eyebrow="For you" heading="Published to you" summary="Put out to you, or to a team you’re on, from any floor. The newest first."></ui-heading>
-      </div>
+      <ui-page-head eyebrow="For you" heading="Published to you" summary="Put out to you, or to a team you’re on, from any floor. The newest first."></ui-page-head>
       <ui-surface>
         <ui-list label="Published to you" density="compact" .noun=${['document', 'documents']} .items=${rows}
           empty="Nothing has been published to you yet. When a team you’re on is sent something, it shows here."
@@ -1159,7 +1161,7 @@ export class FolioApp extends LitElement {
             void this.read(document, doc && doc.latest.number !== Number(version) ? Number(version) : undefined, true, library);
           }}></ui-list>
       </ui-surface>
-      <p class="folio-note" role="status">${this.note}</p>
+      <ui-note live>${this.note}</ui-note>
     </div>`;
   }
 
@@ -1249,7 +1251,7 @@ export class FolioApp extends LitElement {
             ? html`<ui-drop-zone compact heading="Drop the next version here: it becomes the newest" action="Choose a file" accept=${ACCEPT}
                   .multiple=${false} ?busy=${this.uploading > 0} @ui-files=${(e: CustomEvent<{ files: File[] }>) => void this.newVersion(e.detail.files)}
                   @ui-reject=${(e: CustomEvent<{ files: File[] }>) => this.rejected(e.detail.files)}></ui-drop-zone>
-                <p class="folio-note" role="status">${this.uploading ? 'Adding the new version…' : this.note}</p>
+                <ui-note live>${this.uploading ? 'Adding the new version…' : this.note}</ui-note>
                 <div class="folio-actions">
                   <ui-button kind="secondary" size="sm" @click=${() => (this.dialog = 'edit-document')}>Rename or move</ui-button>
                   <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'delete-document')}>Delete</ui-button>
@@ -1428,20 +1430,10 @@ export class FolioApp extends LitElement {
 
   override render() {
     return html`<style>
-        /* Folio's own ground: the shell's water stays outside the app. */
-        folio-app { display: grid; grid-template-columns: minmax(220px, 280px) 1fr; min-height: 100%; background: var(--slate); }
-        folio-app .folio-rail { display: flex; flex-direction: column; gap: var(--space-5); padding: var(--space-6) var(--space-3); border-right: 1px solid var(--hairline); overflow-y: auto; }
+        folio-app { display: block; min-height: 100%; }
+        folio-app .folio-rail { display: flex; flex-direction: column; gap: var(--space-5); }
         folio-app .folio-rail-act { padding: 0 var(--space-2); }
-        folio-app .folio-main { min-width: 0; padding: var(--space-6) var(--edge); }
-        folio-app .folio-main-inner { max-width: var(--measure-wide); display: flex; flex-direction: column; gap: var(--space-5); }
-        folio-app .folio-main-inner[aria-busy='true'] { opacity: 0.6; }
-        folio-app .folio-trail { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; font-size: var(--type-small); color: var(--ink-muted); }
-        folio-app .folio-trail li { display: flex; gap: var(--space-2); }
-        folio-app .folio-crumb { all: unset; cursor: pointer; border-radius: var(--radius-key); }
-        folio-app .folio-crumb:hover { color: var(--ink); text-decoration: underline; }
-        folio-app .folio-crumb:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
-        folio-app .folio-crumb[aria-current] { color: var(--ink); }
-        folio-app .folio-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+        folio-app .folio-main-inner { display: flex; flex-direction: column; gap: var(--space-5); }
         folio-app .folio-actions { display: flex; gap: var(--space-2); }
         folio-app .folio-note { margin: 0; min-height: 1.5em; font-size: var(--type-small); color: var(--ink-muted); }
         folio-app .folio-more { display: flex; justify-content: center; }
@@ -1450,8 +1442,10 @@ export class FolioApp extends LitElement {
         folio-app .folio-add-tag ui-text-field { flex: 1; }
         folio-app .folio-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
       </style>
-      ${this.rail()}
-      <main class="folio-main">${this.main()}</main>
+      <ui-app-frame rail-label="Libraries and folders" measure=${this.reading ? 'full' : 'wide'} ?busy=${this.opening}>
+        ${this.rail()}
+        ${this.main()}
+      </ui-app-frame>
       ${this.dialogs()}`;
   }
 }

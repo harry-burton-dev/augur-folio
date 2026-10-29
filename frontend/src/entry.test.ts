@@ -1,5 +1,5 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
-import type { UiContents, UiDialog, UiFilterBar, UiList, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
+import type { UiContents, UiDialog, UiFilterBar, UiList, UiPageHead, UiReader, UiTagPicker, UiTextField, UiTree } from '@augur/ui-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
@@ -206,7 +206,13 @@ const mounted = async (fetch: MountContext['fetch'], path?: string) => {
 /** The rail's trees of libraries, folders and views; "For you" is always there, so it's left out. */
 const trees = (el: HTMLElement) => [...el.querySelectorAll<UiTree>('ui-tree')].filter((t) => t.label !== 'For you');
 const list = (el: HTMLElement) => el.querySelector<UiList>('ui-list')!;
-const button = (el: HTMLElement, text: string) => [...el.querySelectorAll<HTMLElement>('ui-button')].find((b) => b.textContent?.trim() === text);
+/** A button by its words: a kit button, or one of a page head's actions (two show, the rest are in its ⋯ menu). */
+const button = (el: HTMLElement, text: string): HTMLElement | undefined =>
+  [...el.querySelectorAll<HTMLElement>('ui-button')].find((b) => b.textContent?.trim() === text) ??
+  [...el.querySelectorAll<UiPageHead>('ui-page-head')].flatMap((head) => {
+    const action = head.actions.find((a) => a.label === text);
+    return action ? [Object.assign(document.createElement('span'), { click: () => head.dispatchEvent(new CustomEvent('ui-action', { detail: { action } })) })] : [];
+  })[0];
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -283,7 +289,7 @@ describe('folio', () => {
       '/api/folio/v1/libraries/l-1/documents?filename=big.pdf',
     ]);
     expect(fetch.mock.calls.find(([p]) => p.includes('filename=notes.md'))![1]!.headers).toEqual({ 'content-type': 'text/markdown' });
-    expect(el.querySelector('.folio-note')!.textContent).toBe('Added 2 documents. Couldn’t add big.pdf: A file can be 200 MB at most.');
+    expect(el.querySelector('ui-note')!.textContent).toBe('Added 2 documents. Couldn’t add big.pdf: A file can be 200 MB at most.');
   });
 
   it('renames or moves a document, and deletes one', async () => {
@@ -314,7 +320,7 @@ describe('folio', () => {
     const el = await mounted(service().fetch);
     el.querySelector('ui-drop-zone')!.dispatchEvent(new CustomEvent('ui-reject', { detail: { files: [new File(['x'], 'deck.pptx')] } }));
     await settle(el);
-    expect(el.querySelector('.folio-note')!.textContent).toMatch(/^Artifacts can’t take deck\.pptx/);
+    expect(el.querySelector('ui-note')!.textContent).toMatch(/^Artifacts can’t take deck\.pptx/);
   });
 
   it('opens a document with its versions, downloads one, and takes the next', async () => {
@@ -475,9 +481,9 @@ describe('folio', () => {
     expect(libs.items.map((i) => i.label)).toEqual(['Policies', 'Reports']);
     expect(libs.selected).toBe('l-1');
     expect(folders.items.map((i) => i.label)).toEqual(['HR', 'IT']);
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Policies');
-    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('Libraries on Finance');
-    expect(el.querySelector('.folio-trail')).toBeNull();
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Policies');
+    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Libraries on Finance');
+    expect(el.querySelector<UiPageHead>('ui-page-head')!.trail).toEqual([]);
     expect(list(el).items.map((i) => i.title)).toEqual(['HR', 'IT']);
     await app.unmount!(el);
     expect(el.querySelector('folio-app')).toBeNull();
@@ -490,8 +496,9 @@ describe('folio', () => {
     list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'f-hr' } } }));
     await settle(el);
     expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/f-hr');
-    expect([...el.querySelectorAll('.folio-crumb')].map((c) => c.textContent)).toEqual(['Policies', 'HR']);
-    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('Policies');
+    expect(el.querySelector<UiPageHead>('ui-page-head')!.trail.map((s) => s.label)).toEqual(['Policies']);
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('HR');
+    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Policies');
     expect(list(el).items.map((i) => i.title)).toEqual(['Leave']);
     expect(trees(el)[1].selected).toBe('f-hr');
   });
@@ -499,8 +506,8 @@ describe('folio', () => {
   it('opens straight at a folder from its path', async () => {
     const { fetch } = service();
     const el = await mounted(fetch, '/libraries/l-1/f-leave');
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Leave');
-    expect(el.querySelector('ui-heading')!.getAttribute('eyebrow')).toBe('HR');
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Leave');
+    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('HR');
     expect(trees(el)[1].selected).toBe('f-leave');
   });
 
@@ -559,7 +566,7 @@ describe('folio', () => {
     await settle(el);
     expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/archive']);
     expect(trees(el)[0].items.map((i) => i.label)).toEqual(['Reports']);
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Reports');
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Reports');
   });
 
   it('says when a floor has no libraries, and who can start one', async () => {
@@ -608,7 +615,7 @@ describe('folio', () => {
     expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/views/vw-new');
 
     const opened = await mounted(service({ documents: [travel, leaveDoc] }).fetch, '/libraries/l-1/views/vw-1');
-    expect(opened.querySelector('ui-heading')!.getAttribute('heading')).toBe('Recent policy');
+    expect(opened.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Recent policy');
     const bar = opened.querySelector<UiFilterBar>('ui-filter-bar')!;
     expect([bar.value, bar.sort]).toEqual([{ tag: ['t-pol'] }, 'updated']);
     expect(trees(opened)[2].selected).toBe('vw-1');
@@ -760,7 +767,7 @@ describe('folio', () => {
     // Back has no library to go to: the floor's own first one.
     reader.querySelector<HTMLButtonElement>('.folio-crumb')!.click();
     await settle(el);
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Policies');
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Policies');
   });
 
   it('opens a document shared alone straight from its path', async () => {
@@ -799,7 +806,7 @@ describe('folio', () => {
   it('lists what’s been published to the person, and opens one at the version that’s out', async () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch, '/published');
-    expect(el.querySelector('ui-heading')!.getAttribute('heading')).toBe('Published to you');
+    expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Published to you');
     expect(calls).toContainEqual(['PUT', '/api/folio/v1/published/looked']);
     const rows = list(el);
     expect(rows.items.map((i) => [i.title, i.detail])).toEqual([['Shared plan', 'In Ops runbooks · Version 2 · For Monday']]);
