@@ -166,7 +166,8 @@ export class FolioPublish extends LitElement {
         @folio-change=${(e: CustomEvent<{ chosen: Chosen[] }>) => (this.chosen = e.detail.chosen)}></folio-audience>
       <ui-text-field name="publish-note" label="A word about it" optional multiline maxlength="500" hint="It goes with the notification, and stays with the version."></ui-text-field>
       <div class="folio-actions">
-        <ui-button kind="primary" size="sm" ?disabled=${!this.chosen.length || !this.version} ?busy=${this.busy} busy-label="Publishing…" @click=${() => void this.publish()}>
+        <ui-button kind="primary" size="sm" ?disabled=${!this.chosen.length || !this.version}
+          reason=${!this.version ? 'There’s no version to publish yet.' : 'Choose who to publish it to first.'} ?busy=${this.busy} busy-label="Publishing…" @click=${() => void this.publish()}>
           ${!out ? `Publish version ${this.version}` : out.version === this.version ? 'Publish it again' : `Publish version ${this.version} instead`}
         </ui-button>
       </div>
