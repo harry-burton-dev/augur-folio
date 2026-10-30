@@ -8,9 +8,9 @@ import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
 const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', freeTags: false, createdBy: 'u1', createdAt: '', updatedAt: '' };
 const reports = { ...policies, id: 'l-2', name: 'Reports', description: '' };
-const hr = { id: 'f-hr', library: 'l-1', name: 'HR', createdBy: 'u1', createdAt: '' };
-const leave = { id: 'f-leave', library: 'l-1', parent: 'f-hr', name: 'Leave', createdBy: 'u2', createdAt: '' };
-const it_ = { id: 'f-it', library: 'l-1', name: 'IT', createdBy: 'u2', createdAt: '' };
+const hr = { id: 'f-hr', library: 'l-1', level: 'subcollection' as const, name: 'HR', description: '', state: 'open' as const, createdBy: 'u1', createdAt: '', updatedAt: '' };
+const leave = { id: 'f-leave', library: 'l-1', parent: 'f-hr', level: 'series' as const, name: 'Leave', description: '', state: 'open' as const, createdBy: 'u2', createdAt: '', updatedAt: '' };
+const it_ = { id: 'f-it', library: 'l-1', level: 'subcollection' as const, name: 'IT', description: '', state: 'open' as const, createdBy: 'u2', createdAt: '', updatedAt: '' };
 const TRAVEL_MD = '# Travel policy\n\nBook through the travel desk.\n\n## Claims\n\nClaim within 30 days.\n\n![A map](images/1.png)\n\n![](https://tracker.example/x.gif)\n';
 const READY = { state: 'ready', pages: 3, thumbnail: true } as ReaderState;
 const DAMAGED = { state: 'failed', error: 'The file is damaged.', thumbnail: false } as ReaderState;
@@ -42,6 +42,9 @@ const service = ({
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
   let retried = false;
+  /** Travel policy's newest version's lifecycle state, and its steps up the floors. */
+  let state = 'in-progress';
+  let placed: Record<string, unknown>[] = [];
   /** What's out of Travel policy, if anything. */
   let out: { id: string; version: number; audience: string[]; publishedAt: string; ended?: { as: string; at: string; by: string } } | undefined;
   const named = (p: NonNullable<typeof out>) => ({ ...p, document: 'd-1', library: 'l-1', publishedBy: 'u1', audience: p.audience.map((a) => (a === 'tree:w-fin' ? FINANCE : { principal: a, kind: 'org' })) });
@@ -87,8 +90,44 @@ const service = ({
         ...travel,
         state: out ? (out.ended ? 'withdrawn' : 'published') : 'draft',
         ...(out && !out.ended ? { published: out } : {}),
-        can: { ...travel.can, publish: lead },
-        versions: [v(2), v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED)],
+        latest: { ...v(2), state },
+        can: { ...travel.can, publish: lead, moves: state === 'in-progress' ? ['in-review', 'complete'] : lead ? ['in-progress', 'in-review', 'issued'] : ['in-progress', 'in-review'] },
+        versions: [{ ...v(2), state }, { ...v(1, 'travel-old.pdf', 900, retried ? { state: 'queued', thumbnail: false } : DAMAGED), state: 'complete' }],
+      });
+    if (method === 'PUT' && where === '/libraries/l-1/documents/d-1/versions/2/state') {
+      state = body.state;
+      return Response.json({ ...v(2), state });
+    }
+    if (method === 'PUT' && /^\/libraries\/l-1(\/folders\/[^/]+)?\/state$/.test(where)) return Response.json({ ...hr, state: body.state });
+    if (method === 'GET' && where === '/libraries/l-1/moves') return Response.json({ moves: [{ id: 'm-1', record: 'f-hr', from: 'open', to: 'closed', by: 'u1', note: 'Year end', at: new Date().toISOString() }] });
+    if (method === 'GET' && where === '/placements') {
+      const OPS = { id: 'w-ops', kind: 'team', name: 'Operations', rank: 1, path: ['w-ops'] };
+      return Response.json({
+        placements: placed,
+        owner: placed.length ? OPS : { ...floor, rank: 2 },
+        targets: [
+          { from: { ...floor, rank: 2 }, to: OPS, ...(placed.length ? { why: 'It’s already there.' } : {}) },
+          { from: { ...floor, rank: 2 }, to: { id: 'org', kind: 'org', name: 'The org', rank: 0, path: [] }, why: 'Publishing to the org needs the publisher role, which an admin can give you.' },
+        ],
+      });
+    }
+    if (method === 'POST' && where === '/placements') {
+      const step = { id: 'pl-1', library: 'l-1', record: { ...body.record, name: 'Travel policy' }, from: 'w-fin', to: body.to, filter: body.filter, by: 'u1', at: new Date().toISOString(), chain: [], toFloor: { id: 'w-ops', kind: 'team', name: 'Operations', rank: 1, path: [] }, can: { change: true, land: false } };
+      placed = [step];
+      return Response.json(step, { status: 201 });
+    }
+    if (method === 'GET' && where === '/received')
+      return Response.json({
+        here: [{ id: 'pl-9', library: 'l-7', record: { kind: 'folder', id: 'f-q', name: 'Quarterly returns', level: 'series' }, from: 'w-pay', to: 'w-fin', filter: ['complete', 'issued'], by: 'u5', at: '', chain: [], fromFloor: { id: 'w-pay', kind: 'team', name: 'Payroll', rank: 2, path: [] } }],
+        signposts: [],
+      });
+    if (method === 'GET' && where === '/received/pl-9')
+      return Response.json({
+        placement: { id: 'pl-9', library: 'l-7', record: { kind: 'folder', id: 'f-q', name: 'Quarterly returns', level: 'series' }, from: 'w-pay', to: 'w-fin', filter: ['complete', 'issued'], by: 'u5', at: '', chain: [], fromFloor: { id: 'w-pay', kind: 'team', name: 'Payroll', rank: 2, path: [] } },
+        folders: [],
+        folder: null,
+        documents: [{ ...travel, id: 'd-q3', library: 'l-7', title: 'Q3 return', latest: { ...v(1), state: 'issued' } }, { ...travel, id: 'd-q4', library: 'l-7', title: 'Q4 return', latest: { ...v(3), state: 'complete' }, onlyVia: { id: 'w-fin', kind: 'team', name: 'Finance', rank: 1, path: [] } }],
+        states: {},
       });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/publications') return Response.json({ publications: out ? [named(out)] : [], can: { publish: lead, publishToOrg: false } });
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1/access') return Response.json({ floor: FINANCE, grants: [], library: grants, can: { share: lead } });
@@ -163,7 +202,7 @@ const service = ({
       if (body.name === 'Taken') return Response.json({ error: 'name-taken', message: 'There’s already a library called Taken here.' }, { status: 409 });
       return Response.json({ ...policies, id: 'l-new', name: body.name, description: body.description ?? '' }, { status: 201 });
     }
-    if (method === 'POST' && route === '/libraries/l-1/folders') return Response.json({ id: 'f-new', library: 'l-1', name: body.name, ...(body.parent ? { parent: body.parent } : {}), createdBy: 'u1', createdAt: '' }, { status: 201 });
+    if (method === 'POST' && route === '/libraries/l-1/folders') return Response.json({ id: 'f-new', library: 'l-1', name: body.name, level: body.level ?? 'subcollection', description: body.description ?? '', state: 'open', ...(body.parent ? { parent: body.parent } : {}), createdBy: 'u1', createdAt: '', updatedAt: '' }, { status: 201 });
     if (method === 'POST' && route.endsWith('/archive')) return new Response(null, { status: 204 });
     return Response.json({ message: 'Artifacts isn’t answering.' }, { status: 502 });
   });
@@ -204,9 +243,11 @@ const mounted = async (fetch: MountContext['fetch'], path?: string) => {
   await settle(el);
   return el;
 };
-/** The rail's trees of libraries, folders and views; "For you" is always there, so it's left out. */
-const trees = (el: HTMLElement) => [...el.querySelectorAll<UiTree>('ui-tree')].filter((t) => t.label !== 'For you');
+/** The rail's trees of libraries, folders and views; "For you" is always there, so it's left out, and "From below" with it. */
+const trees = (el: HTMLElement, all = false) => [...el.querySelectorAll<UiTree>('ui-tree')].filter((t) => all || (t.label !== 'For you' && t.label !== 'Published up to this floor'));
 const list = (el: HTMLElement) => el.querySelector<UiList>('ui-list')!;
+/** The places inside where the person is, as cards. */
+const cards = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement & { heading: string }>('ui-card')];
 /** A button by its words: a kit button, or one of a page head's actions (two show, the rest are in its ⋯ menu). */
 const button = (el: HTMLElement, text: string): HTMLElement | undefined =>
   [...el.querySelectorAll<HTMLElement>('ui-button')].find((b) => b.textContent?.trim() === text) ??
@@ -263,11 +304,8 @@ describe('folio', () => {
   it('lists a place’s documents under its folders, and uploads what is dropped there', async () => {
     const { fetch, calls } = service({ documents: [travel] });
     const el = await mounted(fetch);
-    expect(list(el).items.map((i) => [i.group, i.title, i.detail])).toEqual([
-      ['Folders', 'HR', undefined],
-      ['Folders', 'IT', undefined],
-      ['Documents', 'Travel policy', 'Version 2 · PDF · 1.2 MB'],
-    ]);
+    expect(cards(el).map((c) => c.heading)).toEqual(['HR', 'IT']);
+    expect(list(el).items.map((i) => [i.title, i.detail])).toEqual([['Travel policy', 'Version 2 · PDF · 1.2 MB']]);
     const zone = el.querySelector('ui-drop-zone')!;
     expect(zone.getAttribute('heading')).toBe('Drop files to add them to Policies');
     // Tags chosen for what's added go with the next file.
@@ -314,7 +352,8 @@ describe('folio', () => {
     expect(calls).toContainEqual(['DELETE', '/api/folio/v1/libraries/l-1/documents/d-1']);
     // Back in the library, without it.
     expect(el.querySelector('folio-reader')).toBeNull();
-    expect(list(el).items.map((i) => i.title)).toEqual(['HR', 'IT']);
+    expect(cards(el).map((c) => c.heading)).toEqual(['HR', 'IT']);
+    expect(list(el).items).toEqual([]);
   });
 
   it('says which files it turned away', async () => {
@@ -475,7 +514,14 @@ describe('folio', () => {
   it('opens the floor’s first library, with its libraries and folders in the side rail', async () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch);
-    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /api/folio/v1/libraries', 'GET /api/folio/v1/shared', 'GET /api/folio/v1/libraries/l-1', 'GET /api/folio/v1/libraries/l-1/documents?limit=100']);
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual([
+      'GET /api/folio/v1/libraries',
+      'GET /api/folio/v1/shared',
+      'GET /api/folio/v1/levels',
+      'GET /api/folio/v1/received',
+      'GET /api/folio/v1/libraries/l-1',
+      'GET /api/folio/v1/libraries/l-1/documents?limit=100',
+    ]);
     const [libs, folders, views] = trees(el);
     expect(views.items.map((i) => i.label)).toEqual(['Recent policy']);
     expect(libs.heading).toBe('Libraries on Finance');
@@ -485,7 +531,7 @@ describe('folio', () => {
     expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Policies');
     expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Libraries on Finance');
     expect(el.querySelector<UiPageHead>('ui-page-head')!.trail).toEqual([]);
-    expect(list(el).items.map((i) => i.title)).toEqual(['HR', 'IT']);
+    expect(cards(el).map((c) => c.heading)).toEqual(['HR', 'IT']);
     await app.unmount!(el);
     expect(el.querySelector('folio-app')).toBeNull();
   });
@@ -494,13 +540,13 @@ describe('folio', () => {
     window.history.replaceState(null, '', '/@finance/folio/libraries');
     const { fetch } = service();
     const el = await mounted(fetch);
-    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'f-hr' } } }));
+    cards(el)[0].dispatchEvent(new CustomEvent('ui-open'));
     await settle(el);
     expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/f-hr');
     expect(el.querySelector<UiPageHead>('ui-page-head')!.trail.map((s) => s.label)).toEqual(['Policies']);
     expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('HR');
-    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Policies');
-    expect(list(el).items.map((i) => i.title)).toEqual(['Leave']);
+    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Subcollection in Policies');
+    expect(cards(el).map((c) => c.heading)).toEqual(['Leave']);
     expect(trees(el)[1].selected).toBe('f-hr');
   });
 
@@ -508,7 +554,7 @@ describe('folio', () => {
     const { fetch } = service();
     const el = await mounted(fetch, '/libraries/l-1/f-leave');
     expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Leave');
-    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('HR');
+    expect(el.querySelector('ui-page-head')!.getAttribute('eyebrow')).toBe('Series in HR');
     expect(trees(el)[1].selected).toBe('f-leave');
   });
 
@@ -523,14 +569,17 @@ describe('folio', () => {
 
   it('offers Rename and Remove only on folders the person may change', async () => {
     const { fetch } = service({ lead: false });
-    const el = await mounted(fetch);
-    expect(list(el).items.map((i) => [i.title, (i.actions ?? []).map((a) => a.label)])).toEqual([
-      ['HR', ['Rename', 'Remove']],
-      ['IT', []],
-    ]);
+    let el = await mounted(fetch);
     expect(button(el, 'Rename')).toBeUndefined();
     expect(button(el, 'New library')).toBeUndefined();
-    expect(button(el, 'New folder')).toBeDefined();
+    expect(button(el, 'New subcollection')).toBeDefined();
+    document.body.innerHTML = '';
+    el = await mounted(fetch, '/libraries/l-1/f-hr');
+    expect(button(el, 'Rename')).toBeDefined();
+    expect(button(el, 'Remove')).toBeDefined();
+    document.body.innerHTML = '';
+    el = await mounted(fetch, '/libraries/l-1/f-it');
+    expect(button(el, 'Rename')).toBeUndefined();
   });
 
   it('makes a library, and keeps the dialog open with the service’s words when it refuses', async () => {
@@ -548,13 +597,14 @@ describe('folio', () => {
   it('makes a folder inside the one that is open', async () => {
     const { fetch, calls } = service();
     const el = await mounted(fetch, '/libraries/l-1/f-hr');
-    button(el, 'New folder')!.click();
+    button(el, 'New series')!.click();
     await settle(el);
     const dialog = el.querySelector<UiDialog>('ui-dialog')!;
-    await dialog.submit!({ name: 'Sickness' }, dialog);
+    expect(dialog.heading).toBe('New series');
+    await dialog.submit!({ name: 'Sickness', level: 'series', description: ' Each absence ' }, dialog);
     await settle(el);
-    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/folders', { name: 'Sickness', parent: 'f-hr' }]);
-    expect(list(el).items.map((i) => i.title)).toEqual(['Leave', 'Sickness']);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/folders', { name: 'Sickness', parent: 'f-hr', level: 'series', description: 'Each absence' }]);
+    expect(cards(el).map((c) => c.heading)).toEqual(['Leave', 'Sickness']);
   });
 
   it('archives a library and moves on to the next', async () => {
@@ -568,6 +618,82 @@ describe('folio', () => {
     expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/archive']);
     expect(trees(el)[0].items.map((i) => i.label)).toEqual(['Reports']);
     expect(el.querySelector('ui-page-head')!.getAttribute('heading')).toBe('Reports');
+  });
+
+  it('moves the newest version on through its lifecycle, from the reader', async () => {
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    let track = el.querySelector('folio-reader ui-lifecycle') as HTMLElement & { state: string; moves: string[] };
+    expect([track.state, track.moves]).toEqual(['in-progress', ['in-review', 'complete']]);
+    track.dispatchEvent(new CustomEvent('ui-move', { detail: { state: 'complete' } }));
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/state', { state: 'complete' }]);
+    track = el.querySelector('folio-reader ui-lifecycle') as typeof track;
+    expect([track.state, track.moves]).toEqual(['complete', ['in-progress', 'in-review', 'issued']]);
+    // The versions list says where each is.
+    expect(el.querySelector<UiList>('folio-reader ui-list')!.items.map((i) => i.detail?.split(' · ')[0])).toEqual(['Complete', 'Complete']);
+  });
+
+  it('publishes a document up the floors through a filter, with the floors it can’t go to saying why', async () => {
+    const { fetch, calls } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    button(el, 'Publish up the floors')!.click();
+    await settle(el);
+    const up = el.querySelector('folio-publish-up')!;
+    const where = up.querySelector('ui-select') as HTMLElement & { options: { label: string; disabled?: boolean; detail?: string }[]; value: string };
+    expect(where.options.map((o) => [o.label, Boolean(o.disabled), o.detail ?? ''])).toEqual([
+      ['Operations', false, ''],
+      ['The org', true, 'Publishing to the org needs the publisher role, which an admin can give you.'],
+    ]);
+    expect((up.querySelector('ui-checkbox-group') as HTMLElement & { values: string[] }).values).toEqual(['complete', 'issued']);
+    button(up as HTMLElement, 'Publish to Operations')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/placements', { library: 'l-1', record: { kind: 'document', id: 'd-1' }, to: 'w-ops', filter: ['complete', 'issued'] }]);
+    expect(up.querySelector('.folio-note')!.textContent).toBe('Travel policy is on Operations now, showing complete and issued. Its leads were told.');
+    expect(up.querySelector<UiList>('ui-list')!.items.map((i) => [i.title, i.detail])).toEqual([['On Operations', 'Shows complete and issued']]);
+  });
+
+  it('shows what was published up to the floor, each at the version it lets through', async () => {
+    window.history.replaceState(null, '', '/@finance/folio/libraries');
+    const { fetch } = service();
+    const el = await mounted(fetch);
+    const from = trees(el, true).find((t) => t.label === 'Published up to this floor')!;
+    expect(from.heading).toBe('From below');
+    expect(from.items.map((i) => i.label)).toEqual(['Quarterly returns']);
+    from.dispatchEvent(new CustomEvent('ui-select', { detail: { item: { id: 'pl-9' } } }));
+    await settle(el);
+    expect(window.location.pathname).toBe('/@finance/folio/received/pl-9');
+    const head = el.querySelector('ui-page-head')!;
+    expect([head.getAttribute('eyebrow'), head.getAttribute('heading')]).toEqual(['From Payroll', 'Quarterly returns']);
+    expect(head.getAttribute('summary')).toContain('Showing complete and issued.');
+    expect(list(el).items.map((i) => [i.title, i.detail])).toEqual([
+      ['Q3 return', 'Version 1 · Issued'],
+      ['Q4 return', 'Version 3 · Complete · Shown here only: Finance doesn’t show it'],
+    ]);
+  });
+
+  it('shows a folder’s details and closes it, on the record', async () => {
+    const { fetch, calls } = service();
+    const el = await mounted(fetch, '/libraries/l-1/f-hr');
+    button(el, 'Details')!.click();
+    await settle(el);
+    const dialog = el.querySelector<UiDialog>('ui-dialog')!;
+    expect(dialog.heading).toBe('HR');
+    expect((dialog.querySelector('ui-details') as HTMLElement & { items: { label: string; value?: unknown }[] }).items.slice(0, 3).map((d) => [d.label, d.value])).toEqual([
+      ['What it is', 'Subcollection'],
+      ['What it’s for', undefined],
+      ['State', 'Open: Taking new things.'],
+    ]);
+    expect(dialog.querySelector<UiList>('ui-list')!.items.map((i) => [i.title, i.detail])).toEqual([['Open to Closed', 'Year end']]);
+    const track = dialog.querySelector('ui-lifecycle') as HTMLElement & { moves: string[] };
+    expect(track.moves).toEqual(['closed', 'archived']);
+    track.dispatchEvent(new CustomEvent('ui-move', { detail: { state: 'closed' } }));
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/folders/f-hr/state', { state: 'closed' }]);
   });
 
   it('says when a floor has no libraries, and who can start one', async () => {
