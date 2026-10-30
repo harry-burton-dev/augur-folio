@@ -6,6 +6,9 @@ import './folio-share.js';
 import './folio-publish.js';
 import './folio-series.js';
 import './folio-audience.js';
+import './folio-publish-up.js';
+import { filterWords, floorWords } from './folio-publish-up.js';
+import { CONTAINER_LIFECYCLE } from '@augur/records';
 import type { Chosen } from './folio-audience.js';
 import { whoWords, type Explainer } from './folio-share.js';
 import {
@@ -30,6 +33,16 @@ import {
   type Series,
   type SeriesView,
   type Cadence,
+  type ContainerState,
+  type ContentState,
+  type FolderLevel,
+  type LevelInfo,
+  type Received,
+  type ReceivedPage,
+  type RecordView,
+  type StateMove,
+  CONTAINER_STATES,
+  stateName,
   type Shared,
   type Since,
   type Tag,
@@ -68,7 +81,9 @@ type Dialog =
   | 'publish'
   | 'new-series'
   | 'edit-series'
-  | 'delete-series';
+  | 'delete-series'
+  | 'details'
+  | 'publish-up';
 
 /** How many documents come in one page of the list. */
 const PAGE = 100;
@@ -145,6 +160,30 @@ const sameQuery = (a: ViewQuery, b: ViewQuery) => {
 
 /** Whether any filter is on: then the list looks in every folder below. */
 export const filtering = (filters: FilterValue) => Object.values(filters).some((v) => v.length > 0);
+
+/** The levels as Artifacts calls them before the org renames any. */
+export const DEFAULT_LEVELS: LevelInfo[] = [
+  { id: 'collection', name: 'Collection', plural: 'Collections', holds: ['subcollection', 'series', 'file'] },
+  { id: 'subcollection', name: 'Subcollection', plural: 'Subcollections', holds: ['series', 'file'] },
+  { id: 'series', name: 'Series', plural: 'Series', holds: ['subseries', 'file'] },
+  { id: 'subseries', name: 'Subseries', plural: 'Subseries', holds: ['file'] },
+  { id: 'file', name: 'File', plural: 'Files', holds: [] },
+];
+
+/** The folder levels a place may hold, by what it is: the library itself (a collection) or a folder's level. */
+export const levelsInside = (levels: readonly LevelInfo[], at: LevelInfo['id']): LevelInfo[] => {
+  const holds = levels.find((l) => l.id === at)?.holds ?? [];
+  return levels.filter((l) => l.id !== 'file' && holds.includes(l.id));
+};
+
+/** Where a library or folder is in its lifecycle: open, when a server from before lifecycles doesn't say. */
+export const stateOf = (x: { state?: ContainerState } | undefined, or?: { state?: ContainerState }): ContainerState => x?.state ?? or?.state ?? 'open';
+
+/** "Closed: kept as it is, nothing new goes in.", or nothing while it's open. */
+export const closedWords = (state: ContainerState) => (state === 'open' ? '' : `${stateName(state)}: ${CONTAINER_LIFECYCLE.get(state).meaning}`);
+
+/** Where a document is in its lifecycle, as its row says it: the newest version's state. */
+export const lifecycleWords = (doc: Pick<FolioDocument, 'latest'>) => (doc.latest.state ? stateName(doc.latest.state) : '');
 
 /** Rows for documents carry this before their id, so they never meet a folder's. */
 const DOC = 'doc:';
@@ -229,6 +268,11 @@ export class FolioApp extends LitElement {
     run: { state: true },
     seriesEdit: { state: true },
     publisher: { type: Boolean },
+    levels: { state: true },
+    received: { state: true },
+    arrived: { state: true },
+    upTarget: { state: true },
+    moves: { state: true },
   };
 
   declare api: FolioApi;
@@ -283,6 +327,18 @@ export class FolioApp extends LitElement {
   declare seriesEdit: (Omit<SeriesView, 'audience'> & { audience: Principal[] }) | undefined;
   /** The person has the publisher role: the whole org is theirs to publish to. */
   declare publisher: boolean;
+  /** The levels a library is built from, in the org's words. */
+  declare levels: LevelInfo[];
+  /** What's been published up to this floor, and signposts to what the person sees higher up. */
+  declare received: Received;
+  /** Something published up to this floor, open on its own page, at one of its folders. */
+  declare arrived: ReceivedPage | undefined;
+  /** What the publish-up dialog is about. */
+  declare upTarget: { library: string; kind: RecordView['kind']; id: string; name: string } | undefined;
+  /** The lifecycle moves the details dialog shows. */
+  declare moves: StateMove[] | undefined;
+  /** The floor the person stands on, as placements name floors (set by the entry). */
+  floorKey = '';
   /** Set by the entry: asks another app to explain who can open something. */
   explain: Explainer | undefined;
   /** What the share dialog is about: a library, or one document of it. */
@@ -308,6 +364,8 @@ export class FolioApp extends LitElement {
     this.more = false;
     this.shared = { libraries: [], documents: [] };
     this.publisher = false;
+    this.levels = DEFAULT_LEVELS;
+    this.received = { here: [], signposts: [] };
   }
 
   override createRenderRoot() {
@@ -322,13 +380,17 @@ export class FolioApp extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const [{ libraries, can }, shared] = await Promise.all([
+      const [{ libraries, can }, shared, levels, received] = await Promise.all([
         this.api.libraries(),
-        // What's shared from elsewhere is a side rail's worth: Folio opens without it.
+        // What's shared from elsewhere is a side rail's worth: Folio opens without it, and the same for the rest.
         this.api.shared().catch(() => ({ libraries: [], documents: [] }) as Shared),
+        this.api.levels().then((l) => l.levels).catch(() => DEFAULT_LEVELS),
+        this.api.received().catch(() => ({ here: [], signposts: [] }) as Received),
       ]);
       this.libraries = libraries;
       this.shared = shared;
+      this.levels = levels;
+      this.received = received;
       this.canCreate = can.create;
       // Another app opened a document by its id alone (document.open): find its library first.
       const asked = this.place.document && !this.place.library ? await this.api.locate(this.place.document).catch(() => undefined) : undefined;
@@ -341,6 +403,9 @@ export class FolioApp extends LitElement {
         this.open = undefined;
         if ([...libraries, ...shared.libraries].some((l) => l.id === run.library)) await this.openLibrary(run.library, undefined, false);
         this.run = run;
+      } else if (this.place.received && !reading) {
+        this.open = undefined;
+        if (typeof this.place.received === 'string') await this.openArrived(this.place.received, undefined, false);
       } else if (this.place.published && !reading) {
         this.open = undefined;
         await this.openInbox(false);
@@ -359,8 +424,26 @@ export class FolioApp extends LitElement {
     }
   }
 
+  /** Something published up to this floor, at one of its folders or its top. */
+  private async openArrived(id: string, folder?: string, tell = true) {
+    this.reading = undefined;
+    this.doc = undefined;
+    this.run = undefined;
+    this.inbox = undefined;
+    this.opening = true;
+    try {
+      this.arrived = await this.api.receivedPage(id, folder);
+      if (tell) this.tell();
+    } catch (err) {
+      this.note = (err as Error).message;
+    } finally {
+      this.opening = false;
+    }
+  }
+
   /** What's been published to the person, newest first. */
   private async openInbox(tell = true) {
+    this.arrived = undefined;
     this.reading = undefined;
     this.doc = undefined;
     this.run = undefined;
@@ -378,6 +461,7 @@ export class FolioApp extends LitElement {
     this.opening = true;
     this.reading = undefined;
     this.inbox = undefined;
+    this.arrived = undefined;
     this.run = undefined;
     try {
       const switching = this.open?.id !== id;
@@ -521,6 +605,7 @@ export class FolioApp extends LitElement {
     this.doc = undefined;
     if (this.run) return this.tell();
     if (this.inbox) return this.openInbox();
+    if (this.arrived) return this.tell();
     if (!this.open) {
       // Read from "Shared with you", with no library to go back to: back to the floor's own.
       const first = this.libraries[0];
@@ -827,6 +912,8 @@ export class FolioApp extends LitElement {
         ? { ...this.run }
       : this.inbox
         ? { published: true }
+      : this.arrived
+        ? { received: this.arrived.placement.id }
         : this.view
         ? { library: this.open?.id, view: this.view }
         : { library: this.open?.id, folder: this.folder };
@@ -871,13 +958,13 @@ export class FolioApp extends LitElement {
 
   private submitNewFolder: DialogSubmit = async (values) => {
     const open = this.open!;
-    const made = await this.api.createFolder(open.id, values.name.trim(), this.folder);
+    const made = await this.api.createFolder(open.id, values.name.trim(), this.folder, (values.level || undefined) as FolderLevel | undefined, values.description?.trim() || undefined);
     this.open = { ...open, folders: [...open.folders, made].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })) };
   };
 
   private submitRenameFolder: DialogSubmit = async (values) => {
     const open = this.open!;
-    const renamed = await this.api.renameFolder(open.id, this.target!.id, values.name.trim());
+    const renamed = await this.api.updateFolder(open.id, this.target!.id, { name: values.name.trim(), description: values.description?.trim() ?? '' });
     this.open = { ...open, folders: open.folders.map((f) => (f.id === renamed.id ? renamed : f)) };
   };
 
@@ -886,11 +973,6 @@ export class FolioApp extends LitElement {
     await this.api.deleteFolder(open.id, this.target!.id);
     this.open = { ...open, folders: open.folders.filter((f) => f.id !== this.target!.id) };
   };
-
-  private onFolderAction(e: CustomEvent<{ item: ListItem; action: { id: string } }>) {
-    this.target = this.open?.folders.find((f) => f.id === e.detail.item.id);
-    this.dialog = e.detail.action.id === 'rename' ? 'rename-folder' : 'remove-folder';
-  }
 
   /** "Your libraries" on your own floor, "Libraries on Finance" on a team's. */
   private get shelfName() {
@@ -914,6 +996,15 @@ export class FolioApp extends LitElement {
         selected=${this.inbox && !this.reading ? 'published' : ''}
         @ui-select=${() => void this.openInbox()}
       ></ui-tree>
+      ${this.received.here.length
+        ? html`<ui-tree
+            label="Published up to this floor"
+            heading="From below"
+            .items=${this.received.here.map((p): TreeItem => ({ id: p.id, label: p.record.name ?? 'Something', icon: p.record.kind === 'document' ? 'document' : p.record.kind === 'library' ? 'library' : 'folder' }))}
+            selected=${this.arrived && !this.reading ? this.arrived.placement.id : ''}
+            @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openArrived(e.detail.item.id)}
+          ></ui-tree>`
+        : nothing}
       ${this.shared.libraries.length || this.shared.documents.length
         ? html`<ui-tree
             label="Shared with you from other floors"
@@ -982,6 +1073,8 @@ export class FolioApp extends LitElement {
         @folio-manage=${() => (this.dialog = 'document')}
         @folio-share=${() => this.openShare({ library: doc.library, document: doc.id, name: doc.title })}
         @folio-publish=${() => (this.dialog = 'publish')}
+        @folio-move=${(e: CustomEvent<{ version: number; state: ContentState }>) => void this.moveVersion(e.detail.version, e.detail.state)}
+        @folio-publish-up=${() => this.publishUp({ library: doc.library, kind: 'document', id: doc.id, name: doc.title })}
         @folio-issue=${(e: CustomEvent<{ library: string; document: string }>) => void this.read(e.detail.document, undefined, true, e.detail.library)}
         @folio-series=${(e: CustomEvent<{ series: string }>) => this.openSeries(doc.library, e.detail.series)}
         @folio-follow=${(e: CustomEvent<{ following: boolean }>) => void this.followFromReader(e.detail.following)}
@@ -998,6 +1091,7 @@ export class FolioApp extends LitElement {
           @folio-issue-added=${() => void this.refreshLibrary().catch(() => undefined)}></folio-series>
       </div>`;
     if (this.inbox) return this.inboxPage(this.inbox);
+    if (this.arrived) return this.arrivedPage(this.arrived);
     if (!open)
       return this.canCreate
         ? html`<ui-state kind="empty" heading="No libraries here yet" body="A library keeps documents together, with folders inside it." action="New library"
@@ -1009,16 +1103,7 @@ export class FolioApp extends LitElement {
     const narrowed = filtering(this.filters);
     // Filtering looks in every folder below, so folders themselves leave the list.
     const folders = narrowed ? [] : open.folders.filter((f) => f.parent === this.folder);
-    const both = folders.length > 0 && this.documents.length > 0;
     const inside: ListItem[] = [
-      ...folders.map((f) => ({
-        id: f.id,
-        title: f.name,
-        icon: 'folder',
-        meta: String(open.folders.filter((c) => c.parent === f.id).length || ''),
-        ...(both ? { group: 'Folders' } : {}),
-        ...(this.mayChange(f) ? { actions: [{ id: 'rename', label: 'Rename' }, { id: 'remove', label: 'Remove' }] } : {}),
-      })),
       ...this.documents.map((d) => ({
         id: `${DOC}${d.id}`,
         title: d.title,
@@ -1026,7 +1111,6 @@ export class FolioApp extends LitElement {
         detail: this.rowDetail(d, narrowed),
         ...(d.state === 'published' ? { icon: 'publish' } : {}),
         meta: ago(d.updatedAt),
-        ...(both ? { group: 'Documents' } : {}),
       })),
     ];
     const where = here?.name ?? open.name;
@@ -1036,9 +1120,9 @@ export class FolioApp extends LitElement {
     return html`<div class="folio-main-inner">
       <ui-page-head
         .trail=${here && !view ? [{ id: '', label: open.name }, ...trail.slice(0, -1).map((f) => ({ id: f.id, label: f.name }))] : []}
-        eyebrow=${view ? `A view in ${open.name}` : here ? (trail.at(-2)?.name ?? open.name) : this.shelfName}
+        eyebrow=${view ? `A view in ${open.name}` : here ? `${this.levelName(here.level)} in ${trail.at(-2)?.name ?? open.name}` : this.shelfName}
         heading=${view?.name ?? here?.name ?? open.name}
-        summary=${view ? (here ? `In ${trail.map((f) => f.name).join(' / ')}` : '') : here ? '' : open.description}
+        summary=${view ? (here ? `In ${trail.map((f) => f.name).join(' / ')}` : '') : [here ? here.description : open.description, closedWords(stateOf(here, open))].filter(Boolean).join(' ')}
         .actions=${actions}
         @ui-trail=${(e: CustomEvent<{ step: { id: string } }>) => this.goToFolder(e.detail.step.id || undefined)}
         @ui-action=${(e: CustomEvent<{ action: { id: string } }>) => actions.find((a) => a.id === e.detail.action.id)?.run()}
@@ -1060,18 +1144,18 @@ export class FolioApp extends LitElement {
           ? html`<ui-button slot="actions" kind="ghost" size="sm" @click=${() => (this.dialog = 'save-view')}>${view ? 'Save as new view' : 'Save view'}</ui-button>`
           : nothing}
       </ui-filter-bar>
+      ${folders.length ? this.folderCards(folders) : nothing}
       <ui-surface>
         <ui-list
-          label=${narrowed ? `Matching in ${where}` : `In ${where}`}
+          label=${narrowed ? `Matching in ${where}` : `${this.levelName('file', true)} in ${where}`}
           density="compact"
-          .noun=${folders.length && !this.documents.length ? ['folder', 'folders'] : this.documents.length && !folders.length ? ['document', 'documents'] : ['item', 'items']}
+          .noun=${['document', 'documents']}
           .items=${inside}
-          empty=${narrowed ? `Nothing in ${where} matches these filters.` : here ? 'This folder is empty.' : 'This library is empty.'}
+          empty=${narrowed ? `Nothing in ${where} matches these filters.` : folders.length ? `No ${this.levelName('file', true).toLowerCase()} here yet: open one of the places above, or add some.` : here ? `This ${this.levelName(here.level).toLowerCase()} is empty.` : 'This library is empty.'}
           @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
             const id = e.detail.item.id;
             void (id.startsWith(DOC) ? this.read(id.slice(DOC.length)) : this.goToFolder(id));
           }}
-          @ui-action=${this.onFolderAction}
         ></ui-list>
       </ui-surface>
       ${this.documents.length < this.total
@@ -1117,7 +1201,123 @@ export class FolioApp extends LitElement {
     const folder = spanning ? folderTrail(open.folders, d.folder).map((f) => f.name).join(' / ') : '';
     const run = d.issue && open.series.find((r) => r.id === d.issue!.series);
     const issue = d.issue && run ? `${run.name}, ${d.issue.period.startsWith('Issue') ? d.issue.period.toLowerCase() : d.issue.period}` : '';
-    return [stateWords(d), issue, folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
+    return [lifecycleWords(d), stateWords(d), issue, folder, documentLine(d), names.join(', ')].filter(Boolean).join(' · ');
+  }
+
+  /** What the org calls a level: "Series", or with `plural` "Files". */
+  private levelName(id: LevelInfo['id'], plural = false) {
+    // A folder from before levels is a subcollection.
+    const level = this.levels.find((l) => l.id === id) ?? DEFAULT_LEVELS.find((l) => l.id === id) ?? DEFAULT_LEVELS[1];
+    return plural ? level.plural : level.name;
+  }
+
+  /** The places inside where the person is, as cards: what each is, what it's for, and anything that changes what you'd do. */
+  private folderCards(folders: readonly Folder[]) {
+    const open = this.open!;
+    return html`<ui-cards role="list" aria-label=${`Inside ${folderTrail(open.folders, this.folder).at(-1)?.name ?? open.name}`}>
+      ${folders.map((f) => {
+        const inside = open.folders.filter((c) => c.parent === f.id).length;
+        return html`<ui-card role="listitem" heading=${f.name} icon=${f.level === 'series' || f.level === 'subseries' ? 'series' : 'folder'}
+          .meta=${[this.levelName(f.level), inside ? `${inside} inside` : '', `Changed ${ago(f.updatedAt)}`].filter(Boolean)}
+          note=${closedWords(stateOf(f)) || f.description}
+          note-tone=${stateOf(f) !== 'open' ? 'warning' : 'ink'}
+          @ui-open=${() => void this.goToFolder(f.id)}></ui-card>`;
+      })}
+    </ui-cards>`;
+  }
+
+  /** Something published up to this floor: what it lets through, from where, and what's inside it. */
+  private arrivedPage(arrived: ReceivedPage) {
+    const p = arrived.placement;
+    const trail = folderTrail(arrived.folders, arrived.folder ?? undefined).filter((f) => f.id !== p.record.id);
+    const folders = arrived.folders.filter((f) => (f.parent ?? null) === arrived.folder && f.id !== p.record.id);
+    const rows: ListItem[] = arrived.documents.map((d) => ({
+      id: `${DOC}${d.library}/${d.id}`,
+      title: d.title,
+      icon: 'document',
+      detail: [`Version ${d.latest.number}`, stateName(d.latest.state), d.onlyVia ? `Shown here only: ${floorWords(d.onlyVia)} doesn’t show it` : ''].filter(Boolean).join(' · '),
+      meta: ago(d.latest.createdAt),
+    }));
+    const below = [...new Set(Object.values(arrived.states).filter((f) => f && f.id !== p.to).map((f) => floorWords(f)))];
+    return html`<div class="folio-main-inner">
+      <ui-page-head
+        .trail=${trail.length ? [{ id: '', label: p.record.name ?? '' }, ...trail.slice(0, -1).map((f) => ({ id: f.id, label: f.name }))] : []}
+        eyebrow=${`From ${floorWords(p.fromFloor)}`}
+        heading=${trail.at(-1)?.name ?? p.record.name ?? 'Published up to here'}
+        summary=${[`Showing ${filterWords(p.filter).toLowerCase()}.`, p.note ? `“${p.note}”` : '', below.length ? `Some versions show here only because ${below.join(' and ')} shows them.` : '', p.landed ? '' : 'It sits under From below until a lead here gives it a place.'].filter(Boolean).join(' ')}
+        @ui-trail=${(e: CustomEvent<{ step: { id: string } }>) => void this.openArrived(p.id, e.detail.step.id || undefined)}
+      ></ui-page-head>
+      ${folders.length
+        ? html`<ui-cards role="list" aria-label="Inside it">
+            ${folders.map((f) => html`<ui-card role="listitem" heading=${f.name} icon="folder" .meta=${[this.levelName(f.level)]} note=${f.description} note-tone="ink"
+              @ui-open=${() => void this.openArrived(p.id, f.id)}></ui-card>`)}
+          </ui-cards>`
+        : nothing}
+      <ui-surface>
+        <ui-list label=${`In ${p.record.name ?? 'it'}`} density="compact" .noun=${['document', 'documents']} .items=${rows}
+          empty="Nothing here is in a state it lets through yet. It shows as soon as something is."
+          @ui-open=${(e: CustomEvent<{ item: ListItem }>) => {
+            const [library, document] = e.detail.item.id.slice(DOC.length).split('/');
+            void this.read(document, undefined, true, library);
+          }}></ui-list>
+      </ui-surface>
+      ${this.received.signposts.length
+        ? html`<p class="folio-note">${this.received.signposts.map((sp) => `${sp.record.name ?? 'Something'} went on up: you see it on ${floorWords(sp.to)}.`).join(' ')}</p>`
+        : nothing}
+      <ui-note live>${this.note}</ui-note>
+    </div>`;
+  }
+
+  /** Opens the publish-up dialog for a library, one of its folders, or a document. */
+  private publishUp(target: NonNullable<FolioApp['upTarget']>) {
+    this.upTarget = target;
+    this.dialog = 'publish-up';
+  }
+
+  /** Opens the details of the library or folder on screen, with its lifecycle moves. */
+  private async openDetails() {
+    const open = this.open;
+    if (!open) return;
+    this.moves = undefined;
+    this.dialog = 'details';
+    try {
+      this.moves = (await this.api.moves(open.id, this.folder ? { folder: this.folder } : {})).moves;
+    } catch {
+      this.moves = [];
+    }
+  }
+
+  /** Moves the library, or the folder on screen, to another state of its lifecycle. */
+  private async moveContainer(state: ContainerState) {
+    const open = this.open;
+    if (!open) return;
+    try {
+      await this.api.setState(open.id, state, this.folder);
+      if (state === 'archived' && !this.folder) {
+        this.dialog = undefined;
+        this.libraries = this.libraries.filter((l) => l.id !== open.id);
+        this.open = undefined;
+        if (this.libraries[0]) await this.openLibrary(this.libraries[0].id);
+        else this.tell();
+        return;
+      }
+      await this.refreshLibrary();
+      await this.openDetails();
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
+  /** Moves a version of the document being read through its lifecycle. */
+  private async moveVersion(version: number, state: ContentState) {
+    const doc = this.doc;
+    if (!doc) return;
+    try {
+      await this.api.setVersionState(doc.library, doc.id, version, state);
+      this.doc = await this.api.document(doc.library, doc.id);
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
   }
 
   /** What's out to the person now, from any floor: each opens at the version that's out. */
@@ -1130,7 +1330,21 @@ export class FolioApp extends LitElement {
       add('delete-view', 'Delete view', 'ghost', () => (this.dialog = 'delete-view'));
       return acts;
     }
-    if (open.can.addFolders && !view) add('new-folder', 'New folder', 'secondary', () => (this.dialog = 'new-folder'));
+    const place = here as Folder | undefined;
+    const next = levelsInside(this.levels, place?.level ?? 'collection');
+    if (open.can.addFolders && !view && next.length && stateOf(place, open) === 'open') add('new-folder', `New ${next[0].name.toLowerCase()}`, 'secondary', () => (this.dialog = 'new-folder'));
+    if (!view) add('details', 'Details', 'ghost', () => void this.openDetails());
+    if (!view && open.can.manage) add('publish-up', 'Publish up', 'ghost', () => this.publishUp({ library: open.id, kind: place ? 'folder' : 'library', id: place?.id ?? open.id, name: place?.name ?? open.name }));
+    if (place && !view && this.mayChange(place)) {
+      add('rename-folder', 'Rename', 'ghost', () => {
+        this.target = place;
+        this.dialog = 'rename-folder';
+      });
+      add('remove-folder', 'Remove', 'ghost', () => {
+        this.target = place;
+        this.dialog = 'remove-folder';
+      });
+    }
     if (!here) add('share', open.can.share ? 'Share' : 'Who can see it', 'ghost', () => this.openShare({ library: open.id, name: open.name }));
     add('tags', 'Tags', 'ghost', () => void this.openTags());
     if (open.can.manage && !here && !view) add('new-series', 'New series', 'ghost', () => this.newSeries());
@@ -1195,15 +1409,24 @@ export class FolioApp extends LitElement {
           : nothing;
       case 'new-folder':
         return open
-          ? html`<ui-dialog open eyebrow=${folderTrail(open.folders, this.folder).at(-1)?.name ?? open.name} heading="New folder" action-label="Make it" busy-label="Making…"
-              .submit=${this.submitNewFolder} @ui-close=${close}>
-              <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .validate=${nameCheck(siblings(), 'folder', false)}></ui-text-field>
-            </ui-dialog>`
+          ? (() => {
+              const at = folderTrail(open.folders, this.folder).at(-1);
+              const next = levelsInside(this.levels, at?.level ?? 'collection');
+              const options: SelectOption[] = next.map((l) => ({ value: l.id, label: l.name, detail: `Holds ${l.holds.map((h) => this.levelName(h, true).toLowerCase()).join(' and ')}` }));
+              return html`<ui-dialog open eyebrow=${at?.name ?? open.name} heading=${`New ${next[0]?.name.toLowerCase() ?? 'folder'}`}
+                summary="Each level holds the ones below it, never the ones above: collection, subcollection, series, subseries, then files."
+                action-label="Make it" busy-label="Making…" .submit=${this.submitNewFolder} @ui-close=${close}>
+                ${next.length > 1 ? html`<ui-select slot="fields" name="level" label="What it is" .options=${options} .value=${next[0].id}></ui-select>` : nothing}
+                <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .validate=${nameCheck(siblings(), 'folder', false)}></ui-text-field>
+                <ui-text-field slot="fields" name="description" label="What it’s for" optional multiline maxlength="500"></ui-text-field>
+              </ui-dialog>`;
+            })()
           : nothing;
       case 'rename-folder':
         return this.target
-          ? html`<ui-dialog open eyebrow="Folder" heading=${`Rename ${this.target.name}`} action-label="Save" busy-label="Saving…" .submit=${this.submitRenameFolder} @ui-close=${close}>
+          ? html`<ui-dialog open eyebrow=${this.levelName(this.target.level)} heading=${`Rename ${this.target.name}`} action-label="Save" busy-label="Saving…" .submit=${this.submitRenameFolder} @ui-close=${close}>
               <ui-text-field slot="fields" name="name" label="Name" required maxlength="80" .value=${this.target.name} .validate=${nameCheck(siblings(this.target.id), 'folder', false)}></ui-text-field>
+              <ui-text-field slot="fields" name="description" label="What it’s for" optional multiline maxlength="500" .value=${this.target.description}></ui-text-field>
             </ui-dialog>`
           : nothing;
       case 'remove-folder':
@@ -1268,6 +1491,48 @@ export class FolioApp extends LitElement {
             this.shareTarget = undefined;
           }}>
           <folio-share .api=${this.api} .explain=${this.explain} name=${target.name} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
+        </ui-dialog>`;
+      }
+      case 'details': {
+        if (!open) return nothing;
+        const here = folderTrail(open.folders, this.folder).at(-1);
+        const state = stateOf(here, open);
+        const inside = open.folders.filter((f) => f.parent === here?.id).length;
+        return html`<ui-dialog open eyebrow=${here ? this.levelName(here.level) : this.levelName('collection')} heading=${here?.name ?? open.name} cancel-label="Close"
+          @ui-close=${() => {
+            close();
+            this.moves = undefined;
+          }}>
+          <ui-details .items=${[
+            { label: 'What it is', value: here ? this.levelName(here.level) : this.levelName('collection') },
+            { label: 'What it’s for', value: (here ? here.description : open.description) || undefined },
+            { label: 'State', value: closedWords(state) || `Open: ${CONTAINER_LIFECYCLE.get('open').meaning}` },
+            { label: 'Inside it', value: inside ? `${inside} ${inside === 1 ? 'place' : 'places'}` : undefined },
+            { label: 'Made', value: ago(here?.createdAt ?? open.createdAt) },
+            { label: 'Last changed', value: ago(here?.updatedAt ?? open.updatedAt) },
+            { label: 'Kept on', value: this.floorName || undefined },
+          ]} missing="Not given"></ui-details>
+          <ui-lifecycle label=${here?.name ?? open.name} .states=${CONTAINER_STATES} state=${state}
+            .moves=${CONTAINER_LIFECYCLE.movesFrom(state, open.can.manage ? 'manage' : undefined)}
+            why="Only whoever manages the library can close or archive it."
+            @ui-move=${(e: CustomEvent<{ state: ContainerState }>) => void this.moveContainer(e.detail.state)}></ui-lifecycle>
+          ${this.moves?.length
+            ? html`<ui-list label="Its lifecycle so far" density="compact" .noun=${['move', 'moves']}
+                .items=${this.moves.map((m): ListItem => ({ id: m.id, title: `${stateName(m.from)} to ${stateName(m.to)}`, detail: m.note ?? '', meta: ago(m.at) }))}></ui-list>`
+            : nothing}
+        </ui-dialog>`;
+      }
+      case 'publish-up': {
+        const target = this.upTarget;
+        if (!target) return nothing;
+        return html`<ui-dialog open size="read" light eyebrow="Publish up" heading=${target.name}
+          summary="Put it on a floor above, showing only versions in the states you choose. It stays a live window: what reaches those states shows there."
+          cancel-label="Done" @ui-close=${() => {
+            close();
+            this.upTarget = undefined;
+          }}>
+          <folio-publish-up .api=${this.api} library=${target.library} here=${this.floorKey} .record=${{ kind: target.kind, id: target.id, name: target.name }}
+            @folio-placed=${() => void this.api.received().then((r) => (this.received = r)).catch(() => undefined)}></folio-publish-up>
         </ui-dialog>`;
       }
       case 'publish': {

@@ -94,6 +94,7 @@ export default defineMicroFrontend({
       html`<folio-app
         .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
         .userId=${ctx.user.id}
+        .floorKey=${ctx.workspace.kind === 'org' ? 'org' : ctx.workspace.id}
         .propose=${proposeFrom(ctx)}
         ?publisher=${ctx.user.roles.includes('publisher')}
         floor-name=${ctx.workspace.name}

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { above, chainOf, CONTENT_LIFECYCLE, floorRank, furthest, levelFrom, newestPassing, ownerOf, placementRefusal, reaches, viewFor, within, type ContentState, type Floor, type Placement as Step } from '@augur/records';
+import { above, chainOf, CONTENT_LIFECYCLE, floorRank, floorsAbove, furthest, levelFrom, newestPassing, ownerOf, placementRefusal, reaches, viewFor, within, type ContentState, type Floor, type Placement as Step } from '@augur/records';
 import type { AudienceLookup, DirectorySearch } from '@augur/service-kit';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
@@ -263,6 +263,45 @@ export const placementRoutes = async (app: FastifyInstance, { store, audit, onFl
   );
 
   /** Every step a record has been published by, with its chain and owner: for whoever can see it. */
+  /**
+   * Where the caller could publish a record next: up from its own floor, when
+   * they manage it there, or on up from a floor that received it, when they lead
+   * that floor. Each floor above is listed, with why when it can't be chosen.
+   */
+  const targetsFor = async (caller: OnFloor, library: HeldLibrary | undefined, recordId: string, steps: readonly Placement[]) => {
+    const live = steps.filter((p) => !p.ended);
+    const starts: { from: string; via?: Placement }[] = [];
+    if (library?.level) {
+      const ref = steps[0]?.record ?? (await refOf(library, recordId));
+      if (ref && (await manages(caller, library, ref))) starts.push({ from: floorKeyOf(library) });
+    }
+    for (const p of live) if (leadsReceiving(caller, p)) starts.push({ from: p.to, via: p });
+    if (!starts.length) return [];
+    const principals = await principalsOf(caller);
+    const fromFloors = await floorsOf(starts.map((s) => s.from), caller);
+    const options = starts.flatMap(({ from, via }) => {
+      const at = fromFloors.get(from)!;
+      return floorsAbove({ id: at.id, kind: at.kind, path: at.path }, at.kind === 'personal' ? principals : []).map((to) => ({ from, to, via }));
+    });
+    const names = await floorsOf(options.map((o) => o.to), caller);
+    return options.map(({ from, to, via }) => {
+      const why = live.some((p) => p.to === to)
+        ? 'It’s already there.'
+        : to === 'org' && !caller.roles.includes(PUBLISHER_ROLE)
+          ? 'Publishing to the org needs the publisher role, which an admin can give you.'
+          : undefined;
+      return { from: fromFloors.get(from), to: names.get(to), ...(via ? { via: via.id, most: via.filter } : {}), ...(why ? { why } : {}) };
+    });
+  };
+
+  /** A record of the library by its id alone: the library itself, one of its folders, or one of its documents. */
+  const refOf = async (library: Library, id: string): Promise<RecordRefIn | undefined> => {
+    if (id === library.id) return { kind: 'library', id };
+    if ((await store.folders(library.id)).some((f) => f.id === id)) return { kind: 'folder', id };
+    const doc = await store.document(id);
+    return doc && doc.library === library.id ? { kind: 'document', id } : undefined;
+  };
+
   app.get<{ Querystring: { library: string; record: string } }>(
     '/placements',
     { schema: { querystring: { type: 'object', additionalProperties: false, required: ['library', 'record'], properties: { library: ID, record: ID } } } },
@@ -277,6 +316,7 @@ export const placementRoutes = async (app: FastifyInstance, { store, audit, onFl
       const views = await Promise.all(steps.map((p) => view(p, caller)));
       const live = views.filter((v) => !v.ended);
       return {
+        targets: await targetsFor(caller, library, req.query.record, steps),
         placements: await Promise.all(
           views.map(async (v) => ({ ...v, can: { change: !v.ended && (await mayManage(caller, steps.find((s) => s.id === v.id)!)), land: !v.ended && leadsReceiving(caller, steps.find((s) => s.id === v.id)!) } })),
         ),

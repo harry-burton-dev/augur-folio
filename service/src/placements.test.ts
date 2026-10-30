@@ -57,6 +57,25 @@ const setup = async () => {
 const WORKING = ['in-progress', 'in-review', 'complete'];
 
 describe('folio publishing up the floors', () => {
+  it('offers the floors above, saying why one can’t be chosen', async () => {
+    const { call, library, reports } = await setup();
+    const targets = async (who: Caller) => (await call(who, 'GET', `/v1/placements?library=${library}&record=${reports.id}`)).json().targets;
+    // Above Sam's own floor: the teams Sam is on and the ones they sit in, and the org, which needs the publisher role.
+    expect((await targets(own(sam))).map((t: { to: { id: string }; why?: string }) => [t.to.id, t.why ?? ''])).toEqual([
+      ['ops', ''],
+      ['dept', ''],
+      ['org', 'Publishing to the org needs the publisher role, which an admin can give you.'],
+    ]);
+    const placed = (await call(own(sam), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'ops', filter: ['complete'] })).json();
+    // Ops' lead may take it on up, showing no more than reached Ops; a member of Ops isn't offered anything.
+    expect(await targets(on(lena, 'ops', 'lead'))).toEqual([
+      expect.objectContaining({ from: expect.objectContaining({ id: 'ops' }), to: expect.objectContaining({ id: 'dept' }), via: placed.id, most: ['complete'] }),
+      expect.objectContaining({ to: expect.objectContaining({ id: 'org' }), why: expect.stringContaining('publisher role') }),
+    ]);
+    expect(await targets(on(sam, 'ops'))).toEqual([]);
+    expect((await targets(own(sam)))[0]).toMatchObject({ to: { id: 'ops' }, why: 'It’s already there.' });
+  });
+
   it('publishes up only, through a filter, by whoever manages it', async () => {
     const { call, told, audited, library, reports } = await setup();
     const record = { kind: 'folder', id: reports.id };
