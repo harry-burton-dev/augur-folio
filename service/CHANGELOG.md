@@ -1,5 +1,18 @@
 # @apps/folio
 
+## 0.3.0
+
+### Minor Changes
+
+- bb91780: Who can open something now includes the floors it's published up to. Artifacts' access answers list `placed`: the steps of the thing and of whatever it's inside, each with who that floor lets in, what it shows, and the floors it came up through. Share lists them under **Published up to**, and "Who can open this, explained" sends them to Auspex. Auspex reads an entry's optional `chain` and `shows` and says "Up from Payroll through Finance, showing Complete and Issued".
+- 81281ae: Artifacts shares folders: whoever manages a library shares a folder with **Share** inside it, and whoever it's shared with reads everything inside it, while it stays inside. A document's Share says who reaches it through a folder.
+- ca1e0f9: Artifacts tags folders: a folder's tags count for everything inside it when you filter by tag, and they're set in the folder's details by whoever may change it. Merging an org tag into a library's takes folders along, and a tag that goes leaves them.
+- e0e9c83: Artifacts links records: a library, folder or document can relate to, supersede or respond to another, be about a thing in Data Atlas, or serve an intent in Mandate (`@augur/records`' relations). Links read both ways, a linked record you can't open stays listed and says so, and the reader and a library's or folder's details have a Links section to add, open and remove them.
+- bfff2fe: Artifacts moves what was published the old way onto publishing up the floors, by itself: a floor above gets the document published up showing Issued, anyone else it went to keeps it as a share, and the old publication ends on its record. Publishing one version to an audience is now only for a series' issues; any other document is published up the floors, and the reader no longer offers the old Publish for it.
+- 6d7a7e2: Artifacts publishes up the floors: put a collection, folder or document on a floor above through a filter of lifecycle states, publish it further up from there, land it where it belongs, and take it back. Each record has one owner, the highest floor it reached, and each person sees it in one place only.
+- bef7098: Artifacts' screens take on levels, lifecycles and publishing up: the places inside a library show as cards named by their level, each library or folder has its details and lifecycle, a version moves on from the reader, anything can be published up the floors (with the floors it can't go to saying why), and what was published up to a floor shows under From below. `GET /placements` now says where the caller could publish a record next.
+- a27d3ec: Artifacts gets its form (PER-171, S1 and S2). A library is a collection, and its folders are subcollections, series and subseries, which can be skipped but never turned round. Every version of a file has a lifecycle (in progress, in review, complete, issued, retired), and every collection and folder one too (open, closed, archived), with each move on the record. The org's leads can rename the levels. Existing libraries move over by themselves: deeper folders become subcollections named for where they were, each series with a schedule gets its own series, and versions out to an audience are issued. The move is one way: the nightly backup from before the upgrade is the way back.
+
 ## 0.2.2
 
 ### Patch Changes
