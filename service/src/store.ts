@@ -95,6 +95,20 @@ export type NewPlacement = Omit<Placement, 'id' | 'at' | 'ended' | 'workspace'>;
 /** The record is already on that floor. */
 export class PlacedError extends Error {}
 
+/** A typed link from a library, folder or document to another record, in Artifacts or another app. */
+export interface RecordLink {
+  id: string;
+  library: string;
+  from: string;
+  relation: string;
+  to: { app: string; kind: string; id: string; label?: string };
+  by: string;
+  at: string;
+}
+
+/** The same link is already there. */
+export class LinkedError extends Error {}
+
 /** One file as it was uploaded. A document's versions are numbered from 1 and never change. */
 export interface DocumentVersion {
   id: string;
@@ -467,6 +481,15 @@ export interface FolioStore {
   levelNames(): Promise<LevelNames>;
   /** Renames a level for the whole org, or with `null` gives it back its own name. */
   setLevelName(level: UnitLevel, name: LevelName | null, by: string): Promise<LevelNames>;
+  /** Links a record to another. LinkedError when that link is already there. */
+  link(input: Omit<RecordLink, 'id' | 'at'>): Promise<RecordLink>;
+  /**
+   * The links from a record, and those to it, oldest first. Artifacts names its
+   * own records in a link as `<library>/<record>`, which `to` is.
+   */
+  links(record: string, to: string): Promise<{ from: RecordLink[]; to: RecordLink[] }>;
+  /** Takes a link away, from the record it starts at. */
+  unlink(from: string, id: string): Promise<RecordLink | undefined>;
   /** Publishes a record up to a floor. PlacedError when it's already there. */
   place(input: NewPlacement): Promise<Placement>;
   placement(id: string): Promise<Placement | undefined>;
@@ -731,6 +754,7 @@ export class MemoryFolioStore implements FolioStore {
   private readonly moves: StateMove[] = [];
   private names: LevelNames = {};
   private readonly placementList: Placement[] = [];
+  private readonly linkList: RecordLink[] = [];
   /** What Folio would have told other apps, oldest first: there's no relay without Postgres. */
   readonly outbox: OutboxEvent[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
@@ -851,6 +875,26 @@ export class MemoryFolioStore implements FolioStore {
     if (name) this.names[level] = { ...name };
     else delete this.names[level];
     return this.levelNames();
+  }
+
+  async link(input: Omit<RecordLink, 'id' | 'at'>) {
+    if (this.linkList.some((l) => l.from === input.from && l.relation === input.relation && l.to.app === input.to.app && l.to.id === input.to.id)) throw new LinkedError('They’re already linked that way.');
+    const made: RecordLink = { ...structuredClone(input), id: randomUUID(), at: new Date().toISOString() };
+    this.linkList.push(made);
+    return structuredClone(made);
+  }
+
+  async links(record: string, to: string) {
+    return {
+      from: this.linkList.filter((l) => l.from === record).map((l) => structuredClone(l)),
+      to: this.linkList.filter((l) => l.to.app === 'folio' && l.to.id === to).map((l) => structuredClone(l)),
+    };
+  }
+
+  async unlink(from: string, id: string) {
+    const at = this.linkList.findIndex((l) => l.id === id && l.from === from);
+    if (at < 0) return undefined;
+    return this.linkList.splice(at, 1)[0];
   }
 
   async place(input: NewPlacement) {
@@ -1814,6 +1858,26 @@ export const migrations: { id: string; sql: string }[] = [
       create index placements_principal on folio.placements (to_principal) where ended_at is null;
       create index placements_library on folio.placements (library_id) where ended_at is null;`,
   },
+  {
+    id: '012_links',
+    sql: `
+      -- Typed links from a library, folder or document to another record, here or in another app.
+      create table folio.links (
+        id text primary key,
+        seq bigint generated always as identity,
+        library_id text not null references folio.libraries (id),
+        from_id text not null,
+        relation text not null,
+        to_app text not null,
+        to_kind text not null,
+        to_id text not null,
+        to_label text,
+        linked_by text not null,
+        linked_at timestamptz not null default now()
+      );
+      create unique index links_one on folio.links (from_id, relation, to_app, to_id);
+      create index links_to on folio.links (to_app, to_id);`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; state: ContainerState; created_by: string; created_at: Date; updated_at: Date };
@@ -2127,6 +2191,18 @@ const fromMoveRow = (r: MoveRow): StateMove => ({
   ...(r.note ? { note: r.note } : {}),
 });
 
+type LinkRow = { id: string; library_id: string; from_id: string; relation: string; to_app: string; to_kind: string; to_id: string; to_label: string | null; linked_by: string; linked_at: Date };
+const LINK_COLUMNS = 'id, library_id, from_id, relation, to_app, to_kind, to_id, to_label, linked_by, linked_at';
+const fromLinkRow = (r: LinkRow): RecordLink => ({
+  id: r.id,
+  library: r.library_id,
+  from: r.from_id,
+  relation: r.relation,
+  to: { app: r.to_app, kind: r.to_kind, id: r.to_id, ...(r.to_label ? { label: r.to_label } : {}) },
+  by: r.linked_by,
+  at: isoOf(r.linked_at),
+});
+
 export class PgFolioStore implements FolioStore {
   // A plain field, not a parameter property: `pnpm dev:app` runs this file with Node's type stripping.
   private readonly pool: pg.Pool;
@@ -2329,6 +2405,32 @@ export class PgFolioStore implements FolioStore {
   async levelNames() {
     const { rows } = await this.pool.query<{ level: UnitLevel; name: string; plural: string }>('select level, name, plural from folio.level_names order by level');
     return Object.fromEntries(rows.map((r) => [r.level, { name: r.name, plural: r.plural }])) as LevelNames;
+  }
+
+  async link(input: Omit<RecordLink, 'id' | 'at'>) {
+    try {
+      const { rows } = await this.pool.query<LinkRow>(
+        `insert into folio.links (id, library_id, from_id, relation, to_app, to_kind, to_id, to_label, linked_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning ${LINK_COLUMNS}`,
+        [randomUUID(), input.library, input.from, input.relation, input.to.app, input.to.kind, input.to.id, input.to.label ?? null, input.by],
+      );
+      return fromLinkRow(rows[0]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') throw new LinkedError('They’re already linked that way.');
+      throw err;
+    }
+  }
+
+  async links(record: string, to: string) {
+    const [from, back] = await Promise.all([
+      this.pool.query<LinkRow>(`select ${LINK_COLUMNS} from folio.links where from_id = $1 order by seq`, [record]),
+      this.pool.query<LinkRow>(`select ${LINK_COLUMNS} from folio.links where to_app = 'folio' and to_id = $1 order by seq`, [to]),
+    ]);
+    return { from: from.rows.map(fromLinkRow), to: back.rows.map(fromLinkRow) };
+  }
+
+  async unlink(from: string, id: string) {
+    const { rows } = await this.pool.query<LinkRow>(`delete from folio.links where id = $1 and from_id = $2 returning ${LINK_COLUMNS}`, [id, from]);
+    return rows[0] && fromLinkRow(rows[0]);
   }
 
   async setLevelName(level: UnitLevel, name: LevelName | null, by: string) {

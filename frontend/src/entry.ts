@@ -1,4 +1,4 @@
-import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, openDocument, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
@@ -6,6 +6,7 @@ import './folio-app.js';
 import './folio-glance.js';
 import './folio-picker.js';
 import type { Picked } from './folio-picker.js';
+import type { OpenRef, PickRef } from './folio-links.js';
 import type { ExplainPayload } from './folio-share.js';
 import type { MarkedPassage } from '@augur/ui-kit';
 
@@ -30,6 +31,42 @@ export const proposeFrom =
       throw err;
     }
   };
+
+/** Mandate's intents, by the intents it handles: opening one, and asking the person for one. */
+const AIM_OPEN = 'aim.open';
+const AIM_PICK = 'aim.pick';
+
+/**
+ * Asks the person for the far end of a link in the app that keeps it: a thing
+ * in Data Atlas (`entity.pick`), or an intent in Mandate (`aim.pick`). Answers
+ * nothing when they close it without picking.
+ */
+export const pickFrom =
+  (ctx: Pick<MountContext, 'request'>): PickRef =>
+  async (app) => {
+    try {
+      if (app === 'atlas') {
+        const [entity] = await pickEntities(ctx, { purpose: 'Say what it’s about' });
+        return { app: 'atlas', kind: 'entity', id: entity!.id, ...(entity!.label ? { label: entity!.label } : {}) };
+      }
+      const aim = await ctx.request<{ kind?: unknown; id?: unknown; title?: unknown }>({ type: AIM_PICK, payload: { purpose: 'Say what it serves' } });
+      if (aim?.kind !== 'intent' || typeof aim.id !== 'string' || !aim.id) throw new Error('Mandate answered with something that isn’t an intent.');
+      return { app: 'mandate', kind: 'intent', id: aim.id, ...(typeof aim.title === 'string' && aim.title ? { label: aim.title.slice(0, 300) } : {}) };
+    } catch (err) {
+      if (isIntentCancelled(err)) return undefined;
+      const intent = app === 'atlas' ? ENTITY_PICK : AIM_PICK;
+      if ((err as Error).message.includes(`"${intent}"`)) throw new Error(`${app === 'atlas' ? 'Data Atlas' : 'Mandate'} isn’t open to you on this floor, so there’s nothing to pick from.`);
+      throw err;
+    }
+  };
+
+/** Opens the far end of a link in the app that keeps it. Data Atlas opens an entity by its id alone. */
+export const openFrom =
+  (ctx: Pick<MountContext, 'raise'>): OpenRef =>
+  (ref) =>
+    ref.app === 'atlas'
+      ? openEntity(ctx, { kind: 'entity', id: ref.id, type: 'entity', ...(ref.label ? { label: ref.label } : {}) })
+      : ctx.raise({ type: AIM_OPEN, payload: { id: ref.id } });
 
 /**
  * Where Folio is in the address bar, so a place in it can be shared, and Back
@@ -96,6 +133,8 @@ export default defineMicroFrontend({
         .userId=${ctx.user.id}
         .floorKey=${ctx.workspace.kind === 'org' ? 'org' : ctx.workspace.id}
         .propose=${proposeFrom(ctx)}
+        .pickRef=${pickFrom(ctx)}
+        .openRef=${openFrom(ctx)}
         ?publisher=${ctx.user.roles.includes('publisher')}
         floor-name=${ctx.workspace.name}
         floor-kind=${ctx.workspace.kind}

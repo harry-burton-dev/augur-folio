@@ -203,6 +203,45 @@ export interface Placements {
   targets: PlacementTarget[];
 }
 
+/** A kind of link between records (`@augur/records`' relations), as the service lists them. */
+export interface RelationKind {
+  id: 'relates-to' | 'supersedes' | 'responds-to' | 'about' | 'serves';
+  name: string;
+  inverse: string;
+}
+
+/** The far end of a link from a record: in Artifacts (named for whoever asks), or in another app. */
+export interface LinkEnd {
+  app: string;
+  kind: string;
+  id: string;
+  label?: string;
+  library?: string;
+  record?: string;
+  unitKind?: RecordView['kind'];
+  /** Why it can't be opened, when the caller can't. */
+  unavailable?: string;
+}
+
+export interface RecordLink {
+  id: string;
+  relation: RelationKind['id'];
+  /** The link in words, from the end being looked at: "Responds to", or "Answered by". */
+  words: string;
+  to?: LinkEnd;
+  from?: { library: string; record: string; kind: RecordView['kind']; name: string } | { unavailable: string };
+  by: string;
+  at: string;
+}
+
+export interface RecordLinks {
+  kinds: RelationKind[];
+  links: RecordLink[];
+  /** Links to this record from others. */
+  back: RecordLink[];
+  can: { change: boolean };
+}
+
 /** What's been published up to the caller's floor: here, and elsewhere (a higher floor shows it to them). */
 export interface Received {
   here: Placement[];
@@ -595,6 +634,19 @@ export class FolioApi {
   }
 
   /** What's been published up to the caller's floor. */
+  /** A record's links both ways: `record` is a folder's or document's id, or the library's own. */
+  links(library: string, record: string) {
+    return this.call<RecordLinks>('GET', `/libraries/${encodeURIComponent(library)}/links?record=${encodeURIComponent(record)}`);
+  }
+
+  link(library: string, record: string, relation: RelationKind['id'], to: { app: string; kind: string; id: string; label?: string }) {
+    return this.call<RecordLink>('POST', `/libraries/${encodeURIComponent(library)}/links`, { record, relation, to });
+  }
+
+  unlink(library: string, record: string, link: string) {
+    return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/links/${encodeURIComponent(link)}?record=${encodeURIComponent(record)}`);
+  }
+
   received() {
     return this.call<Received>('GET', '/received');
   }

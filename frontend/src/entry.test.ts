@@ -45,6 +45,8 @@ const service = ({
   /** Travel policy's newest version's lifecycle state, and its steps up the floors. */
   let state = 'in-progress';
   let placed: Record<string, unknown>[] = [];
+  /** Travel policy's links, and what links to it. */
+  let linked: Record<string, unknown>[] = [];
   /** What's out of Travel policy, if anything. */
   let out: { id: string; version: number; audience: string[]; publishedAt: string; ended?: { as: string; at: string; by: string } } | undefined;
   const named = (p: NonNullable<typeof out>) => ({ ...p, document: 'd-1', library: 'l-1', publishedBy: 'u1', audience: p.audience.map((a) => (a === 'tree:w-fin' ? FINANCE : { principal: a, kind: 'org' })) });
@@ -100,6 +102,26 @@ const service = ({
     }
     if (method === 'PUT' && /^\/libraries\/l-1(\/folders\/[^/]+)?\/state$/.test(where)) return Response.json({ ...hr, state: body.state });
     if (method === 'GET' && where === '/libraries/l-1/moves') return Response.json({ moves: [{ id: 'm-1', record: 'f-hr', from: 'open', to: 'closed', by: 'u1', note: 'Year end', at: new Date().toISOString() }] });
+    if (method === 'GET' && where === '/libraries/l-1/links') {
+      const KINDS = [
+        { id: 'relates-to', name: 'Relates to', inverse: 'Relates to' },
+        { id: 'supersedes', name: 'Supersedes', inverse: 'Superseded by' },
+        { id: 'about', name: 'About', inverse: 'Written about in' },
+        { id: 'serves', name: 'Serves', inverse: 'Served by' },
+      ];
+      const back = params.get('record') === 'd-1' ? [{ id: 'k-9', relation: 'responds-to', words: 'Answered by', from: { unavailable: 'Something you can’t open links here.' }, by: 'u5', at: new Date().toISOString() }] : [];
+      return Response.json({ kinds: KINDS, links: params.get('record') === 'd-1' ? linked : [], back, can: { change: true } });
+    }
+    if (method === 'POST' && where === '/libraries/l-1/links') {
+      const to = body.to.app === 'folio' ? { ...body.to, label: 'Annual leave', library: 'l-1', record: 'd-2', unitKind: 'document' } : body.to;
+      const made = { id: `k-${linked.length + 1}`, relation: body.relation, words: body.relation === 'about' ? 'About' : 'Supersedes', to, by: 'u1', at: new Date().toISOString() };
+      linked = [...linked, made];
+      return Response.json(made, { status: 201 });
+    }
+    if (method === 'DELETE' && /^\/libraries\/l-1\/links\/[^/]+$/.test(where)) {
+      linked = linked.filter((l) => !where.endsWith(`/${l.id as string}`));
+      return new Response(null, { status: 204 });
+    }
     if (method === 'GET' && where === '/placements') {
       const OPS = { id: 'w-ops', kind: 'team', name: 'Operations', rank: 1, path: ['w-ops'] };
       return Response.json({
@@ -411,7 +433,7 @@ describe('folio', () => {
     expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/reader/images/1.png']);
     expect(calls.some(([, p]) => p.includes('tracker'))).toBe(false);
     expect(reader.shadowRoot!.querySelector('img')!.getAttribute('src')).toBe('blob:map');
-    expect(page.querySelector<UiList>('ui-list')!.items.map((i) => i.title)).toEqual(['Version 2, reading', 'Version 1']);
+    expect(page.querySelector<UiList>('ui-list[label="Versions"]')!.items.map((i) => i.title)).toEqual(['Version 2, reading', 'Version 1']);
     page.querySelector<HTMLButtonElement>('.folio-crumb')!.click();
     await settle(el);
     expect(el.querySelector('folio-reader')).toBeNull();
@@ -633,7 +655,7 @@ describe('folio', () => {
     track = el.querySelector('folio-reader ui-lifecycle') as typeof track;
     expect([track.state, track.moves]).toEqual(['complete', ['in-progress', 'in-review', 'issued']]);
     // The versions list says where each is.
-    expect(el.querySelector<UiList>('folio-reader ui-list')!.items.map((i) => i.detail?.split(' · ')[0])).toEqual(['Complete', 'Complete']);
+    expect(el.querySelector<UiList>('folio-reader ui-list[label="Versions"]')!.items.map((i) => i.detail?.split(' · ')[0])).toEqual(['Complete', 'Complete']);
   });
 
   it('publishes a document up the floors through a filter, with the floors it can’t go to saying why', async () => {
@@ -655,6 +677,53 @@ describe('folio', () => {
     expect(calls).toContainEqual(['POST', '/api/folio/v1/placements', { library: 'l-1', record: { kind: 'document', id: 'd-1' }, to: 'w-ops', filter: ['complete', 'issued'] }]);
     expect(up.querySelector('.folio-note')!.textContent).toBe('Travel policy is on Operations now, showing complete and issued. Its leads were told.');
     expect(up.querySelector<UiList>('ui-list')!.items.map((i) => [i.title, i.detail])).toEqual([['On Operations', 'Shows complete and issued']]);
+  });
+
+  it('links a document to another and to a thing in Data Atlas, opens the other end, and unlinks it', async () => {
+    const { fetch, calls } = service({ documents: [travel, leaveDoc] });
+    const el = document.createElement('div');
+    document.body.append(el);
+    const c = ctx(fetch);
+    (c.request as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: 'entity', id: 'ent_01JB0000000000000000000000', type: 'vessel', label: 'HMS Example' });
+    await app.mount(el, c);
+    await settle(el);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    const links = el.querySelector('folio-reader folio-links')!;
+    const lists = () => [...links.querySelectorAll<UiList>('ui-list')].map((l) => [l.label, l.items.map((i) => i.title)]);
+    expect(lists()).toEqual([['What links to it', ['Answered by: Something you can’t open links here.']]]);
+
+    const [kind, to] = [...links.querySelectorAll('ui-select')] as (HTMLElement & { options: { value: string; label: string; disabled?: boolean }[]; value: string })[];
+    expect(kind.options.map((o) => o.label)).toEqual(['Relates to', 'Supersedes', 'About', 'Serves']);
+    kind.dispatchEvent(new CustomEvent('ui-change', { detail: { value: 'supersedes' } }));
+    expect(to.options.map((o) => o.label)).toEqual(['Policies', 'HR', 'Leave', 'IT', 'Annual leave']);
+    to.dispatchEvent(new CustomEvent('ui-change', { detail: { value: 'd-2' } }));
+    await settle(el);
+    button(links as HTMLElement, 'Link')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/links', { record: 'd-1', relation: 'supersedes', to: { app: 'folio', kind: 'unit', id: 'l-1/d-2' } }]);
+
+    (links.querySelector('ui-select') as HTMLElement).dispatchEvent(new CustomEvent('ui-change', { detail: { value: 'about' } }));
+    await settle(el);
+    button(links as HTMLElement, 'Choose in Data Atlas')!.click();
+    await settle(el);
+    expect(c.request).toHaveBeenCalledWith({ type: 'entity.pick', payload: { purpose: 'Say what it’s about' } });
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/links', { record: 'd-1', relation: 'about', to: { app: 'atlas', kind: 'entity', id: 'ent_01JB0000000000000000000000', label: 'HMS Example' } }]);
+    expect(lists()[0]).toEqual(['What it links to', ['Supersedes Annual leave', 'About HMS Example']]);
+
+    const mine = links.querySelector<UiList>('ui-list')!;
+    mine.dispatchEvent(new CustomEvent('ui-open', { detail: { item: mine.items[1] } }));
+    await settle(el);
+    expect(c.raise).toHaveBeenCalledWith({ type: 'entity.open', payload: { kind: 'entity', id: 'ent_01JB0000000000000000000000', type: 'entity', label: 'HMS Example' } });
+    mine.dispatchEvent(new CustomEvent('ui-action', { detail: { item: mine.items[1], action: { id: 'unlink' } } }));
+    await settle(el);
+    expect(calls).toContainEqual(['DELETE', '/api/folio/v1/libraries/l-1/links/k-2?record=d-1']);
+    expect(lists()[0]).toEqual(['What it links to', ['Supersedes Annual leave']]);
+
+    // The other end, in Artifacts, opens to read.
+    links.querySelector<UiList>('ui-list')!.dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'k-1' } } }));
+    await settle(el);
+    expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-2']);
   });
 
   it('shows what was published up to the floor, each at the version it lets through', async () => {

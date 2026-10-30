@@ -7,6 +7,8 @@ import './folio-publish.js';
 import './folio-series.js';
 import './folio-audience.js';
 import './folio-publish-up.js';
+import './folio-links.js';
+import type { OpenRef, PickRef } from './folio-links.js';
 import { filterWords, floorWords } from './folio-publish-up.js';
 import { CONTAINER_LIFECYCLE } from '@augur/records';
 import type { Chosen } from './folio-audience.js';
@@ -38,6 +40,7 @@ import {
   type FolderLevel,
   type LevelInfo,
   type Received,
+  type RecordLink,
   type ReceivedPage,
   type RecordView,
   type StateMove,
@@ -241,6 +244,8 @@ export class FolioApp extends LitElement {
     floorKind: { type: String, attribute: 'floor-kind' },
     place: { attribute: false },
     propose: { attribute: false },
+    pickRef: { attribute: false },
+    openRef: { attribute: false },
     libraries: { state: true },
     canCreate: { state: true },
     open: { state: true },
@@ -282,6 +287,10 @@ export class FolioApp extends LitElement {
   declare place: Place;
   /** Offers words marked in the open document to Data Atlas (see folio-reader). */
   declare propose: ((doc: { id: string; title: string }, ...rest: Parameters<Propose>) => Promise<string>) | undefined;
+  /** Asks the person for a thing in Data Atlas or an intent in Mandate, to link to. */
+  declare pickRef: PickRef | undefined;
+  /** Opens a thing in Data Atlas, or an intent in Mandate, that a record links to. */
+  declare openRef: OpenRef | undefined;
   declare libraries: Library[];
   declare canCreate: boolean;
   declare open: OpenLibrary | undefined;
@@ -1067,6 +1076,8 @@ export class FolioApp extends LitElement {
         .version=${this.reading.version}
         .tags=${open?.tags ?? []}
         .propose=${this.propose ? (...rest: Parameters<Propose>) => this.propose!({ id: doc.id, title: doc.title }, ...rest) : undefined}
+        .pickRef=${this.pickRef}
+        @folio-open-link=${(e: CustomEvent<{ link: RecordLink }>) => void this.openLink(e.detail.link)}
         library-name=${open ? [open.name, ...folderTrail(open.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName}
         @folio-read=${(e: CustomEvent<{ version?: number }>) => void this.read(doc.id, e.detail.version, true, doc.library)}
         @folio-back=${() => void this.stopReading()}
@@ -1272,6 +1283,24 @@ export class FolioApp extends LitElement {
   private publishUp(target: NonNullable<FolioApp['upTarget']>) {
     this.upTarget = target;
     this.dialog = 'publish-up';
+  }
+
+  /** Opens the other end of a link: a record here, or a thing or intent in the app that keeps it. */
+  private async openLink(link: RecordLink) {
+    const end = link.to ?? link.from;
+    if (!end || 'unavailable' in end) return;
+    if ('app' in end && end.app !== 'folio') {
+      try {
+        await this.openRef?.(end);
+      } catch (err) {
+        this.note = (err as Error).message;
+      }
+      return;
+    }
+    const at = 'app' in end ? { library: end.library, record: end.record, kind: end.unitKind } : { library: end.library, record: end.record, kind: end.kind };
+    if (!at.library || !at.record) return;
+    if (at.kind === 'document') await this.read(at.record, undefined, true, at.library);
+    else await this.openLibrary(at.library, at.kind === 'folder' ? at.record : undefined);
   }
 
   /** Opens the details of the library or folder on screen, with its lifecycle moves. */
@@ -1516,6 +1545,15 @@ export class FolioApp extends LitElement {
             .moves=${CONTAINER_LIFECYCLE.movesFrom(state, open.can.manage ? 'manage' : undefined)}
             why="Only whoever manages the library can close or archive it."
             @ui-move=${(e: CustomEvent<{ state: ContainerState }>) => void this.moveContainer(e.detail.state)}></ui-lifecycle>
+          <section class="folio-details-links" aria-label="Links">
+            <h3 class="label">Links</h3>
+            <folio-links .api=${this.api} library=${open.id} .record=${{ kind: here ? 'folder' : 'library', id: here?.id ?? open.id, name: here?.name ?? open.name }}
+              .pickRef=${this.pickRef}
+              @folio-open-link=${(e: CustomEvent<{ link: RecordLink }>) => {
+                close();
+                void this.openLink(e.detail.link);
+              }}></folio-links>
+          </section>
           ${this.moves?.length
             ? html`<ui-list label="Its lifecycle so far" density="compact" .noun=${['move', 'moves']}
                 .items=${this.moves.map((m): ListItem => ({ id: m.id, title: `${stateName(m.from)} to ${stateName(m.to)}`, detail: m.note ?? '', meta: ago(m.at) }))}></ui-list>`
