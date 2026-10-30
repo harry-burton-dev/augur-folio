@@ -4,7 +4,8 @@ import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { documentFinder, documentRights, type HeldDocument } from './documents.ts';
 import { describePrincipals, type CallerPrincipals } from './people.ts';
-import { LEVELS, PRINCIPAL, reaches, type FolioStore, type Grant, type Level } from './store.ts';
+import { LEVELS } from '@augur/records';
+import { PRINCIPAL, reaches, type FolioStore, type Grant, type Level } from './store.ts';
 
 export interface AccessDeps {
   store: FolioStore;

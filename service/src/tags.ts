@@ -1,3 +1,4 @@
+import { CONTENT_LIFECYCLE } from '@augur/records';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { HeldLibrary, LibraryRights, OnFloor } from './app.ts';
 import { DOCUMENT_SORTS, DOCUMENT_STATES, SINCE, type FolioStore, type SavedView, type Tag } from './store.ts';
@@ -30,6 +31,7 @@ export const VIEW_QUERY = {
     sort: { type: 'string', enum: DOCUMENT_SORTS },
     states: { type: 'array', maxItems: 3, items: { type: 'string', enum: DOCUMENT_STATES } },
     series: ID,
+    lifecycle: { type: 'array', maxItems: 5, items: { type: 'string', enum: CONTENT_LIFECYCLE.states.map((s) => s.id) } },
   },
 } as const;
 

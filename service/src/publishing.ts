@@ -98,6 +98,8 @@ export const publisherFor = ({ store, audit, directory, audience, notify, log }:
   const publish = async (caller: OnFloor, doc: HeldDocument, { version, audience: wanted, note }: { version: number; audience: string[]; note?: string }) => {
     const publication = await store.publish({ document: doc.id, version, audience: wanted, note, by: caller.id });
     if (!publication) return undefined;
+    // What's out to an audience is put out as final.
+    await store.setVersionState(doc.id, publication.version, 'issued', caller.id);
     await recorded({
       actor: caller.id,
       action: 'document.published',

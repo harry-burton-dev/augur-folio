@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@augur/mfe-sdk": "workspace:*",
+    "@augur/records": "workspace:*",
     "@augur/ui-kit": "workspace:*",
     "lit": "^3.3.0"
   },

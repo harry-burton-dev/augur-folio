@@ -86,9 +86,13 @@ export const seriesRoutes = async (app: FastifyInstance, { store, onFloor, reach
     return { series: await Promise.all((await store.seriesIn(library.id)).map((run) => view(caller, { ...run, shelf: library, manage }))), can: { create: manage } };
   });
 
-  app.post<{ Params: { id: string }; Body: SeriesChange & { name: string; cadence: Cadence } }>(
+  /**
+   * A schedule for a series: a new series (in `parent`, or at the top of the
+   * library), or one already in the library (`folder`) that has none yet.
+   */
+  app.post<{ Params: { id: string }; Body: SeriesChange & { name: string; cadence: Cadence; parent?: string; folder?: string } }>(
     '/libraries/:id/series',
-    { schema: { params: LIBRARY_PARAMS, body: { type: 'object', additionalProperties: false, required: ['name', 'cadence'], properties: FIELDS } } },
+    { schema: { params: LIBRARY_PARAMS, body: { type: 'object', additionalProperties: false, required: ['name', 'cadence'], properties: { ...FIELDS, parent: ID, folder: ID } } } },
     async (req, reply) => {
       const caller = onFloor(req, reply);
       if (!caller) return reply;

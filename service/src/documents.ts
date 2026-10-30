@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { CONTENT_LIFECYCLE, type ContentState } from '@augur/records';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { nextIssue } from './cadence.ts';
@@ -85,6 +86,7 @@ const LIST_QUERY = {
     sort: VIEW_QUERY.properties.sort,
     state: VIEW_QUERY.properties.states,
     series: VIEW_QUERY.properties.series,
+    lifecycle: VIEW_QUERY.properties.lifecycle,
     limit: { type: 'integer', minimum: 1, maximum: 200 },
     offset: { type: 'integer', minimum: 0 },
   },
@@ -102,6 +104,7 @@ type ListQuery = {
   sort?: DocumentSort;
   state?: DocumentState[];
   series?: string;
+  lifecycle?: ContentState[];
   limit?: number;
   offset?: number;
 };
@@ -119,9 +122,23 @@ export type HeldDocument = FolioDocument & { level: Level; shelf: HeldLibrary; o
 export const mayChange = (caller: OnFloor, doc: FolioDocument & { level?: Level }, shelf: HeldLibrary) =>
   reaches(furthest(doc.level, shelf.level), 'edit') || (doc.createdBy === caller.id && rightsOn(caller, shelf).addDocuments);
 
-/** What the caller may do with a document. Its audience only reads it. */
+/** How far the caller gets for lifecycle moves: whoever may change it can make the editors' moves. */
+export const lifecycleLevel = (caller: OnFloor, doc: HeldDocument): Level | undefined =>
+  doc.only ? undefined : furthest(doc.level, mayChange(caller, doc, doc.shelf) ? 'edit' : undefined);
+
+/**
+ * What the caller may do with a document. Its audience only reads it. `moves`
+ * are the lifecycle states they may move its newest version to.
+ */
 export const documentRights = (caller: OnFloor, doc: HeldDocument) =>
-  doc.only ? { change: false, share: false, publish: false } : { change: mayChange(caller, doc, doc.shelf), share: reaches(doc.level, 'manage'), publish: reaches(doc.level, 'manage') };
+  doc.only
+    ? { change: false, share: false, publish: false, moves: [] as ContentState[] }
+    : {
+        change: mayChange(caller, doc, doc.shelf),
+        share: reaches(doc.level, 'manage'),
+        publish: reaches(doc.level, 'manage'),
+        moves: CONTENT_LIFECYCLE.movesFrom(doc.latest.state, lifecycleLevel(caller, doc)),
+      };
 
 /** `audience`: let in, to the version that's out, whoever it's published to. Only for reading it. */
 export type DocumentFor = (caller: OnFloor, params: { id: string; doc: string }, reply: FastifyReply, options?: { audience?: boolean }) => Promise<HeldDocument | undefined>;
@@ -246,6 +263,7 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         sort: q.sort,
         states: q.state,
         series: q.series,
+        lifecycle: q.lifecycle,
         limit: q.limit,
         offset: q.offset,
         readers,
@@ -460,6 +478,56 @@ export const documentRoutes = async (app: FastifyInstance, { store, objects, aud
         .send(file);
     },
   );
+
+  const STATE_BODY = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['state'],
+    properties: { state: { type: 'string', enum: CONTENT_LIFECYCLE.states.map((s) => s.id) }, note: { type: 'string', maxLength: 500 } },
+  } as const;
+
+  /**
+   * Moves one version through its lifecycle: in progress, in review and complete
+   * for whoever may change it; issued and retired for whoever manages it.
+   */
+  app.put<{ Params: { id: string; doc: string; number: number }; Body: { state: ContentState; note?: string } }>(
+    '/libraries/:id/documents/:doc/versions/:number/state',
+    { schema: { params: VERSION_PARAMS, body: STATE_BODY } },
+    async (req, reply) => {
+      const caller = onFloor(req, reply);
+      if (!caller) return reply;
+      const doc = await documentFor(caller, req.params, reply);
+      if (!doc) return reply;
+      const version = await store.version(doc.id, req.params.number);
+      if (!version) return reply.code(404).send({ error: 'not-found', message: 'There’s no such version of this document.' });
+      try {
+        CONTENT_LIFECYCLE.check(version.state, req.body.state, lifecycleLevel(caller, doc));
+      } catch (err) {
+        return refused(err, reply);
+      }
+      const moved = await store.setVersionState(doc.id, version.number, req.body.state, caller.id, req.body.note?.trim() || undefined);
+      if (!moved) return reply.code(409).send({ error: 'bad-move', message: 'It changed in the meantime. Look again.' });
+      // Putting a version out as final, or setting it aside, is on the record.
+      if (req.body.state === 'issued' || req.body.state === 'retired' || version.state === 'issued')
+        await recorded({
+          actor: caller.id,
+          action: `document.${req.body.state === 'issued' ? 'issued' : req.body.state === 'retired' ? 'retired' : 'unissued'}`,
+          target: doc.id,
+          workspace: doc.workspace,
+          detail: { library: doc.library, title: doc.title, version: version.number, from: version.state, to: req.body.state, ...(req.body.note ? { note: req.body.note } : {}) },
+        });
+      return moved;
+    },
+  );
+
+  /** Every lifecycle move of a document's versions, newest first. */
+  app.get<{ Params: { id: string; doc: string } }>('/libraries/:id/documents/:doc/moves', { schema: { params: DOC_PARAMS } }, async (req, reply) => {
+    const caller = onFloor(req, reply);
+    if (!caller) return reply;
+    const doc = await documentFor(caller, req.params, reply);
+    if (!doc) return reply;
+    return { moves: await store.stateMoves(doc.id) };
+  });
 
   await renditionRoutes(app, { store, objects, documentFor, onFloor });
 };

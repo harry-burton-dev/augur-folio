@@ -21,8 +21,10 @@ import { floorPrincipalOf, peopleFromEnv, type CallerPrincipals } from './people
 import { publisherFor, publishingRoutes } from './publishing.ts';
 import { homeRoutes } from './home.ts';
 import { seriesRoutes } from './series.ts';
-import { BadParentError, BadTagError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
+import { BadMoveError, BadLevelError, checkLevelName, CONTAINER_LIFECYCLE, type ContainerState } from '@augur/records';
+import { BadParentError, BadTagError, checkPlace, ClosedError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { tagRoutes } from './tags.ts';
+import { FOLDER_LEVELS, UNIT_LEVELS, type FolderLevel, type UnitLevel } from './units.ts';
 
 /** The major version of the API this service serves. Its routes go under /v1, as the platform's do. */
 export const API_VERSION = 'v1';
@@ -113,9 +115,9 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
     return caller as OnFloor;
   };
 
-  /** A library and how far the caller is let in, which may be not at all. */
-  const reach = async (caller: OnFloor, id: string): Promise<HeldLibrary | undefined> => {
-    const library = await store.library(id);
+  /** A library and how far the caller is let in, which may be not at all. Archived ones only when asked. */
+  const reach = async (caller: OnFloor, id: string, { archived = false } = {}): Promise<HeldLibrary | undefined> => {
+    const library = await store.library(id, { archived });
     if (!library) return undefined;
     const principals = await principalsOf(caller);
     const onFloor = library.workspace === caller.workspace.id;
@@ -142,6 +144,9 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
   /** Store refusals people can act on, as 409s with the store's own words. */
   const refused = (err: unknown, reply: FastifyReply) => {
     if (err instanceof NameTakenError || err instanceof NotEmptyError) return reply.code(409).send({ error: err instanceof NameTakenError ? 'name-taken' : 'not-empty', message: err.message });
+    if (err instanceof ClosedError) return reply.code(409).send({ error: 'closed', message: err.message });
+    if (err instanceof BadMoveError) return reply.code(409).send({ error: 'bad-move', message: err.message });
+    if (err instanceof BadLevelError) return reply.code(400).send({ error: 'bad-level', message: err.message });
     if (err instanceof BadParentError) return reply.code(400).send({ error: 'bad-parent', message: err.message });
     if (err instanceof BadTagError) return reply.code(400).send({ error: 'bad-tag', message: err.message });
     throw err;
@@ -156,11 +161,51 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         return reply.code(503).send({ error: 'unavailable', message: 'Artifacts can’t check who you are right now. Try again in a moment.' });
       });
 
-      app.get('/libraries', async (req, reply) => {
+      /** The levels the library is built from, called what the org calls them. */
+      const namedLevels = async () => UNIT_LEVELS.named(await store.levelNames());
+
+      app.get<{ Querystring: { archived?: boolean } }>(
+        '/libraries',
+        { schema: { querystring: { type: 'object', additionalProperties: false, properties: { archived: { type: 'boolean' } } } } },
+        async (req, reply) => {
+          const caller = onFloor(req, reply);
+          if (!caller) return reply;
+          // Archived ones are for whoever can bring them back: the floor's leads.
+          const archived = Boolean(req.query.archived) && rightsOn(caller).manage;
+          return { libraries: await store.libraries(caller.workspace.id, { archived }), can: { create: rightsOn(caller).manage } };
+        },
+      );
+
+      app.get('/levels', async (req, reply) => {
         const caller = onFloor(req, reply);
         if (!caller) return reply;
-        return { libraries: await store.libraries(caller.workspace.id), can: { create: rightsOn(caller).manage } };
+        const levels = await namedLevels();
+        return { levels: levels.all.map(({ id, name, plural, holds }) => ({ id, name, plural, holds })), top: levels.top, can: { rename: caller.workspace.kind === 'org' && caller.workspace.role === 'lead' } };
       });
+
+      const LEVEL_PARAMS = { type: 'object', properties: { level: { type: 'string', enum: UNIT_LEVELS.all.map((l) => l.id) } }, required: ['level'] } as const;
+      const LEVEL_NAME = { type: 'string', minLength: 1, maxLength: 30, pattern: '\\S' } as const;
+
+      /** Renames a level for the whole org, or gives it its own name back: the org's leads, on the org's floor. */
+      const nameLevel = async (req: FastifyRequest<{ Params: { level: UnitLevel }; Body?: { name: string; plural: string } }>, reply: FastifyReply) => {
+        const caller = onFloor(req, reply);
+        if (!caller) return reply;
+        if (caller.workspace.kind !== 'org' || caller.workspace.role !== 'lead') return reply.code(403).send({ error: 'forbidden', message: 'Only the org’s leads can rename the levels, from the org’s floor.' });
+        try {
+          const name = req.body ? checkLevelName(req.body) : null;
+          await store.setLevelName(req.params.level, name, caller.id);
+          await recorded({ actor: caller.id, action: 'level.renamed', target: req.params.level, workspace: caller.workspace.id, detail: { level: req.params.level, ...(name ?? { reset: true }) } });
+          return reply.code(200).send({ levels: (await namedLevels()).all.map(({ id, name, plural, holds }) => ({ id, name, plural, holds })) });
+        } catch (err) {
+          return refused(err, reply);
+        }
+      };
+      app.put<{ Params: { level: UnitLevel }; Body: { name: string; plural: string } }>(
+        '/levels/:level',
+        { schema: { params: LEVEL_PARAMS, body: { type: 'object', additionalProperties: false, required: ['name', 'plural'], properties: { name: LEVEL_NAME, plural: LEVEL_NAME } } } },
+        nameLevel,
+      );
+      app.delete<{ Params: { level: UnitLevel } }>('/levels/:level', { schema: { params: LEVEL_PARAMS } }, nameLevel);
 
       app.post<{ Body: { name: string; description?: string } }>(
         '/libraries',
@@ -215,6 +260,44 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         },
       );
 
+      const STATE_BODY = {
+        type: 'object',
+        additionalProperties: false,
+        required: ['state'],
+        properties: { state: { type: 'string', enum: CONTAINER_LIFECYCLE.states.map((s) => s.id) }, note: { type: 'string', maxLength: 500 } },
+      } as const;
+
+      /** Moves a library through its lifecycle: open, closed, archived. An archived one can be found again to bring it back. */
+      app.put<{ Params: { id: string }; Body: { state: ContainerState; note?: string } }>('/libraries/:id/state', { schema: { params: ID_PARAMS, body: STATE_BODY } }, async (req, reply) => {
+        const caller = onFloor(req, reply);
+        if (!caller) return reply;
+        const library = await reach(caller, req.params.id, { archived: true });
+        if (!library?.level) return reply.code(404).send({ error: 'not-found', message: 'There’s no such library, or it hasn’t been shared with you.' });
+        try {
+          CONTAINER_LIFECYCLE.check(library.state, req.body.state, rightsOn(caller, library).manage ? 'manage' : library.level);
+          const moved = await store.setLibraryState(library.id, req.body.state, caller.id, req.body.note?.trim() || undefined);
+          if (!moved) return reply.code(409).send({ error: 'bad-move', message: 'It changed in the meantime. Look again.' });
+          await recorded({ actor: caller.id, action: `library.${req.body.state === 'open' ? 'opened' : req.body.state}`, target: library.id, workspace: library.workspace, detail: { name: library.name, from: library.state } });
+          return { ...moved, can: rightsOn(caller, { ...moved, level: library.level, onFloor: library.onFloor }) };
+        } catch (err) {
+          return refused(err, reply);
+        }
+      });
+
+      /** Every lifecycle move of the library, or of one of its folders. */
+      app.get<{ Params: { id: string }; Querystring: { folder?: string } }>(
+        '/libraries/:id/moves',
+        { schema: { params: ID_PARAMS, querystring: { type: 'object', additionalProperties: false, properties: { folder: { type: 'string', maxLength: 64 } } } } },
+        async (req, reply) => {
+          const caller = onFloor(req, reply);
+          if (!caller) return reply;
+          const library = await libraryFor(caller, req.params.id, reply);
+          if (!library) return reply;
+          if (req.query.folder && !(await store.folders(library.id)).some((f) => f.id === req.query.folder)) return reply.code(404).send({ error: 'not-found', message: 'There’s no such folder in this library.' });
+          return { moves: await store.stateMoves(req.query.folder ?? library.id) };
+        },
+      );
+
       app.post<{ Params: { id: string } }>('/libraries/:id/archive', { schema: { params: ID_PARAMS } }, async (req, reply) => {
         const caller = onFloor(req, reply);
         if (!caller) return reply;
@@ -225,9 +308,19 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         return reply.code(204).send();
       });
 
-      app.post<{ Params: { id: string }; Body: { name: string; parent?: string } }>(
+      app.post<{ Params: { id: string }; Body: { name: string; parent?: string; level?: FolderLevel; description?: string } }>(
         '/libraries/:id/folders',
-        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: FOLDER_NAME, parent: { type: 'string', maxLength: 64 } } } } },
+        {
+          schema: {
+            params: ID_PARAMS,
+            body: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['name'],
+              properties: { name: FOLDER_NAME, parent: { type: 'string', maxLength: 64 }, level: { type: 'string', enum: FOLDER_LEVELS }, description: DESCRIPTION },
+            },
+          },
+        },
         async (req, reply) => {
           const caller = onFloor(req, reply);
           if (!caller) return reply;
@@ -235,7 +328,11 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
           if (!library) return reply;
           if (!rightsOn(caller, library).addFolders) return reply.code(403).send({ error: 'forbidden', message: 'You can read this library, but not add to it.' });
           try {
-            return reply.code(201).send(await store.createFolder({ library: library.id, parent: req.body.parent, name: req.body.name.trim(), createdBy: caller.id }));
+            // Refused in the org's own words for the levels before the store checks again.
+            const level = checkPlace(await store.folders(library.id), req.body.parent, req.body.level, await namedLevels());
+            return reply.code(201).send(
+              await store.createFolder({ library: library.id, parent: req.body.parent, level, name: req.body.name.trim(), description: req.body.description?.trim(), createdBy: caller.id }),
+            );
           } catch (err) {
             return refused(err, reply);
           }
@@ -257,16 +354,39 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         return folder;
       };
 
-      app.patch<{ Params: { id: string; folder: string }; Body: { name: string } }>(
+      app.patch<{ Params: { id: string; folder: string }; Body: { name?: string; description?: string } }>(
         '/libraries/:id/folders/:folder',
-        { schema: { params: FOLDER_PARAMS, body: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: FOLDER_NAME } } } },
+        { schema: { params: FOLDER_PARAMS, body: { type: 'object', additionalProperties: false, minProperties: 1, properties: { name: FOLDER_NAME, description: DESCRIPTION } } } },
         async (req, reply) => {
           const caller = onFloor(req, reply);
           if (!caller) return reply;
           const library = await libraryFor(caller, req.params.id, reply);
           if (!library || !(await folderFor(caller, library, req.params.folder, reply))) return reply;
           try {
-            return await store.renameFolder(library.id, req.params.folder, req.body.name.trim());
+            return await store.updateFolder(library.id, req.params.folder, { name: req.body.name?.trim(), description: req.body.description?.trim() });
+          } catch (err) {
+            return refused(err, reply);
+          }
+        },
+      );
+
+      /** Moves a subcollection, series or subseries through its lifecycle: whoever manages the library. */
+      app.put<{ Params: { id: string; folder: string }; Body: { state: ContainerState; note?: string } }>(
+        '/libraries/:id/folders/:folder/state',
+        { schema: { params: FOLDER_PARAMS, body: STATE_BODY } },
+        async (req, reply) => {
+          const caller = onFloor(req, reply);
+          if (!caller) return reply;
+          const library = await libraryFor(caller, req.params.id, reply);
+          if (!library) return reply;
+          const folder = (await store.folders(library.id)).find((f) => f.id === req.params.folder);
+          if (!folder) return reply.code(404).send({ error: 'not-found', message: 'There’s no such folder in this library.' });
+          try {
+            CONTAINER_LIFECYCLE.check(folder.state, req.body.state, rightsOn(caller, library).manage ? 'manage' : library.level);
+            const moved = await store.setFolderState(library.id, folder.id, req.body.state, caller.id, req.body.note?.trim() || undefined);
+            if (!moved) return reply.code(409).send({ error: 'bad-move', message: 'It changed in the meantime. Look again.' });
+            await recorded({ actor: caller.id, action: `folder.${req.body.state === 'open' ? 'opened' : req.body.state}`, target: folder.id, workspace: library.workspace, detail: { library: library.id, name: folder.name, level: folder.level, from: folder.state } });
+            return moved;
           } catch (err) {
             return refused(err, reply);
           }

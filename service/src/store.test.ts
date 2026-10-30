@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { following, periodStart } from './cadence.ts';
-import { BadParentError, BadTagError, MAX_FOLDER_DEPTH, MemoryFolioStore, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
+import { BadParentError, BadTagError, ClosedError, MemoryFolioStore, migrations, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
 
 const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
 const titles = async (store: FolioStore, library: string, query = {}) => (await store.documents(library, query)).documents.map((d) => d.title);
@@ -37,20 +37,69 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect((await store.updateLibrary(b.id, { name: 'Policies' }))?.name).toBe('Policies');
   });
 
-  it('nests folders, one name per place, so deep and no deeper', async () => {
+  it('nests by level, one name per place, never turned round', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     const other = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Other', createdBy: 'u-1' });
-    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    expect(lib.state).toBe('open');
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', description: 'People', createdBy: 'u-1' });
+    expect(hr).toMatchObject({ level: 'subcollection', description: 'People', state: 'open' });
+    // The next level down when nobody says, and any level below that may sit there.
     const leave = await store.createFolder({ library: lib.id, parent: hr.id, name: 'Leave', createdBy: 'u-2' });
+    expect(leave.level).toBe('series');
+    const years = await store.createFolder({ library: lib.id, parent: leave.id, name: '2026', createdBy: 'u-2' });
+    expect(years.level).toBe('subseries');
+    expect((await store.createFolder({ library: lib.id, name: 'Minutes', level: 'series', createdBy: 'u-1' })).level).toBe('series');
     await store.createFolder({ library: lib.id, name: 'Leave', createdBy: 'u-2' });
     await expect(store.createFolder({ library: lib.id, parent: hr.id, name: 'leave', createdBy: 'u-2' })).rejects.toBeInstanceOf(NameTakenError);
     await expect(store.createFolder({ library: other.id, parent: hr.id, name: 'X', createdBy: 'u-2' })).rejects.toBeInstanceOf(BadParentError);
+    await expect(store.createFolder({ library: lib.id, parent: years.id, name: 'Too deep', createdBy: 'u-1' })).rejects.toThrow('only files can');
+    await expect(store.createFolder({ library: lib.id, parent: leave.id, level: 'subcollection', name: 'Upside down', createdBy: 'u-1' })).rejects.toThrow('A subcollection can’t go in a series');
+    await expect(store.createFolder({ library: lib.id, level: 'subseries', name: 'Loose', createdBy: 'u-1' })).rejects.toBeInstanceOf(BadParentError);
     const folders = (await store.folders(lib.id)).map((f) => [f.name, f.parent ?? null]);
-    expect(folders.map(([name]) => name)).toEqual(['HR', 'Leave', 'Leave']);
+    expect(folders.map(([name]) => name)).toEqual(['2026', 'HR', 'Leave', 'Leave', 'Minutes']);
     expect(folders).toEqual(expect.arrayContaining([['Leave', hr.id], ['Leave', null]]));
-    let parent = leave.id;
-    for (let depth = 3; depth <= MAX_FOLDER_DEPTH; depth++) parent = (await store.createFolder({ library: lib.id, parent, name: `L${depth}`, createdBy: 'u-1' })).id;
-    await expect(store.createFolder({ library: lib.id, parent, name: 'Too deep', createdBy: 'u-1' })).rejects.toBeInstanceOf(BadParentError);
+  });
+
+  it('keeps every lifecycle move, and lets nothing new into what’s closed', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    expect(await store.setFolderState(lib.id, hr.id, 'closed', 'u-1', 'Done for the year')).toMatchObject({ state: 'closed' });
+    expect(await store.setFolderState(lib.id, hr.id, 'closed', 'u-1')).toBeUndefined();
+    await expect(store.createFolder({ library: lib.id, parent: hr.id, name: 'More', createdBy: 'u-1' })).rejects.toBeInstanceOf(ClosedError);
+    await expect(store.createDocument({ id: 'd-c', library: lib.id, folder: hr.id, title: 'Late', createdBy: 'u-1' }, file('d-c', 'v-c'))).rejects.toThrow('HR is closed');
+    await store.setFolderState(lib.id, hr.id, 'open', 'u-2');
+    expect((await store.stateMoves(hr.id)).map((m) => [m.from, m.to, m.by, m.note])).toEqual([
+      ['closed', 'open', 'u-2', undefined],
+      ['open', 'closed', 'u-1', 'Done for the year'],
+    ]);
+
+    const doc = await store.createDocument({ id: 'd-l', library: lib.id, folder: hr.id, title: 'Leave', createdBy: 'u-1' }, file('d-l', 'v-l'));
+    expect(doc.latest.state).toBe('in-progress');
+    expect(await store.setVersionState('d-l', 1, 'in-review', 'u-1')).toMatchObject({ number: 1, state: 'in-review' });
+    expect(await store.setVersionState('d-l', 9, 'in-review', 'u-1')).toBeUndefined();
+    await store.addVersion('d-l', file('d-l', 'v-l2'));
+    expect((await store.versions('d-l')).map((v) => [v.number, v.state])).toEqual([
+      [2, 'in-progress'],
+      [1, 'in-review'],
+    ]);
+    expect(await store.stateMoves('d-l')).toEqual([expect.objectContaining({ record: 'd-l', version: 1, from: 'in-progress', to: 'in-review', by: 'u-1' })]);
+    expect((await store.documents(lib.id, { below: true, lifecycle: ['in-progress'] })).documents.map((d) => d.id)).toEqual(['d-l']);
+    expect((await store.documents(lib.id, { below: true, lifecycle: ['in-review'] })).total).toBe(0);
+
+    expect(await store.setLibraryState(lib.id, 'archived', 'u-1')).toMatchObject({ state: 'archived' });
+    expect(await store.library(lib.id)).toBeUndefined();
+    expect(await store.library(lib.id, { archived: true })).toMatchObject({ state: 'archived' });
+    expect((await store.libraries('w-fin', { archived: true })).map((l) => l.name)).toEqual(['Policies']);
+    expect(await store.setLibraryState(lib.id, 'open', 'u-1')).toMatchObject({ state: 'open' });
+    expect((await store.libraries('w-fin')).map((l) => l.name)).toEqual(['Policies']);
+  });
+
+  it('lets the org call the levels its own names', async () => {
+    expect(await store.levelNames()).toEqual({});
+    expect(await store.setLevelName('collection', { name: 'Programme', plural: 'Programmes' }, 'u-1')).toEqual({ collection: { name: 'Programme', plural: 'Programmes' } });
+    await store.setLevelName('collection', { name: 'Area', plural: 'Areas' }, 'u-1');
+    await store.setLevelName('series', { name: 'Run', plural: 'Runs' }, 'u-1');
+    expect(await store.setLevelName('series', null, 'u-1')).toEqual({ collection: { name: 'Area', plural: 'Areas' } });
   });
 
   it('renames folders, and removes only empty ones', async () => {
@@ -438,15 +487,18 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.series(run.id)).toMatchObject({ issues: 3, last: { document: 'd-3', number: 3 } });
     expect((await store.seriesIn(lib.id)).map((s) => s.name)).toEqual(['Cash report']);
 
-    expect(await titles(store, lib.id, { series: run.id, sort: 'period' })).toEqual(['Three', 'Two', 'One']);
-    expect(await titles(store, lib.id, { sort: 'period' })).toEqual(['Three', 'Two', 'One', 'Plain']);
+    // Issues go in their series.
+    expect(await titles(store, lib.id, { folder: run.folder, sort: 'period' })).toEqual(['Three', 'Two', 'One']);
+    expect(await titles(store, lib.id, { series: run.id, below: true, sort: 'period' })).toEqual(['Three', 'Two', 'One']);
+    expect(await titles(store, lib.id, { below: true, sort: 'period' })).toEqual(['Three', 'Two', 'One', 'Plain']);
+    expect((await store.folders(lib.id)).find((f) => f.id === run.folder)).toMatchObject({ level: 'series', name: 'Cash report' });
     // Only the ones they may read, or that were published to them, either side.
     expect(await store.neighbours('d-2', ['tree:w-fin'])).toMatchObject({ previous: { id: 'd-1', number: 1, title: 'One' }, next: { id: 'd-3', number: 3 } });
     expect(await store.neighbours('d-2', ['team:w-legal'])).toEqual({});
     await store.publish({ document: 'd-3', version: 1, audience: ['team:w-legal'], by: 'u-1' });
     expect(await store.neighbours('d-2', ['team:w-legal'])).toEqual({ next: { id: 'd-3', library: lib.id, title: 'Three', number: 3, period: expect.any(String) } });
-    expect(await titles(store, lib.id, { series: run.id, readers: ['team:w-legal'] })).toEqual([]);
-    expect(await titles(store, lib.id, { series: run.id, readers: ['team:w-legal'], audience: true })).toEqual(['Three']);
+    expect(await titles(store, lib.id, { series: run.id, below: true, readers: ['team:w-legal'] })).toEqual([]);
+    expect(await titles(store, lib.id, { series: run.id, below: true, readers: ['team:w-legal'], audience: true })).toEqual(['Three']);
     expect(await store.neighbours('d-plain', ['tree:w-fin'])).toEqual({});
 
     // A deleted issue's number goes to the next one, and a series with issues stays.
@@ -532,7 +584,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
@@ -540,7 +592,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {
@@ -555,6 +607,49 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
       await expect.poll(() => heard).toEqual(['v-heard', 'v-heard-2']);
     } finally {
       listener.release();
+    }
+  });
+
+  // Last, as it starts the schema again from before the units.
+  it('moves a library of folders and series into units', async () => {
+    await admin.query('drop schema folio cascade');
+    await admin.query('create schema folio');
+    await admin.query('create table folio.migrations (id text primary key, applied_at timestamptz not null default now())');
+    for (const m of migrations.filter((m) => m.id < '010')) {
+      await admin.query(m.sql);
+      await admin.query('insert into folio.migrations (id) values ($1)', [m.id]);
+    }
+    await admin.query(`
+      insert into folio.libraries (id, workspace_id, floor_principal, name, created_by) values ('l', 'w', 'tree:w', 'Policies', 'u');
+      insert into folio.folders (id, workspace_id, library_id, parent_id, name, created_by) values
+        ('hr', 'w', 'l', null, 'HR', 'u'), ('leave', 'w', 'l', 'hr', 'Leave', 'u'), ('annual', 'w', 'l', 'leave', 'Annual', 'u'), ('cash', 'w', 'l', null, 'Cash report', 'u');
+      insert into folio.series (id, workspace_id, library_id, name, cadence, created_by) values ('s', 'w', 'l', 'Cash report', 'weekly', 'u');
+      insert into folio.documents (id, workspace_id, library_id, folder_id, title, created_by, series_id, issue_number, period_start, period) values
+        ('d1', 'w', 'l', 'annual', 'Rules', 'u', null, null, null, null), ('d2', 'w', 'l', null, 'Week 1', 'u', 's', 1, '2026-01-05', 'Week 2, 2026');
+      insert into folio.document_versions (id, workspace_id, document_id, number, filename, media_type, size_bytes, sha256, object_key, created_by) values
+        ('v1', 'w', 'd1', 1, 'a.md', 'text/markdown', 1, 'x', 'k1', 'u'), ('v2', 'w', 'd2', 1, 'b.md', 'text/markdown', 1, 'x', 'k2', 'u'), ('v3', 'w', 'd2', 2, 'b.md', 'text/markdown', 1, 'x', 'k3', 'u');
+      insert into folio.publications (id, workspace_id, library_id, document_id, version_id, version_number, audience, published_by) values ('p', 'w', 'l', 'd2', 'v2', 1, '{org}', 'u');`);
+    const moved = await PgFolioStore.connect(process.env.DATABASE_URL!);
+    try {
+      const folders = await moved.folders('l');
+      expect(folders.map((f) => [f.name, f.level, f.parent ?? null])).toEqual([
+        ['Cash report', 'subcollection', null],
+        ['Cash report (series)', 'series', null],
+        ['HR', 'subcollection', null],
+        ['HR › Leave', 'subcollection', null],
+        ['HR › Leave › Annual', 'subcollection', null],
+      ]);
+      const series = folders.find((f) => f.level === 'series')!;
+      expect(await moved.series('s')).toMatchObject({ folder: series.id, name: 'Cash report (series)' });
+      expect((await moved.document('d1'))?.folder).toBe('annual');
+      expect((await moved.document('d2'))?.folder).toBe(series.id);
+      expect((await moved.versions('d2')).map((v) => [v.number, v.state])).toEqual([
+        [2, 'in-progress'],
+        [1, 'issued'],
+      ]);
+      expect((await moved.library('l'))?.state).toBe('open');
+    } finally {
+      await moved.close();
     }
   });
 });
