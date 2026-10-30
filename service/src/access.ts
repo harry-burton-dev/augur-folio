@@ -5,7 +5,8 @@ import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { documentFinder, documentRights, type HeldDocument } from './documents.ts';
 import { describePrincipals, type CallerPrincipals } from './people.ts';
 import { LEVELS } from '@augur/records';
-import { PRINCIPAL, reaches, type Folder, type FolioStore, type Grant, type Level } from './store.ts';
+import { floorsFrom } from './placements.ts';
+import { PRINCIPAL, reaches, type Folder, type FolioStore, type Grant, type Level, type Placement } from './store.ts';
 
 export interface AccessDeps {
   store: FolioStore;
@@ -40,6 +41,37 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
     return grants.map((g, i) => ({ ...described[i], level: g.level, createdBy: g.createdBy, createdAt: g.createdAt }));
   };
 
+  const floorsOf = floorsFrom(directory);
+
+  /**
+   * What's published up the floors that shows it: its own steps, and those of
+   * whatever it's inside. Each says who that floor lets in, what it shows
+   * there, and the floors it came up through, from where it was made.
+   */
+  const placedOver = async (caller: OnFloor, steps: Placement[]) => {
+    const live = steps.filter((p) => !p.ended);
+    if (!live.length) return {};
+    const known = new Map(steps.map((p) => [p.id, p]));
+    const chains: string[][] = [];
+    for (const p of live) {
+      const froms: string[] = [];
+      for (let at: Placement | undefined = p; at && froms.length < 8; at = at.via ? (known.get(at.via) ?? (await store.placement(at.via))) : undefined) froms.unshift(at.from);
+      chains.push(froms);
+    }
+    const [floors, who] = await Promise.all([floorsOf(chains.flat(), caller), describe(live.map((p) => p.toPrincipal))]);
+    return {
+      placed: live.map((p, i) => ({ ...who[i], filter: p.filter, at: p.at, record: p.record, chain: chains[i].map((k) => floors.get(k)?.name ?? 'A floor that’s gone') })),
+    };
+  };
+
+  /** The steps up the floors of a folder, of every folder it's inside, and of its library. */
+  const stepsOver = async (library: HeldLibrary, folder?: Folder) => {
+    const folders = folder ? await store.folders(library.id) : [];
+    const ids = [library.id];
+    for (let at = folder; at; at = folders.find((f) => f.id === at!.parent)) ids.push(at.id);
+    return (await Promise.all(ids.map((id) => store.placementsOf(id)))).flat().filter((p) => p.library === library.id);
+  };
+
   /** The library's floor first, then whoever has been let in. */
   const libraryAccess = async (library: HeldLibrary) => {
     const [[floor], grants] = await Promise.all([describe([library.floor]), store.grants(library.id)]);
@@ -47,7 +79,7 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
   };
 
   const documentAccess = async (caller: OnFloor, doc: HeldDocument) => {
-    const [library, grants, on] = await Promise.all([libraryAccess(doc.shelf), store.grants(doc.library, doc.id), store.grantsOn(doc.id)]);
+    const [library, grants, on, covering] = await Promise.all([libraryAccess(doc.shelf), store.grants(doc.library, doc.id), store.grantsOn(doc.id), store.covering(doc.id)]);
     const folders = on.filter((g) => g.folder);
     return {
       ...library,
@@ -55,6 +87,7 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
       // Let in to a folder it's inside, and so to it.
       ...(folders.length ? { folders: (await withNames(folders)).map((g, i) => ({ ...g, folder: folders[i].folder })) } : {}),
       grants: await withNames(grants),
+      ...(await placedOver(caller, covering)),
       can: { share: documentRights(caller, doc).share },
     };
   };
@@ -129,7 +162,7 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
     if (!caller) return reply;
     const library = await libraryFor(caller, req.params.id, reply);
     if (!library) return reply;
-    return { ...(await libraryAccess(library)), can: { share: rightsOn(caller, library).share } };
+    return { ...(await libraryAccess(library)), ...(await placedOver(caller, await stepsOver(library))), can: { share: rightsOn(caller, library).share } };
   });
 
   const LIBRARY_PRINCIPAL = { type: 'object', properties: { id: ID, principal: PRINCIPAL_PARAM }, required: ['id', 'principal'] } as const;
@@ -142,7 +175,7 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
     if (!rightsOn(caller, library).share) return managers(reply, 'library');
     if (level && !(await checkPrincipal(req.params.principal, library.floor, reply))) return reply;
     await change(caller, { library }, req.params.principal, level);
-    return { ...(await libraryAccess(library)), can: { share: true } };
+    return { ...(await libraryAccess(library)), ...(await placedOver(caller, await stepsOver(library))), can: { share: true } };
   };
 
   app.put<{ Params: { id: string; principal: string }; Body: { level: Level } }>('/libraries/:id/access/:principal', { schema: { params: LIBRARY_PRINCIPAL, body: LEVEL_BODY } }, (req, reply) =>
@@ -163,8 +196,8 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
   };
 
   const folderAccess = async (caller: OnFloor, library: HeldLibrary, folder: Folder) => {
-    const [access, grants] = await Promise.all([libraryAccess(library), store.folderGrants(library.id, folder.id)]);
-    return { ...access, library: access.grants, grants: await withNames(grants), can: { share: rightsOn(caller, library).share } };
+    const [access, grants, steps] = await Promise.all([libraryAccess(library), store.folderGrants(library.id, folder.id), stepsOver(library, folder)]);
+    return { ...access, library: access.grants, grants: await withNames(grants), ...(await placedOver(caller, steps)), can: { share: rightsOn(caller, library).share } };
   };
 
   app.get<{ Params: { id: string; folder: string } }>('/libraries/:id/folders/:folder/access', { schema: { params: FOLDER } }, async (req, reply) => {
