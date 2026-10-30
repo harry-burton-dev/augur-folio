@@ -1,4 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
+import { keyed } from 'lit/directives/keyed.js';
 import { ago, filterValue, type ButtonKind, type DialogSubmit, type PageAction, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField, type RadialAction } from '@augur/ui-kit';
 import './folio-reader.js';
 import type { Propose } from './folio-reader.js';
@@ -1080,7 +1081,7 @@ export class FolioApp extends LitElement {
     const atHome = !this.reading && !this.run && !open && !this.inbox && !this.arrived && (this.screen ?? 'home') === 'home';
     return html`<div slot="rail" class="folio-rail">
       <button class="folio-app-title" aria-current=${atHome ? 'page' : 'false'} @click=${() => this.openScreen('home')}>
-        <ui-icon name="library" size="18" aria-hidden="true"></ui-icon>Artifacts
+        <ui-icon name="library" size="18" aria-hidden="true"></ui-icon><span class="folio-app-name">Artifacts</span>
       </button>
       <ui-tree
         label="Artifacts"
@@ -1089,7 +1090,7 @@ export class FolioApp extends LitElement {
         @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => this.openScreen(e.detail.item.id as NonNullable<FolioApp['screen']>)}
       ></ui-tree>
       ${open
-        ? html`<div class="folio-rail-scope">
+        ? keyed(open.id, html`<div class="folio-rail-scope">
             <ui-tree
               label=${`${open.name} and what's inside it`}
               heading="Open collection"
@@ -1116,7 +1117,7 @@ export class FolioApp extends LitElement {
                   @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openView(e.detail.item.id)}
                 ></ui-tree>`
               : nothing}
-          </div>`
+          </div>`)
         : nothing}
     </div>`;
   }
@@ -1133,18 +1134,33 @@ export class FolioApp extends LitElement {
   }
 
   /** The row above a grid: search, then any filters, then the screen's one way to add something. */
-  private toolbar(label: string, add?: { label: string; run: () => void }, filters: unknown = nothing) {
+  private toolbar(label: string, add?: { label: string; run: (button: HTMLElement) => void }, filters: unknown = nothing) {
     return html`<ui-toolbar label=${label} .query=${this.search} add=${add?.label ?? ''}
       @ui-search=${(e: CustomEvent<{ query: string }>) => (this.search = e.detail.query)}
-      @ui-add=${() => add?.run()}>${filters}</ui-toolbar>`;
+      @ui-add=${(e: CustomEvent<{ button: HTMLElement }>) => add?.run(e.detail.button)}>${filters}</ui-toolbar>`;
+  }
+
+  /** What can be added to the place on screen: files, and the levels and series that may go inside it. */
+  private addActions(open: OpenLibrary, here: Folder | undefined): Act[] {
+    const next = levelsInside(this.levels, here?.level ?? 'collection');
+    const isOpen = stateOf(here, open) === 'open';
+    return [
+      ...(open.can.addDocuments ? [{ id: 'files', label: 'Add files', icon: 'upload', run: () => this.querySelector<HTMLInputElement>('.folio-file')?.click() }] : []),
+      ...(open.can.addFolders && next.length && isOpen ? [{ id: 'new-folder', label: `New ${next[0].name.toLowerCase()}`, icon: 'folder-plus', run: () => (this.dialog = 'new-folder') }] : []),
+      ...(open.can.manage && !here ? [{ id: 'new-series', label: 'New series', icon: 'series', run: () => this.newSeries() }] : []),
+    ];
   }
 
   /** Opens the ring of an object's actions around the tile the person right-clicked. */
   private menuOn(e: Event, label: string, actions: Act[]) {
     e.preventDefault();
     e.stopPropagation();
+    this.menuAt(e.currentTarget as HTMLElement, label, actions);
+  }
+
+  private menuAt(el: HTMLElement, label: string, actions: Act[]) {
     if (!actions.length) return;
-    const target = e.currentTarget as HTMLElement & { selected?: boolean };
+    const target = el as HTMLElement & { selected?: boolean };
     if (this.radial) this.radial.target.selected = false;
     target.selected = true;
     this.radial = { target, label, actions };
@@ -1250,7 +1266,7 @@ export class FolioApp extends LitElement {
       <section class="folio-band" aria-label="Your collections">
         <h2 class="folio-band-head">Your collections</h2>
         <ui-tiles>
-          ${this.libraries.slice(0, 5).map((l) => html`<ui-tile heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
+          ${this.libraries.slice(0, 5).map((l) => html`<ui-tile rank="high" heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
           ${this.canCreate ? html`<ui-tile add heading="New collection" @ui-open=${() => (this.dialog = 'new-library')}></ui-tile>` : nothing}
         </ui-tiles>
       </section>
@@ -1264,7 +1280,7 @@ export class FolioApp extends LitElement {
       ${this.head({ label: 'Artifacts', go: () => this.openScreen('home') }, this.shelfName, this.floorName)}
       ${this.toolbar('Search your collections', this.canCreate ? { label: 'New collection', run: () => (this.dialog = 'new-library') } : undefined)}
       <ui-tiles role="list" aria-label=${this.shelfName}>
-        ${shown.map((l) => html`<ui-tile role="listitem" heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
+        ${shown.map((l) => html`<ui-tile role="listitem" rank="high" heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
         ${this.canCreate && !this.search ? html`<ui-tile add heading="New collection" @ui-open=${() => (this.dialog = 'new-library')}></ui-tile>` : nothing}
       </ui-tiles>
       ${!shown.length && (this.search || !this.canCreate) ? html`<p class="folio-quiet">${this.search ? `No collection is called anything like “${this.search}”.` : 'No collections here yet. A lead on this floor can start one.'}</p>` : nothing}
@@ -1281,7 +1297,7 @@ export class FolioApp extends LitElement {
         ${this.head({ label: 'Shared libraries', go: () => this.openScreen('shared') }, lib.name)}
         ${this.toolbar(`Search ${lib.name}`)}
         <ui-tiles role="list" aria-label=${`Shared from ${lib.name}`}>
-          ${shown.map((c) => html`<ui-tile role="listitem" heading=${c.name} icon="folder" @ui-open=${() => void this.openLibrary(c.id)}></ui-tile>`)}
+          ${shown.map((c) => html`<ui-tile role="listitem" rank="high" heading=${c.name} icon="folder" @ui-open=${() => void this.openLibrary(c.id)}></ui-tile>`)}
         </ui-tiles>
       </div>`;
     }
@@ -1292,8 +1308,8 @@ export class FolioApp extends LitElement {
       ${this.toolbar('Search shared libraries')}
       ${shown.length || docs.length
         ? html`<ui-tiles role="list" aria-label="Libraries shared with you">
-            ${shown.map((l) => html`<ui-tile role="listitem" heading=${l.name} icon="library" @ui-open=${() => this.openScreen('shared', l.id)}></ui-tile>`)}
-            ${docs.map((d) => html`<ui-tile role="listitem" heading=${d.title} icon="document" @ui-open=${() => void this.read(d.id, undefined, true, d.library)}></ui-tile>`)}
+            ${shown.map((l) => html`<ui-tile role="listitem" rank="high" heading=${l.name} icon="library" @ui-open=${() => this.openScreen('shared', l.id)}></ui-tile>`)}
+            ${docs.map((d) => html`<ui-tile role="listitem" rank="low" heading=${d.title} icon="document" @ui-open=${() => void this.read(d.id, undefined, true, d.library)}></ui-tile>`)}
           </ui-tiles>`
         : html`<p class="folio-quiet">${this.search ? `Nothing shared is called anything like “${this.search}”.` : 'Nobody has shared a library with you yet. When a team or a person does, it shows here.'}</p>`}
       <p class="folio-quiet"><button class="folio-link" @click=${() => void this.openInbox()}>Published to you</button>: what’s been put out to you or your teams.</p>
@@ -1322,32 +1338,61 @@ export class FolioApp extends LitElement {
     return html`<section class="folio-drawer-group" aria-label=${heading}><h2 class="folio-drawer-head">${heading}</h2>${body}</section>`;
   }
 
-  /** More about the place on screen: what it is, what's in it, when it changed, its tags. Its actions are on right-click. */
+  /** The drawer's About: a line of what it's for, then its facts. */
+  private about(facts: [string, string][], words = '') {
+    return html`<div slot="drawer" class="folio-drawer">
+      ${this.group(
+        'About',
+        html`${words ? html`<p class="folio-about">${words}</p>` : nothing}
+          <dl class="folio-facts">${facts.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}</dl>`,
+      )}
+      <p class="folio-quiet">Right-click anything for what you can do with it.</p>
+    </div>`;
+  }
+
+  /** More about what's on screen, on every screen. Its actions are on right-click, never here. */
   private drawer() {
+    if (this.loading || this.error) return nothing;
+    // The reader puts its own facts here (folio-reader finds this by its class).
+    if (this.reading) return html`<div slot="drawer" class="folio-drawer folio-reader-drawer"></div>`;
     const open = this.open;
-    if (!open || this.loading || this.error || this.reading || this.run) return nothing;
+    const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    if (this.run) {
+      const run = open?.series.find((r) => r.id === this.run!.series);
+      return this.about([['What it is', 'A series'], ...(run?.cadence ? [['Comes out', run.cadence] as [string, string]] : []), ...(open ? [['In', open.name] as [string, string]] : [])], run?.description ?? '');
+    }
+    if (this.inbox) return this.about([['Published to you', count(this.inbox.documents.length, 'document', 'documents')]], 'Put out to you, or to a team you’re on, from any floor.');
+    if (this.arrived) return this.about([['From', floorWords(this.arrived.placement.fromFloor)], ['Showing', filterWords(this.arrived.placement.filter)]], this.arrived.placement.note ?? '');
+    if (!open) {
+      if (this.screen === 'shared') return this.about([['Libraries', String(this.sharedLibraries.length)], ['Documents on their own', String(this.shared.documents.length)]], 'What other floors and people have let you see.');
+      if (this.screen === 'below') return this.about([['Waiting here', String(this.received.here.length)]], 'Published up to this floor. Each sits here until a lead gives it a place.');
+      if (this.screen === 'collections') return this.about([['Collections', String(this.libraries.length)], ['Floor', this.floorName || 'This floor']], this.floorKind === 'personal' ? 'Only you can see these.' : 'Everyone on this floor can see these.');
+      return this.about(
+        [
+          ['Floor', this.floorName || 'This floor'],
+          ['Collections', String(this.libraries.length)],
+          ['New to you', String(this.glance?.published.new ?? 0)],
+          ...(this.glance?.drafts ? [['Drafts waiting', String(this.glance.drafts.total)] as [string, string]] : []),
+        ],
+        'Documents kept for you, your teams and the org.',
+      );
+    }
     const trail = folderTrail(open.folders, this.folder);
     const here = trail.at(-1);
     const view = this.currentView;
     const folders = open.folders.filter((f) => f.parent === this.folder).length;
     const tags = (here?.tags ?? []).map((t) => open.tags.find((x) => x.id === t)?.name).filter(Boolean);
-    const facts: [string, string][] = [
-      ['What it is', view ? 'A saved view' : here ? this.levelName(here.level) : 'Collection'],
-      ...(trail.length > 1 ? [['In', trail.slice(0, -1).map((f) => f.name).join(' / ')] as [string, string]] : here ? [['In', open.name] as [string, string]] : []),
-      ['Inside', [folders ? `${folders} ${folders === 1 ? 'folder' : 'folders'}` : '', `${this.total} ${this.total === 1 ? 'document' : 'documents'}`].filter(Boolean).join(', ')],
-      ['Changed', ago((here ?? open).updatedAt)],
-      ...(closedWords(stateOf(here, open)) ? [['State', closedWords(stateOf(here, open))] as [string, string]] : []),
-      ...(tags.length ? [['Tags', tags.join(', ')] as [string, string]] : []),
-    ];
-    const about = here ? here.description : open.description;
-    return html`<div slot="drawer" class="folio-drawer">
-      ${this.group(
-        'About',
-        html`${about ? html`<p class="folio-about">${about}</p>` : nothing}
-          <dl class="folio-facts">${facts.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}</dl>`,
-      )}
-      <p class="folio-quiet">Right-click anything for what you can do with it.</p>
-    </div>`;
+    return this.about(
+      [
+        ['What it is', view ? 'A saved view' : here ? this.levelName(here.level) : 'Collection'],
+        ...(trail.length > 1 ? [['In', trail.slice(0, -1).map((f) => f.name).join(' / ')] as [string, string]] : here ? [['In', open.name] as [string, string]] : []),
+        ['Inside', [folders ? count(folders, 'folder', 'folders') : '', count(this.total, 'document', 'documents')].filter(Boolean).join(', ')],
+        ['Changed', ago((here ?? open).updatedAt)],
+        ...(closedWords(stateOf(here, open)) ? [['State', closedWords(stateOf(here, open))] as [string, string]] : []),
+        ...(tags.length ? [['Tags', tags.join(', ')] as [string, string]] : []),
+      ],
+      here ? here.description : open.description,
+    );
   }
 
   private main() {
@@ -1383,6 +1428,7 @@ export class FolioApp extends LitElement {
     }
     if (this.run)
       return html`<div class="folio-main-inner">
+        ${this.head(open ? { label: open.name, go: () => void this.goToFolder(undefined) } : { label: 'Shared libraries', go: () => this.openScreen('shared') }, open?.series.find((r) => r.id === this.run!.series)?.name ?? 'Series')}
         <folio-series .api=${this.api} series=${this.run.series}
           @folio-read=${(e: CustomEvent<{ library: string; document: string }>) => void this.read(e.detail.document, undefined, true, e.detail.library)}
           @folio-edit-series=${(e: CustomEvent<{ series: string }>) => void this.editSeries(e.detail.series)}
@@ -1417,7 +1463,7 @@ export class FolioApp extends LitElement {
       ${this.head(back, view?.name ?? where, [by, closedWords(stateOf(here, open))].filter(Boolean).join(' · '))}
       ${this.toolbar(
         `Search ${where}`,
-        open.can.addDocuments && !view ? { label: 'Add', run: () => this.querySelector<HTMLInputElement>('.folio-file')?.click() } : undefined,
+        !view && this.addActions(open, here).length ? { label: 'Add', run: (button) => this.menuAt(button, `Add to ${where}`, this.addActions(open, here)) } : undefined,
         html`<ui-filter-bar
           label=${`Filter what’s in ${where}`}
           .filters=${filtersFor(open)}
@@ -1446,10 +1492,10 @@ export class FolioApp extends LitElement {
       <div class="folio-grid" @contextmenu=${(e: Event) => this.menuOn(e, where, this.placeActions(open, view, here))}>
         ${folders.length || documents.length
           ? html`<ui-tiles role="list" aria-label=${`Inside ${where}`}>
-              ${folders.map((f) => html`<ui-tile role="listitem" heading=${f.name} icon=${f.level === 'series' || f.level === 'subseries' ? 'series' : 'folder'} @ui-open=${() => void this.goToFolder(f.id)} @contextmenu=${(e: Event) => this.menuOn(e, f.name, this.folderActions(open, f))}></ui-tile>`)}
-              ${documents.map((d) => html`<ui-tile role="listitem" heading=${d.title} icon=${d.state === 'published' ? 'publish' : 'document'} @ui-open=${() => void this.read(d.id)} @contextmenu=${(e: Event) => this.menuOn(e, d.title, this.documentActions(open, d))}></ui-tile>`)}
+              ${folders.map((f) => html`<ui-tile role="listitem" rank="mid" heading=${f.name} icon=${f.level === 'series' || f.level === 'subseries' ? 'series' : 'folder'} @ui-open=${() => void this.goToFolder(f.id)} @contextmenu=${(e: Event) => this.menuOn(e, f.name, this.folderActions(open, f))}></ui-tile>`)}
+              ${documents.map((d) => html`<ui-tile role="listitem" rank="low" heading=${d.title} icon=${d.state === 'published' ? 'publish' : 'document'} @ui-open=${() => void this.read(d.id)} @contextmenu=${(e: Event) => this.menuOn(e, d.title, this.documentActions(open, d))}></ui-tile>`)}
             </ui-tiles>`
-          : html`<p class="folio-quiet">${this.search ? `Nothing in ${where} is called anything like “${this.search}”.` : narrowed ? `Nothing in ${where} matches these filters.` : `${where} is empty. Press Add to put files in it.`}</p>`}
+          : html`<p class="folio-quiet">${this.search ? `Nothing in ${where} is called anything like “${this.search}”.` : narrowed ? `Nothing in ${where} matches these filters.` : `${where} is empty. Press Add to put files or a ${levelsInside(this.levels, here?.level ?? 'collection')[0]?.name.toLowerCase() ?? 'folder'} in it.`}</p>`}
       </div>
       ${this.documents.length < this.total
         ? html`<div class="folio-more"><ui-button kind="ghost" size="sm" ?busy=${this.more} busy-label="Loading…" @click=${() => void this.loadDocuments(true)}>
@@ -2011,7 +2057,15 @@ export class FolioApp extends LitElement {
         folio-app .folio-app-title:hover { color: var(--green); }
         folio-app .folio-app-title:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
         folio-app .folio-app-title[aria-current='page'] { color: var(--green); }
-        folio-app .folio-grid { min-height: 240px; }
+        folio-app .folio-grid { min-height: 240px; margin: calc(var(--space-2) * -1); padding: var(--space-2); border-radius: var(--radius-inset); transition: background var(--motion-base) var(--ease-standard); }
+        folio-app .folio-grid:hover { background: color-mix(in srgb, var(--ink) 2%, transparent); }
+        folio-app .folio-rail-scope { animation: folio-scope-in var(--motion-slow) var(--ease-out) both; }
+        @keyframes folio-scope-in { from { opacity: 0; transform: translateY(-8px); } }
+        ui-app-frame[rail-closed] folio-app .folio-app-name, ui-app-frame[rail-closed] .folio-app-name { display: none; }
+        ui-app-frame[rail-closed] .folio-app-title { justify-content: center; padding: var(--space-2); }
+        ui-app-frame[rail-closed] .folio-rail { align-items: center; }
+        ui-app-frame[rail-closed] .folio-rail-scope { padding-top: var(--space-3); width: 100%; align-items: center; }
+        @media (prefers-reduced-motion: reduce) { folio-app .folio-rail-scope { animation: none; } }
         folio-app .folio-about { margin: 0; font-size: var(--type-small); color: var(--ink); }
         folio-app .folio-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4); margin: 0; font-size: var(--type-small); }
         folio-app .folio-facts dt { color: var(--ink-muted); }

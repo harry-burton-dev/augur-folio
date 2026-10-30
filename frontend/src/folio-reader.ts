@@ -1,4 +1,4 @@
-import { LitElement, html, nothing } from 'lit';
+import { LitElement, html, nothing, render } from 'lit';
 import { ago, type ListItem, type MarkedPassage, type OutlineItem, type ReaderSize, type UiReader } from '@augur/ui-kit';
 import { agoWords } from './folio-publish.js';
 import './folio-links.js';
@@ -143,6 +143,23 @@ export class FolioReader extends LitElement {
     super.disconnectedCallback();
     document.removeEventListener('selectionchange', this.onSelection);
     this.forgetPictures();
+    const drawer = this.drawer();
+    if (drawer) render(nothing, drawer);
+  }
+
+  /**
+   * The app frame's drawer, when the app gives the reader one (a `.folio-reader-drawer`
+   * in the frame's drawer slot): the facts and actions go there, as on every other screen.
+   */
+  private drawer() {
+    return this.closest('ui-app-frame')?.querySelector<HTMLElement>('.folio-reader-drawer') ?? undefined;
+  }
+
+  override updated() {
+    const drawer = this.drawer();
+    this.classList.toggle('in-drawer', Boolean(drawer));
+    const v = this.shown;
+    if (drawer) render(v ? this.side(v) : nothing, drawer, { host: this });
   }
 
   /** Keeps what's marked in the reader copy; reaching for the button doesn't unmark it. */
@@ -399,34 +416,36 @@ export class FolioReader extends LitElement {
     const old = v.number !== doc.latest.number;
     return html`<style>
         folio-reader { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) minmax(220px, 280px); gap: var(--space-6); align-items: start; }
-        folio-reader .folio-reader-contents { position: sticky; top: var(--space-5); max-height: calc(100vh - var(--space-7)); overflow-y: auto; }
-        folio-reader .folio-reader-main { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+        folio-reader.in-drawer { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+        .folio-reader-drawer .folio-reader-side { position: static; }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-contents { position: sticky; top: var(--space-5); max-height: calc(100vh - var(--space-7)); overflow-y: auto; }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-main { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
         folio-reader .folio-reader-head { display: flex; flex-direction: column; gap: var(--space-2); max-width: var(--measure-read); width: 100%; margin: 0 auto; }
         folio-reader:has(ui-reader[width='wide']) .folio-reader-head { max-width: var(--measure-wide); }
-        folio-reader .folio-reader-head h1 { margin: 0; font-size: var(--type-title-s); line-height: var(--leading-title-s); font-weight: 300; }
-        folio-reader .folio-reader-head p { margin: 0; color: var(--ink-muted); font-size: var(--type-meta); line-height: var(--leading-meta); }
-        folio-reader .folio-reader-old { color: var(--ink); }
-        folio-reader .folio-reader-links { display: flex; flex-direction: column; gap: var(--space-3); }
-        folio-reader .folio-reader-series { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
-        folio-reader .folio-reader-turns { display: flex; justify-content: space-between; gap: var(--space-3); }
-        folio-reader .folio-reader-publishing { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
-        folio-reader .folio-reader-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); }
-        folio-reader .folio-reader-note { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
-        folio-reader .folio-reader-refused { color: var(--danger); }
-        folio-reader .folio-reader-atlas { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
-        folio-reader .folio-reader-side { position: sticky; top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); }
-        folio-reader .folio-reader-facts { display: flex; flex-direction: column; gap: var(--space-2); }
-        folio-reader .folio-reader-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-head h1 { margin: 0; font-size: var(--type-title-s); line-height: var(--leading-title-s); font-weight: 300; }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-head p { margin: 0; color: var(--ink-muted); font-size: var(--type-meta); line-height: var(--leading-meta); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-old { color: var(--ink); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-links { display: flex; flex-direction: column; gap: var(--space-3); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-series { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-turns { display: flex; justify-content: space-between; gap: var(--space-3); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-publishing { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-note { margin: 0; font-size: var(--type-small); color: var(--ink-muted); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-refused { color: var(--danger); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-atlas { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-side { position: sticky; top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-facts { display: flex; flex-direction: column; gap: var(--space-2); }
+        :is(folio-reader, .folio-reader-drawer) .folio-reader-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
         folio-reader .label { font-size: var(--type-label); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); }
-        folio-reader .folio-link { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-        folio-reader .folio-link:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
-        folio-reader .folio-crumb { all: unset; cursor: pointer; font-size: var(--type-small); color: var(--ink-muted); }
-        folio-reader .folio-crumb:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-        folio-reader .folio-crumb:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
+        :is(folio-reader, .folio-reader-drawer) .folio-link { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+        :is(folio-reader, .folio-reader-drawer) .folio-link:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
+        :is(folio-reader, .folio-reader-drawer) .folio-crumb { all: unset; cursor: pointer; font-size: var(--type-small); color: var(--ink-muted); }
+        :is(folio-reader, .folio-reader-drawer) .folio-crumb:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+        :is(folio-reader, .folio-reader-drawer) .folio-crumb:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
         @media (max-width: 1100px) {
           folio-reader { grid-template-columns: minmax(0, 1fr); }
-          folio-reader .folio-reader-contents, folio-reader .folio-reader-side { position: static; max-height: none; }
-          folio-reader .folio-reader-contents { order: 1; }
+          :is(folio-reader, .folio-reader-drawer) .folio-reader-contents, folio-reader .folio-reader-side { position: static; max-height: none; }
+          :is(folio-reader, .folio-reader-drawer) .folio-reader-contents { order: 1; }
         }
       </style>
       <div class="folio-reader-contents">
@@ -434,7 +453,7 @@ export class FolioReader extends LitElement {
       </div>
       <div class="folio-reader-main">
         <header class="folio-reader-head">
-          <nav aria-label="Where this is"><button class="folio-crumb" @click=${() => this.emit('folio-back')}>${this.libraryName}</button></nav>
+          <nav aria-label="Where this is"><button class="folio-back" @click=${() => this.emit('folio-back')}><ui-icon name="back" size="14" aria-hidden="true"></ui-icon>${this.libraryName}</button></nav>
           <h1>${doc.title}</h1>
           <p>${[`Version ${v.number}`, fileTypeOf(v.filename)?.word, `added ${ago(v.createdAt)}`].filter(Boolean).join(' · ')}${v.reader.pages ? ` · ${v.reader.pages} ${v.reader.pages === 1 ? 'page' : 'pages'}` : ''}</p>
           ${old
@@ -447,7 +466,7 @@ export class FolioReader extends LitElement {
         </header>
         ${this.body(v)}
       </div>
-      ${this.side(v)}`;
+      ${this.drawer() ? nothing : this.side(v)}`;
   }
 }
 
