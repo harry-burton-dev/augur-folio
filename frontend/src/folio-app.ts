@@ -351,7 +351,7 @@ export class FolioApp extends LitElement {
   /** Set by the entry: asks another app to explain who can open something. */
   explain: Explainer | undefined;
   /** What the share dialog is about: a library, or one document of it. */
-  shareTarget: { library: string; document?: string; name: string } | undefined;
+  shareTarget: { library: string; document?: string; folder?: string; name: string } | undefined;
 
   constructor() {
     super();
@@ -934,7 +934,7 @@ export class FolioApp extends LitElement {
     return Boolean(this.open?.can.manage || folder.createdBy === this.userId);
   }
 
-  private openShare(target: { library: string; document?: string; name: string }) {
+  private openShare(target: { library: string; document?: string; folder?: string; name: string }) {
     this.shareTarget = target;
     this.dialog = 'share';
   }
@@ -1404,7 +1404,7 @@ export class FolioApp extends LitElement {
         this.dialog = 'remove-folder';
       });
     }
-    if (!here) add('share', open.can.share ? 'Share' : 'Who can see it', 'ghost', () => this.openShare({ library: open.id, name: open.name }));
+    add('share', open.can.share ? 'Share' : 'Who can see it', 'ghost', () => this.openShare(place ? { library: open.id, folder: place.id, name: place.name } : { library: open.id, name: open.name }));
     add('tags', 'Tags', 'ghost', () => void this.openTags());
     if (open.can.manage && !here && !view) add('new-series', 'New series', 'ghost', () => this.newSeries());
     if (open.can.manage && !here) {
@@ -1544,12 +1544,14 @@ export class FolioApp extends LitElement {
       case 'share': {
         const target = this.shareTarget;
         if (!target) return nothing;
-        return html`<ui-dialog open eyebrow=${target.document ? 'Document' : 'Library'} heading=${`Who can see ${target.name}`} cancel-label="Done"
+        const folderNames = new Map(open?.id === target.library ? open.folders.map((f) => [f.id, f.name]) : []);
+        return html`<ui-dialog open eyebrow=${target.document ? 'Document' : target.folder ? this.levelName(open?.folders.find((f) => f.id === target.folder)?.level ?? DEFAULT_LEVELS[1].id) : 'Library'} heading=${`Who can see ${target.name}`} cancel-label="Done"
           @ui-close=${() => {
             close();
             this.shareTarget = undefined;
           }}>
-          <folio-share .api=${this.api} .explain=${this.explain} name=${target.name} me=${this.userId} library=${target.library} document=${target.document ?? nothing}></folio-share>
+          <folio-share .api=${this.api} .explain=${this.explain} .folderNames=${folderNames} name=${target.name} me=${this.userId} library=${target.library}
+            document=${target.document ?? nothing} folder=${target.folder ?? nothing}></folio-share>
         </ui-dialog>`;
       }
       case 'details': {

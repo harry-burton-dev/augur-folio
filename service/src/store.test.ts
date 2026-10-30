@@ -311,6 +311,41 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     await expect(store.setGrant({ library: lib.id, document: 'd-3', principal: 'org', level: 'read', by: 'u-1' })).rejects.toBeInstanceOf(BadParentError);
   });
 
+  it('shares a folder with everything inside it, and stops when a document moves out', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    const leave = await store.createFolder({ library: lib.id, parent: hr.id, name: 'Leave', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-annual', library: lib.id, folder: leave.id, title: 'Annual leave', createdBy: 'u-1' }, file('d-annual', 'v-annual'));
+    await store.createDocument({ id: 'd-loose', library: lib.id, title: 'Loose', createdBy: 'u-1' }, file('d-loose', 'v-loose'));
+    await store.setGrant({ library: lib.id, document: 'd-annual', principal: 'person:u-8', level: 'read', by: 'u-1' });
+
+    expect(await store.setFolderGrant({ library: lib.id, folder: hr.id, principal: 'team:w-legal', level: 'read', by: 'u-1' })).toMatchObject({ folder: hr.id, principal: 'team:w-legal', level: 'read' });
+    await store.setFolderGrant({ library: lib.id, folder: hr.id, principal: 'team:w-legal', level: 'edit', by: 'u-1' });
+    expect((await store.folderGrants(lib.id, hr.id)).map((g) => [g.principal, g.level])).toEqual([['team:w-legal', 'edit']]);
+    expect(await store.folderGrants(lib.id, leave.id)).toEqual([]);
+    await expect(store.setFolderGrant({ library: lib.id, folder: 'f-none', principal: 'org', level: 'read', by: 'u-1' })).rejects.toBeInstanceOf(BadParentError);
+
+    // A document's own grants and those on every folder above it.
+    expect((await store.grantsOn('d-annual')).map((g) => [g.principal, g.folder ?? g.document]).sort()).toEqual([['person:u-8', 'd-annual'], ['team:w-legal', hr.id]]);
+    expect(await store.readers('d-annual')).toEqual(['person:u-8', 'team:w-legal', 'tree:w-fin']);
+    expect(await titles(store, lib.id, { below: true, readers: ['team:w-legal'] })).toEqual(['Annual leave']);
+    expect((await store.shared(['team:w-legal'], 'w-legal')).documents.map((d) => [d.title, d.level])).toEqual([['Annual leave', 'edit']]);
+
+    // Moved out of the folder, it's no longer shared with them.
+    await store.updateDocument('d-annual', { folder: null });
+    expect(await store.readers('d-annual')).toEqual(['person:u-8', 'tree:w-fin']);
+    expect(await store.grantsOn('d-annual')).toMatchObject([{ principal: 'person:u-8' }]);
+    await store.updateDocument('d-annual', { folder: leave.id });
+    await store.setFolderGrant({ library: lib.id, folder: hr.id, principal: 'team:w-legal', level: null, by: 'u-1' });
+    expect(await store.readers('d-annual')).toEqual(['person:u-8', 'tree:w-fin']);
+
+    // A folder that goes takes its shares with it.
+    await store.setFolderGrant({ library: lib.id, folder: leave.id, principal: 'team:w-legal', level: 'read', by: 'u-1' });
+    await store.updateDocument('d-annual', { folder: null });
+    expect(await store.deleteFolder(lib.id, leave.id)).toBeTruthy();
+    expect(await store.folderGrants(lib.id, leave.id)).toEqual([]);
+  });
+
   it('names the people it has seen, by name or by id', async () => {
     await store.notePerson({ id: 'u-1', name: 'Alex Rivera' });
     await store.notePerson({ id: 'u-2', name: 'Sam 100% Okafor' });
@@ -624,7 +659,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.folder_tags, folio.links, folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.folder_grants, folio.folder_tags, folio.links, folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
@@ -632,7 +667,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links', '013_folder_tags']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links', '013_folder_tags', '014_folder_grants']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {
