@@ -1176,6 +1176,14 @@ export class FolioApp extends LitElement {
     ring.actions.find((a) => a.id === id)?.run();
   }
 
+  /** What can be done with the floor's collections as a whole: right-click the empty space around them. */
+  private shelfActions(): Act[] {
+    return [
+      ...(this.canCreate ? [{ id: 'new-library', label: 'New collection', icon: 'plus', run: () => (this.dialog = 'new-library') }] : []),
+      { id: 'levels', label: 'Level names', icon: 'structure', run: () => (this.dialog = 'levels') },
+    ];
+  }
+
   /** What can be done with one of the person's collections. */
   private collectionActions(l: Library): Act[] {
     const inside = async (dialog: NonNullable<FolioApp['dialog']>) => {
@@ -1226,6 +1234,7 @@ export class FolioApp extends LitElement {
       rename: { icon: 'rename' },
       'rename-folder': { icon: 'rename' },
       'rename-view': { icon: 'rename' },
+      tags: { icon: 'tag' },
       'remove-folder': { icon: 'delete', danger: true },
       'delete-view': { icon: 'delete', danger: true },
       archive: { icon: 'archive', danger: true },
@@ -1279,11 +1288,13 @@ export class FolioApp extends LitElement {
     return html`<div class="folio-main-inner">
       ${this.head({ label: 'Artifacts', go: () => this.openScreen('home') }, this.shelfName, this.floorName)}
       ${this.toolbar('Search your collections', this.canCreate ? { label: 'New collection', run: () => (this.dialog = 'new-library') } : undefined)}
-      <ui-tiles role="list" aria-label=${this.shelfName}>
-        ${shown.map((l) => html`<ui-tile role="listitem" rank="high" heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
-        ${this.canCreate && !this.search ? html`<ui-tile add heading="New collection" @ui-open=${() => (this.dialog = 'new-library')}></ui-tile>` : nothing}
-      </ui-tiles>
-      ${!shown.length && (this.search || !this.canCreate) ? html`<p class="folio-quiet">${this.search ? `No collection is called anything like “${this.search}”.` : 'No collections here yet. A lead on this floor can start one.'}</p>` : nothing}
+      <div class="folio-grid" @contextmenu=${(e: Event) => this.menuOn(e, this.shelfName, this.shelfActions())}>
+        <ui-tiles role="list" aria-label=${this.shelfName}>
+          ${shown.map((l) => html`<ui-tile role="listitem" rank="high" heading=${l.name} icon="folder" @ui-open=${() => void this.openLibrary(l.id)} @contextmenu=${(e: Event) => this.menuOn(e, l.name, this.collectionActions(l))}></ui-tile>`)}
+          ${this.canCreate && !this.search ? html`<ui-tile add heading="New collection" @ui-open=${() => (this.dialog = 'new-library')}></ui-tile>` : nothing}
+        </ui-tiles>
+        ${!shown.length && (this.search || !this.canCreate) ? html`<p class="folio-quiet">${this.search ? `No collection is called anything like “${this.search}”.` : 'No collections here yet. A lead on this floor can start one.'}</p>` : nothing}
+      </div>
     </div>`;
   }
 
@@ -1353,8 +1364,9 @@ export class FolioApp extends LitElement {
   /** More about what's on screen, on every screen. Its actions are on right-click, never here. */
   private drawer() {
     if (this.loading || this.error) return nothing;
-    // The reader puts its own facts here (folio-reader finds this by its class).
-    if (this.reading) return html`<div slot="drawer" class="folio-drawer folio-reader-drawer"></div>`;
+    // The reader puts its own facts here (folio-reader finds this by its class). Its links are here too, so opening one is heard here.
+    if (this.reading)
+      return html`<div slot="drawer" class="folio-drawer folio-reader-drawer" @folio-open-link=${(e: CustomEvent<{ link: RecordLink }>) => void this.openLink(e.detail.link)}></div>`;
     const open = this.open;
     const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
     if (this.run) {
