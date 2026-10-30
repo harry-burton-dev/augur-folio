@@ -129,6 +129,8 @@ export interface Folder {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Its own tags: they count for everything inside it when filtering. */
+  tags?: string[];
 }
 
 /** One move through a lifecycle, on the record. */
@@ -707,6 +709,10 @@ export class FolioApi {
   /** Starts or stops being told of each new issue. */
   follow(series: string, following: boolean) {
     return this.call<{ following: boolean }>('PUT', `/series/${encodeURIComponent(series)}/follow`, { following });
+  }
+
+  setFolderTags(library: string, folder: string, tags: string[]) {
+    return this.call<Folder>('PUT', `/libraries/${encodeURIComponent(library)}/folders/${encodeURIComponent(folder)}/tags`, { tags });
   }
 
   setTags(library: string, document: string, tags: string[]) {

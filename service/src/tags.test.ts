@@ -116,6 +116,20 @@ describe('folio tags', () => {
     expect((await list('sort=size')).status).toBe(400);
   });
 
+  it('tags a folder for everything inside it, by whoever may change the folder', async () => {
+    const { json, upload, library } = await setup();
+    const travel = (await json(lead(sam), 'POST', `/v1/libraries/${library}/tags`, { name: 'Travel' })).json();
+    const trips = (await json(lead(sam), 'POST', `/v1/libraries/${library}/folders`, { name: 'Trips' })).json();
+    await upload(lead(sam), `/v1/libraries/${library}/documents?filename=rome.pdf&folder=${trips.id}`);
+    await upload(lead(sam), `/v1/libraries/${library}/documents?filename=elsewhere.pdf`);
+    expect((await json(member(alex), 'PUT', `/v1/libraries/${library}/folders/${trips.id}/tags`, { tags: [travel.id] })).statusCode).toBe(403);
+    expect((await json(lead(sam), 'PUT', `/v1/libraries/${library}/folders/${trips.id}/tags`, { tags: ['nope'] })).json().error).toBe('bad-tag');
+    expect((await json(lead(sam), 'PUT', `/v1/libraries/${library}/folders/${trips.id}/tags`, { tags: [travel.id] })).json()).toMatchObject({ id: trips.id, tags: [travel.id] });
+    expect((await json(member(alex), 'GET', `/v1/libraries/${library}`)).json().folders).toMatchObject([{ id: trips.id, tags: [travel.id] }]);
+    const found = (await json(member(alex), 'GET', `/v1/libraries/${library}/documents?below=true&tag=${travel.id}`)).json();
+    expect(found.documents.map((d: { title: string }) => d.title)).toEqual(['rome']);
+  });
+
   it('saves views in a library for everyone there, changed by whoever saved them or a lead', async () => {
     const { json, library } = await setup();
     const res = await json(member(alex), 'POST', `/v1/libraries/${library}/views`, { name: 'Recent PDFs', query: { types: ['pdf'], since: 'month', sort: 'updated' } });

@@ -372,6 +372,28 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
         },
       );
 
+      /** A folder's own tags: they count for everything inside it when filtering. Whoever may change the folder. */
+      app.put<{ Params: { id: string; folder: string }; Body: { tags: string[] } }>(
+        '/libraries/:id/folders/:folder/tags',
+        {
+          schema: {
+            params: FOLDER_PARAMS,
+            body: { type: 'object', additionalProperties: false, required: ['tags'], properties: { tags: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 64 } } } },
+          },
+        },
+        async (req, reply) => {
+          const caller = onFloor(req, reply);
+          if (!caller) return reply;
+          const library = await libraryFor(caller, req.params.id, reply);
+          if (!library || !(await folderFor(caller, library, req.params.folder, reply))) return reply;
+          try {
+            return await store.setFolderTags(library.id, req.params.folder, req.body.tags);
+          } catch (err) {
+            return refused(err, reply);
+          }
+        },
+      );
+
       /** Moves a subcollection, series or subseries through its lifecycle: whoever manages the library. */
       app.put<{ Params: { id: string; folder: string }; Body: { state: ContainerState; note?: string } }>(
         '/libraries/:id/folders/:folder/state',
