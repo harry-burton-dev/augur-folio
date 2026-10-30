@@ -9,6 +9,7 @@ import type { CallerPrincipals } from './people.ts';
 import type { ObjectStore } from './objects.ts';
 import type { Publisher } from './publishing.ts';
 import { furthest, levelFrom, objectKeyFor, reaches, SINCE, type DocumentSort, type DocumentState, type FolioDocument, type FolioStore, type Level, type NewVersion, type Since } from './store.ts';
+import { reachedVersion } from './placements.ts';
 import { renditionRoutes } from './renditions.ts';
 import { KINDS, VIEW_QUERY, timeOf } from './tags.ts';
 
@@ -154,7 +155,9 @@ export const documentFinder =
     const [doc, shelf] = await Promise.all([store.document(params.doc), reach(caller, params.id)]);
     const principals = doc && shelf && doc.library === shelf.id ? await principalsOf(caller) : undefined;
     const level = principals ? furthest(shelf!.level, levelFrom(await store.grants(shelf!.id, doc!.id), principals)) : undefined;
-    const only = !level && audience && principals && doc!.published?.audience.some((a) => principals.includes(a)) ? doc!.published.version : undefined;
+    const published = !level && audience && principals && doc!.published?.audience.some((a) => principals.includes(a)) ? doc!.published.version : undefined;
+    // Or through a floor it was published up to: the newest version that floor lets through.
+    const only = published ?? (!level && audience && principals ? await reachedVersion(store, doc!.id, principals) : undefined);
     if (!doc || !shelf || !(level || only)) {
       reply.code(404).send({ error: 'not-found', message: 'There’s no such document, or it hasn’t been shared with you.' });
       return undefined;

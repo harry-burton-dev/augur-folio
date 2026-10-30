@@ -143,6 +143,14 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `POST /libraries/:id/documents/:doc/withdraw` `{reason?}` | Take back what's out (whoever manages it) |
 | `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
 | `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
+| `POST /placements` `{library, record, to, filter, via?, landing?, note?}` | Publish a record (`record: {kind, id}`, a collection, folder or document) up to a floor above its own (`to`: a team's id or `org`), showing only versions in the `filter`'s lifecycle states. `via` is the step it came up through, and it can show no more than that step. The org needs the publisher role; a step further up comes from the leads of the floor that received it |
+| `GET /placements?library=&record=` | A record's steps up the floors, its owner (the highest floor it reached), and where each person sees it |
+| `PATCH /placements/:id` `{filter}` | Show more or less through a step. Narrowing it narrows every step above it, and ends any left showing nothing |
+| `PUT /placements/:id/landing` `{library, folder?}`, `DELETE …` | Where it sits on the floor that received it (that floor's leads); with none it sits under "From below" |
+| `POST /placements/:id/withdraw` `{reason?}` | Take it back off that floor, and off every floor it went to from there |
+| `GET /placements/:id/above` | The steps that came up through this one |
+| `GET /received` | What's been published up to the caller's floor, with where it's landed |
+| `GET /received/:id?folder=` | The documents a received step shows, each at the newest version its filter lets through |
 | `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them, matching every word by title, tag or text |
 | `GET /find?q=` | The same search for the picker, as whole documents with their `libraryName` and `audienceOnly` (only the version published to them is theirs) |
 | `GET /home` | Home's card: what's been published to the caller since they last looked (`published.new`, the newest three), and for the floor's leads its `drafts` |

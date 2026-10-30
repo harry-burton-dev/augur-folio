@@ -55,6 +55,46 @@ export interface StateMove extends StateChange<string> {
 /** What an org calls a level instead of Folio's own name. */
 export type LevelNames = Partial<Record<UnitLevel, LevelName>>;
 
+/** What can be published up the floors: a whole collection, a folder in one, or one document. */
+export interface RecordRefIn {
+  kind: 'library' | 'folder' | 'document';
+  id: string;
+}
+
+/**
+ * One step of publishing up the floors (docs/app-patterns.md): a record put on
+ * a floor above, through a filter of lifecycle states. A live window, never a
+ * copy. `from` and `to` are floors: a team's id, someone's own floor's id, or
+ * `org`. Steps are kept for good; taking one back ends it.
+ */
+export interface Placement {
+  id: string;
+  /** The library the record is in, on its own floor. */
+  library: string;
+  /** The record's own floor. */
+  workspace: string;
+  record: RecordRefIn;
+  from: string;
+  to: string;
+  /** Who the floor it went to lets in: `tree:<team>` or `org`. */
+  toPrincipal: string;
+  filter: ContentState[];
+  /** The step it came up through, when a floor that received it published it on. */
+  via?: string;
+  /** Where it sits in the receiving floor's library; nowhere yet is "From below". */
+  landed?: { library: string; folder?: string };
+  note?: string;
+  by: string;
+  at: string;
+  ended?: { by: string; at: string; reason?: string };
+}
+
+/** What a new step is. */
+export type NewPlacement = Omit<Placement, 'id' | 'at' | 'ended' | 'workspace'>;
+
+/** The record is already on that floor. */
+export class PlacedError extends Error {}
+
 /** One file as it was uploaded. A document's versions are numbered from 1 and never change. */
 export interface DocumentVersion {
   id: string;
@@ -427,6 +467,24 @@ export interface FolioStore {
   levelNames(): Promise<LevelNames>;
   /** Renames a level for the whole org, or with `null` gives it back its own name. */
   setLevelName(level: UnitLevel, name: LevelName | null, by: string): Promise<LevelNames>;
+  /** Publishes a record up to a floor. PlacedError when it's already there. */
+  place(input: NewPlacement): Promise<Placement>;
+  placement(id: string): Promise<Placement | undefined>;
+  /** Every step a record has been published by, taken back or not, oldest first. */
+  placementsOf(record: string): Promise<Placement[]>;
+  /** What's on a floor now, from below, oldest first. */
+  placementsOn(floor: string): Promise<Placement[]>;
+  /** The steps that show a document now: of it, of a folder it's in, or of its library. */
+  covering(document: string): Promise<Placement[]>;
+  /**
+   * Changes what a step lets through; every step above it that would show more
+   * is narrowed to match, and one left showing nothing is taken back.
+   */
+  setPlacementFilter(id: string, filter: ContentState[], by: string): Promise<Placement | undefined>;
+  /** Puts a step somewhere in the receiving floor's library, or with `null` back in "From below". */
+  landPlacement(id: string, landed: { library: string; folder?: string } | null): Promise<Placement | undefined>;
+  /** Takes these steps back. */
+  endPlacements(ids: readonly string[], by: string, reason?: string): Promise<Placement[]>;
   /** Removes an empty folder; false when there was no such folder. */
   deleteFolder(library: string, id: string): Promise<boolean>;
   /** The documents that match, by title unless asked otherwise. */
@@ -672,6 +730,7 @@ export class MemoryFolioStore implements FolioStore {
   private readonly looked = new Map<string, string>();
   private readonly moves: StateMove[] = [];
   private names: LevelNames = {};
+  private readonly placementList: Placement[] = [];
   /** What Folio would have told other apps, oldest first: there's no relay without Postgres. */
   readonly outbox: OutboxEvent[] = [];
   /** Hears of each version as its rendition is queued: a stand-in for the worker under `pnpm dev:app`. */
@@ -794,14 +853,80 @@ export class MemoryFolioStore implements FolioStore {
     return this.levelNames();
   }
 
+  async place(input: NewPlacement) {
+    const shelf = this.shelves.get(input.library);
+    if (!shelf) throw new BadParentError('There’s no such library.');
+    if (this.placementList.some((p) => !p.ended && p.record.id === input.record.id && p.to === input.to)) throw new PlacedError('It’s already on that floor.');
+    const placed: Placement = { ...structuredClone(input), id: randomUUID(), workspace: shelf.workspace, filter: CONTENT_LIFECYCLE.tidy(input.filter), at: new Date().toISOString() };
+    this.placementList.push(placed);
+    return structuredClone(placed);
+  }
+
+  async placement(id: string) {
+    const found = this.placementList.find((p) => p.id === id);
+    return found && structuredClone(found);
+  }
+
+  async placementsOf(record: string) {
+    return structuredClone(this.placementList.filter((p) => p.record.id === record));
+  }
+
+  async placementsOn(floor: string) {
+    return structuredClone(this.placementList.filter((p) => !p.ended && p.to === floor));
+  }
+
+  async covering(document: string) {
+    const doc = this.docs.get(document);
+    if (!doc || doc.deletedAt) return [];
+    const around = new Set([document, doc.library, ...folderPath(this.folderList, doc.folder).map((f) => f.id)]);
+    return structuredClone(this.placementList.filter((p) => !p.ended && around.has(p.record.id)));
+  }
+
+  async setPlacementFilter(id: string, filter: ContentState[], by: string) {
+    const found = this.placementList.find((p) => p.id === id && !p.ended);
+    if (!found) return undefined;
+    found.filter = CONTENT_LIFECYCLE.tidy(filter);
+    // Nothing above can show more than it now does; what's left showing nothing is taken back.
+    const at = new Date().toISOString();
+    for (let grew = true, narrowed = new Set([id]); grew; ) {
+      grew = false;
+      for (const p of this.placementList)
+        if (!p.ended && p.via && narrowed.has(p.via) && !narrowed.has(p.id)) {
+          const below = this.placementList.find((b) => b.id === p.via)!;
+          const kept = p.filter.filter((s) => below.filter.includes(s));
+          if (kept.length) p.filter = kept;
+          else p.ended = { by, at, reason: 'It no longer showed anything.' };
+          narrowed.add(p.id);
+          grew = true;
+        }
+    }
+    return structuredClone(found);
+  }
+
+  async landPlacement(id: string, landed: { library: string; folder?: string } | null) {
+    const found = this.placementList.find((p) => p.id === id && !p.ended);
+    if (!found) return undefined;
+    if (landed) found.landed = { ...landed };
+    else delete found.landed;
+    return structuredClone(found);
+  }
+
+  async endPlacements(ids: readonly string[], by: string, reason?: string) {
+    const at = new Date().toISOString();
+    const ended = this.placementList.filter((p) => ids.includes(p.id) && !p.ended);
+    for (const p of ended) p.ended = { by, at, ...(reason ? { reason } : {}) };
+    return structuredClone(ended);
+  }
+
   async deleteFolder(library: string, id: string) {
     const folders = await this.folders(library);
     if (!folders.some((f) => f.id === id)) return false;
     if (folders.some((f) => f.parent === id)) throw new NotEmptyError('Empty the folder first: it has folders in it.');
     if ([...this.docs.values()].some((d) => d.folder === id && !d.deletedAt)) throw new NotEmptyError('Empty the folder first: it has documents in it.');
     this.folderList.splice(this.folderList.findIndex((f) => f.id === id), 1);
-    // An empty series takes its schedule with it.
+    // An empty series takes its schedule with it, and what had landed in it goes back to "From below".
     for (const run of this.seriesList.filter((r) => r.folder === id)) await this.deleteSeries(run.id);
+    for (const p of this.placementList) if (p.landed?.folder === id) delete p.landed;
     return true;
   }
 
@@ -1657,6 +1782,38 @@ export const migrations: { id: string; sql: string }[] = [
         updated_at timestamptz not null default now()
       );`,
   },
+  {
+    id: '011_placements',
+    sql: `
+      -- Publishing up the floors: each step puts a record (a library, a folder, a document) on a floor
+      -- above, through a filter of lifecycle states. A live window onto it, kept for good once taken back.
+      -- Floors are a team's id, someone's own floor's id, or 'org'.
+      create table folio.placements (
+        id text primary key,
+        seq bigint generated always as identity,
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        record_kind text not null check (record_kind in ('library', 'folder', 'document')),
+        record_id text not null,
+        from_floor text not null,
+        to_floor text not null,
+        to_principal text not null,
+        filter text[] not null check (cardinality(filter) > 0),
+        via text references folio.placements (id),
+        landed_library text references folio.libraries (id),
+        landed_folder text references folio.folders (id),
+        note text,
+        placed_by text not null,
+        placed_at timestamptz not null default now(),
+        ended_by text,
+        ended_at timestamptz,
+        end_reason text
+      );
+      create unique index placements_live on folio.placements (record_id, to_floor) where ended_at is null;
+      create index placements_to on folio.placements (to_floor) where ended_at is null;
+      create index placements_principal on folio.placements (to_principal) where ended_at is null;
+      create index placements_library on folio.placements (library_id) where ended_at is null;`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; state: ContainerState; created_by: string; created_at: Date; updated_at: Date };
@@ -1921,6 +2078,44 @@ const fromSeriesRow = (r: SeriesRow): Series => ({
   ...(r.last ? { last: r.last } : {}),
 });
 const FOLDER_COLUMNS = 'id, library_id, parent_id, level, name, description, state, created_by, created_at, updated_at';
+type PlacementRow = {
+  id: string;
+  workspace_id: string;
+  library_id: string;
+  record_kind: RecordRefIn['kind'];
+  record_id: string;
+  from_floor: string;
+  to_floor: string;
+  to_principal: string;
+  filter: ContentState[];
+  via: string | null;
+  landed_library: string | null;
+  landed_folder: string | null;
+  note: string | null;
+  placed_by: string;
+  placed_at: Date;
+  ended_by: string | null;
+  ended_at: Date | null;
+  end_reason: string | null;
+};
+const PLACEMENT_COLUMNS =
+  'id, workspace_id, library_id, record_kind, record_id, from_floor, to_floor, to_principal, filter, via, landed_library, landed_folder, note, placed_by, placed_at, ended_by, ended_at, end_reason';
+const fromPlacementRow = (r: PlacementRow): Placement => ({
+  id: r.id,
+  library: r.library_id,
+  workspace: r.workspace_id,
+  record: { kind: r.record_kind, id: r.record_id },
+  from: r.from_floor,
+  to: r.to_floor,
+  toPrincipal: r.to_principal,
+  filter: r.filter,
+  ...(r.via ? { via: r.via } : {}),
+  ...(r.landed_library ? { landed: { library: r.landed_library, ...(r.landed_folder ? { folder: r.landed_folder } : {}) } } : {}),
+  ...(r.note ? { note: r.note } : {}),
+  by: r.placed_by,
+  at: r.placed_at.toISOString(),
+  ...(r.ended_at ? { ended: { by: r.ended_by ?? '', at: r.ended_at.toISOString(), ...(r.end_reason ? { reason: r.end_reason } : {}) } } : {}),
+});
 type MoveRow = { record_id: string; version_number: number | null; from_state: string | null; to_state: string; moved_by: string; moved_at: Date; note: string | null };
 const fromMoveRow = (r: MoveRow): StateMove => ({
   record: r.record_id,
@@ -2147,6 +2342,105 @@ export class PgFolioStore implements FolioStore {
     return this.levelNames();
   }
 
+  async place(input: NewPlacement) {
+    try {
+      const { rows } = await this.pool.query<PlacementRow>(
+        `insert into folio.placements (id, workspace_id, library_id, record_kind, record_id, from_floor, to_floor, to_principal, filter, via, landed_library, landed_folder, note, placed_by)
+          select $1, workspace_id, id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 from folio.libraries where id = $2
+          returning ${PLACEMENT_COLUMNS}`,
+        [
+          randomUUID(),
+          input.library,
+          input.record.kind,
+          input.record.id,
+          input.from,
+          input.to,
+          input.toPrincipal,
+          CONTENT_LIFECYCLE.tidy(input.filter),
+          input.via ?? null,
+          input.landed?.library ?? null,
+          input.landed?.folder ?? null,
+          input.note ?? null,
+          input.by,
+        ],
+      );
+      if (!rows[0]) throw new BadParentError('There’s no such library.');
+      return fromPlacementRow(rows[0]);
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new PlacedError('It’s already on that floor.');
+      throw err;
+    }
+  }
+
+  async placement(id: string) {
+    const { rows } = await this.pool.query<PlacementRow>(`select ${PLACEMENT_COLUMNS} from folio.placements where id = $1`, [id]);
+    return rows[0] && fromPlacementRow(rows[0]);
+  }
+
+  async placementsOf(record: string) {
+    const { rows } = await this.pool.query<PlacementRow>(`select ${PLACEMENT_COLUMNS} from folio.placements where record_id = $1 order by seq`, [record]);
+    return rows.map(fromPlacementRow);
+  }
+
+  async placementsOn(floor: string) {
+    const { rows } = await this.pool.query<PlacementRow>(`select ${PLACEMENT_COLUMNS} from folio.placements where to_floor = $1 and ended_at is null order by seq`, [floor]);
+    return rows.map(fromPlacementRow);
+  }
+
+  async covering(document: string) {
+    const { rows } = await this.pool.query<PlacementRow>(
+      `with recursive doc as (select id, library_id, folder_id from folio.documents where id = $1 and deleted_at is null),
+        above (id, parent_id) as (
+          select f.id, f.parent_id from folio.folders f join doc on f.id = doc.folder_id
+          union all select f.id, f.parent_id from folio.folders f join above on f.id = above.parent_id)
+      select ${PLACEMENT_COLUMNS} from folio.placements p
+        where p.ended_at is null and (p.record_id in (select id from doc) or p.record_id in (select library_id from doc) or p.record_id in (select id from above))
+        order by p.seq`,
+      [document],
+    );
+    return rows.map(fromPlacementRow);
+  }
+
+  async setPlacementFilter(id: string, filter: ContentState[], by: string) {
+    return this.inTransaction(async (client) => {
+      const { rows } = await client.query<PlacementRow>(`update folio.placements set filter = $2 where id = $1 and ended_at is null returning ${PLACEMENT_COLUMNS}`, [id, CONTENT_LIFECYCLE.tidy(filter)]);
+      if (!rows[0]) return undefined;
+      // Nothing above can show more than it now does; what's left showing nothing is taken back
+      // (keeping the filter it had, so the record says what it showed).
+      await client.query(
+        `with recursive up (id, filter) as (
+            select p.id, (select array(select s from unnest(p.filter) s where s = any(b.filter))) from folio.placements p join folio.placements b on b.id = p.via
+              where p.via = $1 and p.ended_at is null
+            union all select p.id, (select array(select s from unnest(p.filter) s where s = any(up.filter))) from folio.placements p join up on p.via = up.id
+              where p.ended_at is null)
+          update folio.placements p
+            set filter = case when cardinality(up.filter) > 0 then up.filter else p.filter end,
+                ended_at = case when cardinality(up.filter) > 0 then null else now() end,
+                ended_by = case when cardinality(up.filter) > 0 then null else $2 end,
+                end_reason = case when cardinality(up.filter) > 0 then null else 'It no longer showed anything.' end
+            from up where p.id = up.id`,
+        [id, by],
+      );
+      return fromPlacementRow(rows[0]);
+    });
+  }
+
+  async landPlacement(id: string, landed: { library: string; folder?: string } | null) {
+    const { rows } = await this.pool.query<PlacementRow>(
+      `update folio.placements set landed_library = $2, landed_folder = $3 where id = $1 and ended_at is null returning ${PLACEMENT_COLUMNS}`,
+      [id, landed?.library ?? null, landed?.folder ?? null],
+    );
+    return rows[0] && fromPlacementRow(rows[0]);
+  }
+
+  async endPlacements(ids: readonly string[], by: string, reason?: string) {
+    const { rows } = await this.pool.query<PlacementRow>(
+      `update folio.placements set ended_by = $2, ended_at = now(), end_reason = $3 where id = any($1::text[]) and ended_at is null returning ${PLACEMENT_COLUMNS}`,
+      [[...ids], by, reason ?? null],
+    );
+    return rows.map(fromPlacementRow);
+  }
+
   async deleteFolder(library: string, id: string) {
     const { rows } = await this.pool.query<{ found: boolean; children: boolean; documents: boolean }>(
       `select exists (select 1 from folio.folders where id = $2 and library_id = $1) as found,
@@ -2159,7 +2453,8 @@ export class PgFolioStore implements FolioStore {
     if (rows[0].documents) throw new NotEmptyError('Empty the folder first: it has documents in it.');
     try {
       return await this.inTransaction(async (client) => {
-        // An empty series takes its schedule with it.
+        // An empty series takes its schedule with it, and what had landed in it goes back to "From below".
+        await client.query('update folio.placements set landed_library = null, landed_folder = null where landed_folder = $1', [id]);
         await client.query('delete from folio.series_followers where series_id in (select id from folio.series where folder_id = $1)', [id]);
         await client.query('delete from folio.series where folder_id = $1', [id]);
         const { rowCount } = await client.query('delete from folio.folders where id = $2 and library_id = $1', [library, id]);

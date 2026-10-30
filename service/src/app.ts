@@ -23,6 +23,7 @@ import { homeRoutes } from './home.ts';
 import { seriesRoutes } from './series.ts';
 import { BadMoveError, BadLevelError, checkLevelName, CONTAINER_LIFECYCLE, type ContainerState } from '@augur/records';
 import { BadParentError, BadTagError, checkPlace, ClosedError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
+import { placementRoutes } from './placements.ts';
 import { tagRoutes } from './tags.ts';
 import { FOLDER_LEVELS, UNIT_LEVELS, type FolderLevel, type UnitLevel } from './units.ts';
 
@@ -413,6 +414,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
       await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log, publisher });
       await seriesRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, publisher, refused });
       await homeRoutes(app, { store, onFloor, principalsOf });
+      await placementRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log });
     },
     { prefix: `/${API_VERSION}` },
   );
