@@ -420,6 +420,9 @@ export class FolioReader extends LitElement {
         folio-reader .label { font-size: var(--type-label); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); }
         folio-reader .folio-link { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
         folio-reader .folio-link:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
+        folio-reader .folio-crumb { all: unset; cursor: pointer; font-size: var(--type-small); color: var(--ink-muted); }
+        folio-reader .folio-crumb:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+        folio-reader .folio-crumb:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
         @media (max-width: 1100px) {
           folio-reader { grid-template-columns: minmax(0, 1fr); }
           folio-reader .folio-reader-contents, folio-reader .folio-reader-side { position: static; max-height: none; }

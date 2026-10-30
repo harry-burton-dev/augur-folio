@@ -134,7 +134,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `GET /libraries/:id/documents/:doc/versions/:n/reader/images/:name` | A picture the reader copy shows (`images/1.png`) |
 | `GET /libraries/:id/documents/:doc/versions/:n/thumbnail`, `…/text` | Its first page as a PNG (PDFs), and its words as plain text |
 | `POST /libraries/:id/documents/:doc/versions/:n/reader/retry` | Ask again for a reader copy that failed |
-| `GET /libraries/:id/access`, `GET /libraries/:id/documents/:doc/access` | Who may see it: its floor, who has been let in (for a document, into it and into its library), and whether the caller may share it |
+| `GET /libraries/:id/access`, `GET /libraries/:id/documents/:doc/access` | Who may see it: its floor, who has been let in (for a document, into it and into its library), the floors it's published up to (`placed`: who each lets in, its filter, and the floors it came up through), and whether the caller may share it |
 | `PUT /libraries/:id/access/:principal` `{level}`, `DELETE …` | Let a person or team into the library that far (read, edit or manage), or take them out (managers). `:principal` is `person:<id>`, `team:<id>`, `tree:<id>` or `org` |
 | `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
 | `GET /libraries/:id/folders/:folder/access` | Who may see a folder: its floor, who has been let into its library, and who into the folder |
