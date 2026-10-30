@@ -1,5 +1,12 @@
 # @apps/folio-frontend
 
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [5b2c80c]
+  - @augur/mfe-sdk@1.7.0
+
 ## 0.3.2
 
 ### Patch Changes
