@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
 import { DEFAULT_LEVELS, folderTrail, folderTree, type FolioApp } from './folio-app.js';
+import { explainPayload } from './folio-share.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
 const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', freeTags: false, createdBy: 'u1', createdAt: '', updatedAt: '' };
@@ -209,7 +210,14 @@ const service = ({
     if (method === 'GET' && route === '/shared') return Response.json(shared);
     if (method === 'GET' && where === '/people') return Response.json({ people: [{ id: 'u4', name: 'Ola Bello', email: 'ola@example.org' }], teams: [{ id: 'w-legal', name: 'Legal', within: [] }] });
     if (where === '/libraries/l-1/access') return Response.json({ floor: FINANCE, grants, can: { share: lead } });
-    if (where === '/libraries/l-1/folders/f-hr/access') return Response.json({ floor: FINANCE, grants: folderGrants, library: grants, can: { share: lead } });
+    if (where === '/libraries/l-1/folders/f-hr/access')
+      return Response.json({
+        floor: FINANCE,
+        grants: folderGrants,
+        library: grants,
+        placed: [{ principal: 'org', kind: 'org', filter: ['complete', 'issued'], at: '2026-10-30T09:00:00Z', record: { kind: 'folder', id: 'f-hr' }, chain: ['Payroll', 'Finance'] }],
+        can: { share: lead },
+      });
     const folderSharing = where.match(/^\/libraries\/l-1\/folders\/f-hr\/access\/(.+)$/);
     if (folderSharing) {
       const principal = decodeURIComponent(folderSharing[1]);
@@ -327,6 +335,11 @@ describe('folio paths', () => {
   it('starts at a document another app asked to open', () => {
     expect(placeForIntent({ type: 'document.open', payload: { app: 'folio', id: 'd-9', version: '2', title: 'Shared plan' } })).toEqual({ document: 'd-9', version: 2, adding: false });
     expect(placeForIntent({ type: 'document.open', payload: { app: 'other', id: 'd-9', title: 'Theirs' } })).toBeUndefined();
+    const unit = (id: string, level: string) => placeForIntent({ type: 'unit.open', payload: { kind: 'unit', app: 'folio', id, level, name: 'It' } });
+    expect(unit('l-1', 'collection')).toEqual({ library: 'l-1', adding: false });
+    expect(unit('l-1/f-hr', 'series')).toEqual({ library: 'l-1', folder: 'f-hr', adding: false });
+    expect(unit('l-1/d-1', 'file')).toEqual({ library: 'l-1', document: 'd-1', adding: false });
+    expect(unit('l-1/f-hr', 'folder')).toBeUndefined();
     expect(placeForIntent({ type: 'document.open', payload: { id: 'd-9' } })).toBeUndefined();
     expect(placeForIntent(undefined)).toBeUndefined();
     expect(placeForIntent({ type: 'folio.open', payload: { path: '/published' } })).toEqual({ published: true, adding: false });
@@ -979,8 +992,10 @@ describe('folio', () => {
     const lists = () => [...share.querySelectorAll<UiList>('ui-list')].map((l) => [l.label, l.items.map((i) => i.title)]);
     expect(lists()).toEqual([
       ['Shared with, for this folder', []],
+      ['Published up to', ['Everyone in the org']],
       ['Shared with, through its library', ['Kim Lee']],
     ]);
+    expect([...share.querySelectorAll<UiList>('ui-list')][1].items[0].detail).toBe('Up from Payroll through Finance · Shows Complete and Issued');
 
     const picker = share.querySelector('ui-people-picker')!;
     await picker.find('leg');
@@ -992,6 +1007,26 @@ describe('folio', () => {
     await settle(el);
     expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/folders/f-hr/access/tree%3Aw-legal', { level: 'read' }]);
     expect(lists()[0]).toEqual(['Shared with, for this folder', ['Legal and the teams below it']]);
+  });
+
+  it('explains who reaches it by its being published up, with the floors it came through and what it shows', () => {
+    const asked = explainPayload(
+      {
+        floor: { ...FINANCE, kind: 'tree' as const },
+        grants: [],
+        placed: [
+          { principal: 'org', kind: 'org', filter: ['issued'], at: '2026-10-30T09:00:00Z', record: { kind: 'folder', id: 'f-hr' }, chain: ['Payroll', 'Finance'] },
+          { principal: 'tree:w-dept', kind: 'tree', name: 'Dept', filter: ['complete', 'issued'], at: '2026-10-29T09:00:00Z', record: { kind: 'library', id: 'l-1' }, chain: ['Finance'] },
+        ],
+        can: { share: false },
+      },
+      { id: 'f-hr', title: 'HR', kind: 'folder' },
+    );
+    expect(asked.thing.kind).toBe('folder');
+    expect(asked.audience.slice(1)).toEqual([
+      { principal: 'org', level: 'read', since: '2026-10-30T09:00:00Z', via: 'published up to them', chain: ['Payroll', 'Finance'], shows: ['Issued'] },
+      { principal: 'tree:w-dept', name: 'Dept', level: 'read', since: '2026-10-29T09:00:00Z', via: 'published up inside something', chain: ['Finance'], shows: ['Complete', 'Issued'] },
+    ]);
   });
 
   it('asks for who can open it, explained, and says so when nothing can explain it', async () => {

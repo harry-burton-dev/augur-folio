@@ -1,4 +1,4 @@
-import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, isUnitRef, UNIT_OPEN, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
@@ -83,7 +83,8 @@ export const FOLIO_OPEN = 'folio.open';
 
 /**
  * Where an intent asks Folio to start: `folio.open` at the path it names,
- * `library.open` at one of Folio's libraries, or `document.open` for one of
+ * `library.open` at one of Folio's libraries, `unit.open` at one of its units
+ * (a library, a folder at any level, or a file), or `document.open` for one of
  * Folio's own documents opens it to read, at the version asked for. Its
  * library is found from the document.
  */
@@ -93,6 +94,12 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
     return typeof path === 'string' ? placeFor(path) : undefined;
   }
   if (intent?.type === LIBRARY_OPEN) return isLibraryRef(intent.payload) && intent.payload.app === 'folio' ? { library: intent.payload.id, adding: false } : undefined;
+  if (intent?.type === UNIT_OPEN) {
+    if (!isUnitRef(intent.payload) || intent.payload.app !== 'folio') return undefined;
+    const [library, unit] = intent.payload.id.split('/');
+    if (!unit || unit === library) return { library, adding: false };
+    return intent.payload.level === 'file' ? { library, document: unit, adding: false } : { library, folder: unit, adding: false };
+  }
   if (intent?.type !== DOCUMENT_OPEN || !isDocumentRef(intent.payload) || intent.payload.app !== 'folio') return undefined;
   const version = /^[1-9]\d*$/.test(intent.payload.version ?? '') ? Number(intent.payload.version) : undefined;
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };

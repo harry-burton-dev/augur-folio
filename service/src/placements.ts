@@ -54,6 +54,28 @@ const RECORD = { type: 'object', additionalProperties: false, required: ['kind',
 const PARAMS = { type: 'object', properties: { id: ID }, required: ['id'] } as const;
 
 /**
+ * Where floors sit, from the directory (a team's path) and the caller's own
+ * floor (which the directory doesn't list under `pnpm dev:app`).
+ */
+export const floorsFrom = (directory: DirectorySearch) => async (keys: readonly string[], caller?: OnFloor): Promise<Map<string, FloorView>> => {
+  const teams = [...new Set(keys.filter((k) => k !== 'org'))];
+  const found = teams.length ? (await directory({ ids: teams })).teams : [];
+  const named = new Map(found.map((t) => [t.id, t]));
+  const out = new Map<string, FloorView>();
+  for (const key of new Set(keys)) {
+    if (key === 'org') out.set(key, { id: key, kind: 'org', name: 'The org', rank: 0, path: [] });
+    else if (named.has(key)) {
+      const team = named.get(key)!;
+      const path = team.path?.length ? team.path : [key];
+      out.set(key, { id: key, kind: 'team', name: team.name, rank: floorRank({ kind: 'team', path }), path });
+    } else if (caller && caller.workspace.id === key && caller.workspace.kind === 'personal') out.set(key, { id: key, kind: 'personal', name: 'Your own floor', rank: floorRank({ kind: 'personal', path: [] }), path: [] });
+    else if (caller && caller.workspace.id === key && caller.workspace.kind === 'team') out.set(key, { id: key, kind: 'team', name: 'This team', rank: 1, path: [key] });
+    else out.set(key, { id: key, kind: 'personal', name: 'Someone’s own floor', rank: floorRank({ kind: 'personal', path: [] }), path: [] });
+  }
+  return out;
+};
+
+/**
  * Publishing up the floors (docs/app-patterns.md, `@augur/records`): a record
  * (a whole collection, a folder in one, or a document) put on a floor above
  * its own through a filter of lifecycle states, as a live window. The floor
@@ -61,32 +83,13 @@ const PARAMS = { type: 'object', properties: { id: ID }, required: ['id'] } as c
  * the highest floor it has reached. Each person sees it in one place only, the
  * highest floor that shows it to them; the floors below say where it went.
  */
+
 export const placementRoutes = async (app: FastifyInstance, { store, audit, onFloor, reach, principalsOf, directory, audience, notify, log }: PlacementDeps) => {
   const describe = describePrincipals(directory);
   const recorded = (entry: Parameters<Audit>[0]) =>
     audit(entry).catch((err: Error) => log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
 
-  /**
-   * Where floors sit, from the directory (a team's path) and the caller's own
-   * floor (which the directory doesn't list under `pnpm dev:app`).
-   */
-  const floorsOf = async (keys: readonly string[], caller?: OnFloor): Promise<Map<string, FloorView>> => {
-    const teams = [...new Set(keys.filter((k) => k !== 'org'))];
-    const found = teams.length ? (await directory({ ids: teams })).teams : [];
-    const named = new Map(found.map((t) => [t.id, t]));
-    const out = new Map<string, FloorView>();
-    for (const key of new Set(keys)) {
-      if (key === 'org') out.set(key, { id: key, kind: 'org', name: 'The org', rank: 0, path: [] });
-      else if (named.has(key)) {
-        const team = named.get(key)!;
-        const path = team.path?.length ? team.path : [key];
-        out.set(key, { id: key, kind: 'team', name: team.name, rank: floorRank({ kind: 'team', path }), path });
-      } else if (caller && caller.workspace.id === key && caller.workspace.kind === 'personal') out.set(key, { id: key, kind: 'personal', name: 'Your own floor', rank: floorRank({ kind: 'personal', path: [] }), path: [] });
-      else if (caller && caller.workspace.id === key && caller.workspace.kind === 'team') out.set(key, { id: key, kind: 'team', name: 'This team', rank: 1, path: [key] });
-      else out.set(key, { id: key, kind: 'personal', name: 'Someone’s own floor', rank: floorRank({ kind: 'personal', path: [] }), path: [] });
-    }
-    return out;
-  };
+  const floorsOf = floorsFrom(directory);
 
   /** A step as `@augur/records` reasons about it: with how high its floor sits. */
   const asStep = (p: Placement, floors: Map<string, FloorView>): Step<ContentState> => ({

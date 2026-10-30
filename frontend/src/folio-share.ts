@@ -1,7 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { isIntentCancelled } from '@augur/mfe-sdk';
 import { ago, type ListItem, type Principal as Someone, type SelectOption } from '@augur/ui-kit';
-import type { Access, AccessTarget, FolioApi, Grant, Level, Principal } from './api.js';
+import { stateName, type Access, type AccessTarget, type ContentState, type FolioApi, type Grant, type Level, type Principal } from './api.js';
 
 export const LEVEL_WORDS: Record<Level, string> = { read: 'Can read', edit: 'Can edit', manage: 'Can manage' };
 
@@ -29,7 +29,7 @@ export type Shareable = 'library' | 'folder' | 'document';
 
 export interface ExplainPayload {
   thing: { app: 'folio'; appName: string; id: string; title: string; kind: Shareable };
-  audience: { principal: string; name?: string; level?: Level; since?: string; via: string }[];
+  audience: { principal: string; name?: string; level?: Level; since?: string; via: string; chain?: string[]; shows?: string[] }[];
   change: { where: string; allowed: boolean };
 }
 
@@ -47,10 +47,28 @@ export const explainPayload = (access: Access, thing: { id: string; title: strin
       { principal: floor.principal, ...(floor.name ? { name: floor.name } : {}), level: floor.kind === 'person' ? 'manage' : 'read', via: 'its floor' },
       ...(access.library ?? []).map((g) => shared(g, 'its library')),
       ...(access.folders ?? []).map((g) => shared(g, 'a folder it’s in')),
+      ...(access.placed ?? []).map((p) => ({
+        principal: p.principal,
+        ...(p.name ? { name: p.name } : {}),
+        level: 'read' as const,
+        since: p.at,
+        via: p.record.id === thing.id ? 'published up to them' : 'published up inside something',
+        chain: p.chain,
+        shows: p.filter.map(stateName),
+      })),
       ...access.grants.map((g) => shared(g, `shared with this ${thing.kind}`)),
     ],
     change: { where: 'Share', allowed: access.can.share },
   };
+};
+
+/** A list in words: "Complete", "Complete and Issued", "In review, Complete and Issued". */
+const listWords = (list: readonly string[]) => (list.length < 2 ? (list[0] ?? '') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
+
+/** How a step up the floors reaches them: "Up from Payroll through Finance · Shows Complete and Issued". */
+export const upLine = (p: { chain: readonly string[]; filter: readonly ContentState[] }) => {
+  const [from, ...through] = p.chain;
+  return [from ? `Up from ${from}${through.length ? ` through ${listWords(through)}` : ''}` : '', `Shows ${listWords(p.filter.map(stateName))}`].filter(Boolean).join(' · ');
 };
 
 const iconOf = (p: Principal) => (p.kind === 'person' ? 'account' : p.kind === 'org' ? 'org' : 'people');
@@ -293,6 +311,16 @@ export class FolioShare extends LitElement {
         @ui-action=${(e: CustomEvent<{ item: ListItem; action: { id: string } }>) => this.onGrantAction(e)}></ui-list>
       ${folders.length
         ? html`<ui-list label="Shared with, through a folder it’s in" density="compact" .noun=${['person or team', 'people and teams']} .items=${this.grantRows(folders, false)}></ui-list>`
+        : nothing}
+      ${access.placed?.length
+        ? html`<ui-list label="Published up to" density="compact" .noun=${['floor', 'floors']}
+            .items=${access.placed.map((p, i): ListItem => ({
+              id: `up-${i}`,
+              title: whoWords(p),
+              detail: [upLine(p), p.record.id === (this.document ?? this.folder ?? this.library) ? '' : 'With what it’s inside'].filter(Boolean).join(' · '),
+              icon: iconOf(p),
+              meta: 'Can read',
+            }))}></ui-list>`
         : nothing}
       ${what !== 'library' && access.library?.length
         ? html`<ui-list label="Shared with, through its library" density="compact" .noun=${['person or team', 'people and teams']} .items=${this.grantRows(access.library, false)}></ui-list>`

@@ -302,6 +302,8 @@ export interface Access {
   library?: Grant[];
   /** For a document: who has been let into a folder it's inside, and so into it. */
   folders?: (Grant & { folder: string })[];
+  /** Published up the floors (it, or what it's inside): who that floor lets in, what it shows there, and the floors it came up through. */
+  placed?: (Principal & { filter: ContentState[]; at: string; record: { kind: RecordView['kind']; id: string }; chain: string[] })[];
   can: { share: boolean };
 }
 

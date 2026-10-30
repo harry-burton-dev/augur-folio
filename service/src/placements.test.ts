@@ -145,6 +145,21 @@ describe('folio publishing up the floors', () => {
     expect(history.owner).toMatchObject({ id: 'ops' });
   });
 
+  it('says who it reaches by being published up: the floors it came through, and what each shows', async () => {
+    const { call, library, reports, done } = await setup();
+    const first = (await call(own(sam), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'ops', filter: WORKING })).json();
+    await call(on(lena, 'ops', 'lead'), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'dept', via: first.id, filter: ['complete'] });
+    const placed = (url: string) => call(own(sam), 'GET', url).then((r) => r.json().placed as { principal: string; name?: string; filter: string[]; chain: string[]; record: { id: string } }[] | undefined);
+    const expected = [
+      { principal: 'tree:ops', name: 'Ops', filter: WORKING, chain: ['Your own floor'], record: { kind: 'folder', id: reports.id } },
+      { principal: 'tree:dept', name: 'Dept', filter: ['complete'], chain: ['Your own floor', 'Ops'], record: { kind: 'folder', id: reports.id } },
+    ];
+    // A document inside it, the folder itself, and not the library above it.
+    expect(await placed(`/v1/libraries/${library}/documents/${done.id}/access`)).toMatchObject(expected);
+    expect(await placed(`/v1/libraries/${library}/folders/${reports.id}/access`)).toMatchObject(expected);
+    expect(await placed(`/v1/libraries/${library}/access`)).toBeUndefined();
+  });
+
   it('takes back a step and every step that went on up from it, and keeps them all on the record', async () => {
     const { call, audited, library, reports, done } = await setup();
     const first = (await call(own(sam), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'ops', filter: WORKING })).json();
