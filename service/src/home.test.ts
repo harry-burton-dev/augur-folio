@@ -55,7 +55,9 @@ describe('folio in the shell', () => {
     // Kim sees nothing until it's published to Legal, then only as its audience.
     const legal = on(kim, 'w-legal');
     expect((await call(legal, 'GET', '/v1/search?q=travel')).json().results).toEqual([]);
-    await call(lead, 'POST', `/v1/libraries/${fin}/documents/${travel.id}/publish`, { version: 1, audience: ['team:w-legal'] });
+    // Published the old way, before publishing up: it reads as it did until it's moved.
+    await store.publish({ document: travel.id, version: 1, audience: ['team:w-legal'], by: 'u-sam' });
+    await store.setVersionState(travel.id, 1, 'issued', 'u-sam');
     expect((await call(legal, 'GET', '/v1/search?q=travel')).json().results).toEqual([
       { id: travel.id, title: travel.title, detail: 'Published to you from Policies', path: `/libraries/${fin}/documents/${travel.id}` },
     ]);
@@ -66,7 +68,7 @@ describe('folio in the shell', () => {
   });
 
   it('gives Home what’s new since the person last looked, and the floor’s drafts to its leads', async () => {
-    const { call, upload } = await setup();
+    const { store, call, upload } = await setup();
     const lead = { ...on(sam, 'w-fin', 'lead'), roles: ['publisher'] };
     const legal = on(kim, 'w-legal');
     const { id: fin } = (await call(lead, 'POST', '/v1/libraries', { name: 'Policies' })).json();
@@ -74,7 +76,9 @@ describe('folio in the shell', () => {
     await upload(lead, fin, 'leave.md');
     expect((await call(legal, 'GET', '/v1/home')).json()).toEqual({ published: { new: 0, documents: [] } });
 
-    await call(lead, 'POST', `/v1/libraries/${fin}/documents/${travel.id}/publish`, { version: 1, audience: ['team:w-legal'] });
+    // Published the old way, before publishing up: it reads as it did until it's moved.
+    await store.publish({ document: travel.id, version: 1, audience: ['team:w-legal'], by: 'u-sam' });
+    await store.setVersionState(travel.id, 1, 'issued', 'u-sam');
     const home = (await call(legal, 'GET', '/v1/home')).json();
     expect(home).toMatchObject({ published: { new: 1, documents: [{ id: travel.id, library: fin, title: travel.title, libraryName: 'Policies' }] } });
     expect(home.drafts).toBeUndefined();

@@ -7,6 +7,8 @@ import { auditFromEnv } from './audit.ts';
 import { notifyFromEnv } from './notices.ts';
 import { clearDeleted, DEFAULT_RETENTION_DAYS, RETENTION_SETTING } from './retention.ts';
 import { remindLate } from './series.ts';
+import { movePublications } from './moving.ts';
+import { peopleFromEnv } from './people.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
@@ -42,6 +44,17 @@ await app.listen({ port, host: '0.0.0.0' });
 const remind = () => remindLate({ store, notify, log: app.log }).catch((err: Error) => app.log.error({ err: err.message }, 'could not check for late issues'));
 setInterval(remind, 15 * 60 * 1000).unref();
 void remind();
+
+// Move what was published the old way onto publishing up the floors. Until it's moved, it still reads
+// as before; when the directory can't be reached, it's tried again next round.
+const moving = auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
+const { directory } = peopleFromEnv(store);
+const move = () =>
+  movePublications({ store, directory, audit: moving, log: app.log })
+    .then((moved) => moved && app.log.info({ moved }, 'moved publications onto publishing up'))
+    .catch((err: Error) => app.log.error({ err: err.message }, 'could not move publications onto publishing up'));
+setInterval(move, 15 * 60 * 1000).unref();
+void move();
 
 // Put Folio in the platform's catalogue on every start, so the shell can offer it, with no admin step.
 // It signs in as itself with SERVICE_CLIENT_SECRET: in a deployment, FOLIO_CLIENT_SECRET, which identity

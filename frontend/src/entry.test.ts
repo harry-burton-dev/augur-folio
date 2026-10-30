@@ -38,6 +38,8 @@ const service = ({
   views = [recent] as (typeof recent)[],
   shared = NO_SHARED,
   series = [] as unknown[],
+  /** Travel policy as a series' issue: only issues still go out one version at a time. */
+  anIssue = false,
 } = {}) => {
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
@@ -90,6 +92,7 @@ const service = ({
     if (method === 'GET' && where === '/libraries/l-1/documents/d-1')
       return Response.json({
         ...travel,
+        ...(anIssue ? { issue: { series: 's-1', number: 1, periodStart: '', period: 'Week 43, 2026' } } : {}),
         state: out ? (out.ended ? 'withdrawn' : 'published') : 'draft',
         ...(out && !out.ended ? { published: out } : {}),
         latest: { ...v(2), state },
@@ -973,8 +976,19 @@ describe('folio', () => {
     expect(el.querySelector('folio-reader h1')!.textContent).toBe('Shared plan');
   });
 
-  it('publishes a version to the floor’s team and those below it, and withdraws it', async () => {
-    const { fetch, calls } = service({ documents: [travel] });
+  it('leaves the old Publish off a document that isn’t an issue: it’s published up the floors', async () => {
+    const { fetch } = service({ documents: [travel] });
+    const el = await mounted(fetch);
+    list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
+    await settle(el);
+    const reader = el.querySelector('folio-reader')!;
+    expect(reader.querySelector('.folio-reader-publishing')).toBeNull();
+    expect(button(reader, 'Publish')).toBeUndefined();
+    expect(button(reader, 'Publish up the floors')).toBeDefined();
+  });
+
+  it('publishes an issue to the floor’s team and those below it, and withdraws it', async () => {
+    const { fetch, calls } = service({ documents: [travel], anIssue: true });
     const el = await mounted(fetch);
     list(el).dispatchEvent(new CustomEvent('ui-open', { detail: { item: { id: 'doc:d-1' } } }));
     await settle(el);

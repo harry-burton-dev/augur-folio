@@ -139,7 +139,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
 | `GET /people?q=` | People and teams to share with, by name |
 | `GET /shared` | Libraries and documents shared with the caller from other floors |
-| `POST /libraries/:id/documents/:doc/publish` `{version, audience, note?}` | Put a version out to `audience` (`team:<id>`, `tree:<id>` or `org`), in place of what was out, and tell them (whoever manages it) |
+| `POST /libraries/:id/documents/:doc/publish` `{version, audience, note?}` | Put a version of a series' issue out to `audience` (`team:<id>`, `tree:<id>` or `org`), in place of what was out, and tell them (whoever manages it). Any other document answers 410 `publish-up`: it's published up the floors (`POST /placements`), and what was published this way before is moved there by itself |
 | `POST /libraries/:id/documents/:doc/withdraw` `{reason?}` | Take back what's out (whoever manages it) |
 | `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
 | `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
