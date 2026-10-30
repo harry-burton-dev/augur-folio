@@ -149,6 +149,9 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `PUT /placements/:id/landing` `{library, folder?}`, `DELETE …` | Where it sits on the floor that received it (that floor's leads); with none it sits under "From below" |
 | `POST /placements/:id/withdraw` `{reason?}` | Take it back off that floor, and off every floor it went to from there |
 | `GET /placements/:id/above` | The steps that came up through this one |
+| `GET /libraries/:id/links?record=` | A library's, folder's or document's links (`record` is its id; the library's own id for the library), the links to it from other records (`back`), the kinds of link, and whether the caller may change them. A linked record the caller can't open stays listed, with `unavailable` saying so |
+| `POST /libraries/:id/links` `{record, relation, to}` | Link a record to another (`to` is a `RecordRef`: `{app, kind, id, label?}`). `relates-to`, `supersedes` and `responds-to` link to Artifacts' own records (`{app: 'folio', kind: 'unit', id: '<library>/<record>'}`), `about` to a thing in Data Atlas, `serves` to an intent in Mandate. Whoever may change the record links it |
+| `DELETE /libraries/:id/links/:link?record=` | Unlink it |
 | `GET /received` | What's been published up to the caller's floor, with where it's landed |
 | `GET /received/:id?folder=` | The documents a received step shows, each at the newest version its filter lets through |
 | `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them, matching every word by title, tag or text |
