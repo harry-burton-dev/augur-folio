@@ -582,6 +582,8 @@ export interface FolioStore {
   withdraw(input: { document: string; by: string; reason?: string }): Promise<Publication | undefined>;
   /** A document's publications, newest first. */
   publications(document: string): Promise<Publication[]>;
+  /** Publications still out of documents that aren't a series' issue, oldest first: what's left to move onto publishing up. */
+  publicationsToMove(limit: number): Promise<Publication[]>;
   /** What is out now to anyone who stands for these principals, newest first, with each one's library's name. */
   publishedTo(principals: readonly string[], page?: { limit?: number; offset?: number; since?: string }): Promise<PublishedPage>;
   /** When someone last looked at what's published to them (ISO), if they ever have. */
@@ -1348,6 +1350,16 @@ export class MemoryFolioStore implements FolioStore {
 
   async publications(document: string) {
     return this.publicationsOf(document).map(copyPublication);
+  }
+
+  async publicationsToMove(limit: number) {
+    return this.pubs
+      .filter((p) => {
+        const doc = this.docs.get(p.document);
+        return !p.ended && doc && !doc.deletedAt && !doc.issue;
+      })
+      .slice(0, limit)
+      .map(copyPublication);
   }
 
   async publishedTo(principals: readonly string[], page: { limit?: number; offset?: number; since?: string } = {}): Promise<PublishedPage> {
@@ -3097,6 +3109,16 @@ export class PgFolioStore implements FolioStore {
 
   async publications(document: string) {
     const { rows } = await this.pool.query<PublicationRow>(`select ${PUBLICATION_COLUMNS} from folio.publications where document_id = $1 order by seq desc`, [document]);
+    return rows.map(fromPublicationRow);
+  }
+
+  async publicationsToMove(limit: number) {
+    const { rows } = await this.pool.query<PublicationRow>(
+      `select ${PUBLICATION_COLUMNS.split(', ').map((c) => `p.${c}`).join(', ')} from folio.publications p
+        join folio.documents d on d.id = p.document_id
+        where p.ended_at is null and d.deleted_at is null and d.series_id is null order by p.seq limit $1`,
+      [limit],
+    );
     return rows.map(fromPublicationRow);
   }
 

@@ -34,6 +34,7 @@ export class FolioPublish extends LitElement {
     library: { type: String },
     document: { type: String },
     versions: { attribute: false },
+    issue: { type: Boolean },
     history: { state: true },
     floor: { state: true },
     failure: { state: true },
@@ -49,6 +50,8 @@ export class FolioPublish extends LitElement {
   declare document: string;
   /** The document's version numbers, newest first. */
   declare versions: number[];
+  /** True for a series' issue: only issues are still put out one version at a time. Anything else is published up the floors. */
+  declare issue: boolean;
   declare history: Publications | undefined;
   /** Who the library's floor lets in. */
   declare floor: Principal | undefined;
@@ -66,6 +69,7 @@ export class FolioPublish extends LitElement {
     this.library = '';
     this.document = '';
     this.versions = [];
+    this.issue = false;
     this.failure = '';
     this.version = 0;
     this.chosen = [];
@@ -156,6 +160,8 @@ export class FolioPublish extends LitElement {
   private form() {
     const history = this.history!;
     if (!history.can.publish) return nothing;
+    if (!this.issue)
+      return html`<p class="folio-publish-hint">A document is published up the floors now: close this and choose Publish up the floors, and which states it shows. What went out before keeps reading as it did until Artifacts moves it there.</p>`;
     const out = history.publications.find((p) => !p.ended);
     const versionOptions: SelectOption[] = this.versions.map((n, i) => ({ value: String(n), label: `Version ${n}${i === 0 ? ', the newest' : ''}`, ...(out?.version === n ? { detail: 'Out now' } : {}) }));
     const own = this.floor?.kind === 'person';

@@ -44,31 +44,28 @@ const setup = async () => {
     (await app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents?filename=${encodeURIComponent(`${name}.md`)}`, headers: { ...callerHeaders(lead), 'content-type': 'text/markdown' }, payload: `# ${name}` })).json();
   const addVersion = (doc: string) =>
     app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents/${doc}/versions?filename=v2.md`, headers: { ...callerHeaders(lead), 'content-type': 'text/markdown' }, payload: '# Two' });
-  return { app, call, store, library, lead, upload, addVersion, audited, told };
+  /** An issue of a series with no audience of its own: what's still published one version at a time. */
+  let series: string | undefined;
+  const issue = async (name: string) => {
+    series ??= (await call(lead, 'POST', `/v1/libraries/${library}/series`, { name: 'Notes', cadence: 'weekly' })).json().id;
+    return (await app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents?filename=${encodeURIComponent(`${name}.md`)}&series=${series}`, headers: { ...callerHeaders(lead), 'content-type': 'text/markdown' }, payload: `# ${name}` })).json();
+  };
+  return { app, call, store, library, lead, upload, issue, addVersion, audited, told };
 };
 
 describe('folio publishing', () => {
-  it('publishes a version to a team, who read that version alone and are told', async () => {
-    const { call, store, library, lead, upload, addVersion, audited, told } = await setup();
+  it('reads a version published the old way, to a team who see that version alone, and withdraws it', async () => {
+    const { call, store, library, lead, upload, addVersion, audited } = await setup();
     const doc = await upload('Travel');
     await addVersion(doc.id);
     const base = `/v1/libraries/${library}/documents/${doc.id}`;
 
-    // Legal is beyond Finance: Sam publishes there as a publisher.
-    const res = await call({ ...lead, roles: ['publisher'] }, 'POST', `${base}/publish`, { version: 1, audience: ['team:w-legal'], note: 'Approved on Monday' });
-    expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ version: 1, audience: [{ principal: 'team:w-legal', kind: 'team', name: 'Legal' }], note: 'Approved on Monday', publishedBy: 'u-sam' });
-    expect(audited.at(-1)).toMatchObject({ actor: 'u-sam', action: 'document.published', target: doc.id, workspace: 'w-fin', detail: { version: 1, audience: ['team:w-legal'], note: 'Approved on Monday' } });
-    expect(told).toEqual([
-      {
-        recipients: ['u-kim'],
-        workspace: 'w-fin',
-        title: 'New in Policies: Travel',
-        detail: 'Approved on Monday',
-        link: `/libraries/${library}/documents/${doc.id}`,
-        actions: [{ label: 'Read', intent: { type: 'document.open', payload: { app: 'folio', id: doc.id, version: '1', title: 'Travel' } } }],
-      },
-    ]);
+    // A document on its own is published up the floors now.
+    expect((await call({ ...lead, roles: ['publisher'] }, 'POST', `${base}/publish`, { version: 1, audience: ['team:w-legal'] })).json()).toMatchObject({ error: 'publish-up', message: expect.stringContaining('Publish up the floors') });
+    // What was published before still reads as it did, until it's moved (moving.ts).
+    await store.publish({ document: doc.id, version: 1, audience: ['team:w-legal'], note: 'Approved on Monday', by: 'u-sam' });
+    const history = (await call(lead, 'GET', `${base}/publications`)).json();
+    expect(history.publications[0]).toMatchObject({ version: 1, audience: [{ principal: 'team:w-legal', kind: 'team', name: 'Legal' }], note: 'Approved on Monday', publishedBy: 'u-sam' });
     expect(store.outbox.map((e) => e.topic)).toContain('folio.document.published');
 
     // Kim reads the version that's out, and nothing else of it or its library.
@@ -93,23 +90,20 @@ describe('folio publishing', () => {
     expect((await call(kim1, 'GET', '/v1/published')).json().documents).toEqual([]);
     expect((await call(lead, 'POST', `${base}/withdraw`, {})).json().error).toBe('not-published');
 
-    const history = (await call(lead, 'GET', `${base}/publications`)).json();
-    expect(history.publications.map((p: { version: number; ended?: { as: string } }) => [p.version, p.ended?.as])).toEqual([[1, 'withdrawn']]);
-    expect(history.can).toEqual({ publish: true, publishToOrg: false });
+    const after = (await call(lead, 'GET', `${base}/publications`)).json();
+    expect(after.publications.map((p: { version: number; ended?: { as: string } }) => [p.version, p.ended?.as])).toEqual([[1, 'withdrawn']]);
+    expect(after.can).toEqual({ publish: true, publishToOrg: false });
   });
 
-  it('lets a team’s leads publish to their team and below; beyond that needs the publisher role', async () => {
-    const { call, library, lead, upload, told } = await setup();
-    const doc = await upload('Travel');
+  it('lets a team’s leads publish an issue to their team and below; beyond that needs the publisher role', async () => {
+    const { call, library, lead, issue } = await setup();
+    const doc = await issue('Travel');
     const publish = (caller: Caller, audience: string[]) => call(caller, 'POST', `/v1/libraries/${library}/documents/${doc.id}/publish`, { version: 1, audience });
 
     expect((await publish(lead, ['team:w-fin', 'tree:w-pay'])).statusCode).toBe(201);
-    // Sam published it, so only Alex is told.
-    expect(told.at(-1)?.recipients).toEqual(['u-alex']);
     expect((await publish(lead, ['team:w-legal'])).json().error).toBe('publisher-only');
     expect((await publish(lead, ['org'])).json()).toMatchObject({ error: 'publisher-only', message: expect.stringContaining('the whole org') });
     expect((await publish({ ...lead, roles: ['publisher'] }, ['org'])).statusCode).toBe(201);
-    expect(told.at(-1)?.title).toBe('New in Policies: Travel');
 
     // Members add drafts; only managers publish.
     expect((await publish(on(alex, 'w-fin'), ['team:w-fin'])).statusCode).toBe(403);
@@ -118,11 +112,12 @@ describe('folio publishing', () => {
     expect((await call(lead, 'POST', `/v1/libraries/${library}/documents/${doc.id}/publish`, { version: 7, audience: ['team:w-fin'] })).statusCode).toBe(404);
   });
 
-  it('publishes from your own floor only with the publisher role', async () => {
+  it('publishes an issue from your own floor only with the publisher role', async () => {
     const { app, call } = await setup();
     const me = on(alex, 'p-alex', 'lead', 'personal');
     const { id: library } = (await call(me, 'POST', '/v1/libraries', { name: 'Notes' })).json();
-    const doc = (await app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents?filename=Plan.md`, headers: { ...callerHeaders(me), 'content-type': 'text/markdown' }, payload: '# Plan' })).json();
+    const { id: series } = (await call(me, 'POST', `/v1/libraries/${library}/series`, { name: 'Plans', cadence: 'weekly' })).json();
+    const doc = (await app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents?filename=Plan.md&series=${series}`, headers: { ...callerHeaders(me), 'content-type': 'text/markdown' }, payload: '# Plan' })).json();
     const publish = (caller: Caller) => call(caller, 'POST', `/v1/libraries/${library}/documents/${doc.id}/publish`, { version: 1, audience: ['team:w-pay'] });
     expect((await publish(me)).json()).toMatchObject({ error: 'publisher-only', message: expect.stringContaining('share it') });
     expect((await publish({ ...me, roles: ['publisher'] })).statusCode).toBe(201);

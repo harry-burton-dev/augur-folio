@@ -266,9 +266,15 @@ export class FolioReader extends LitElement {
     }
   }
 
-  /** Where it is in being published, and the way to publish it for whoever manages it. */
+  /**
+   * Where it is in being published, and the way to publish it for whoever
+   * manages it: for a series' issue, which still goes out one version at a time.
+   * Anything else is published up the floors (the lifecycle section), and says
+   * so here only while something it put out the old way is still out.
+   */
   private publishing() {
     const doc = this.doc;
+    if (!doc.issue && !doc.only && doc.state !== 'published') return nothing;
     const words = doc.only
       ? `Version ${doc.only} was published to you${doc.published ? ` ${agoWords(doc.published.publishedAt)}` : ''}.`
       : doc.state === 'published' && doc.published

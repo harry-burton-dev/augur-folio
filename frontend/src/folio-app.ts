@@ -1581,7 +1581,7 @@ export class FolioApp extends LitElement {
             close();
             void this.letGoOfDoc();
           }}>
-          <folio-publish .api=${this.api} library=${doc.library} document=${doc.id} .versions=${doc.versions.map((v) => v.number)}
+          <folio-publish .api=${this.api} library=${doc.library} document=${doc.id} ?issue=${Boolean(doc.issue)} .versions=${doc.versions.map((v) => v.number)}
             @folio-published=${() => void this.loadDocuments()}></folio-publish>
         </ui-dialog>`;
       }
