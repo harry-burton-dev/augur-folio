@@ -8,6 +8,7 @@ import './folio-series.js';
 import './folio-audience.js';
 import './folio-publish-up.js';
 import './folio-links.js';
+import { DEFAULT_LEVELS } from './folio-levels.js';
 import type { OpenRef, PickRef } from './folio-links.js';
 import { filterWords, floorWords } from './folio-publish-up.js';
 import { CONTAINER_LIFECYCLE } from '@augur/records';
@@ -86,7 +87,8 @@ type Dialog =
   | 'edit-series'
   | 'delete-series'
   | 'details'
-  | 'publish-up';
+  | 'publish-up'
+  | 'levels';
 
 /** How many documents come in one page of the list. */
 const PAGE = 100;
@@ -164,14 +166,7 @@ const sameQuery = (a: ViewQuery, b: ViewQuery) => {
 /** Whether any filter is on: then the list looks in every folder below. */
 export const filtering = (filters: FilterValue) => Object.values(filters).some((v) => v.length > 0);
 
-/** The levels as Artifacts calls them before the org renames any. */
-export const DEFAULT_LEVELS: LevelInfo[] = [
-  { id: 'collection', name: 'Collection', plural: 'Collections', holds: ['subcollection', 'series', 'file'] },
-  { id: 'subcollection', name: 'Subcollection', plural: 'Subcollections', holds: ['series', 'file'] },
-  { id: 'series', name: 'Series', plural: 'Series', holds: ['subseries', 'file'] },
-  { id: 'subseries', name: 'Subseries', plural: 'Subseries', holds: ['file'] },
-  { id: 'file', name: 'File', plural: 'Files', holds: [] },
-];
+export { DEFAULT_LEVELS };
 
 /** The folder levels a place may hold, by what it is: the library itself (a collection) or a folder's level. */
 export const levelsInside = (levels: readonly LevelInfo[], at: LevelInfo['id']): LevelInfo[] => {
@@ -998,7 +993,10 @@ export class FolioApp extends LitElement {
         selected=${open?.id ?? ''}
         @ui-select=${(e: CustomEvent<{ item: TreeItem }>) => void this.openLibrary(e.detail.item.id)}
       ></ui-tree>
-      ${this.canCreate ? html`<div class="folio-rail-act"><ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'new-library')}>New library</ui-button></div>` : nothing}
+      <div class="folio-rail-act">
+        ${this.canCreate ? html`<ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'new-library')}>New library</ui-button>` : nothing}
+        <ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'levels')}>Level names</ui-button>
+      </div>
       <ui-tree
         label="For you"
         .items=${[{ id: 'published', label: 'Published to you', icon: 'inbox' }] satisfies TreeItem[]}
@@ -1446,6 +1444,10 @@ export class FolioApp extends LitElement {
     };
     const siblings = (except?: string) => (open?.folders ?? []).filter((f) => f.parent === (this.target ? this.target.parent : this.folder) && f.id !== except).map((f) => f.name);
     switch (this.dialog) {
+      case 'levels':
+        return html`<ui-dialog open eyebrow="Artifacts" heading="Level names" cancel-label="Done" @ui-close=${close}>
+          <folio-levels .api=${this.api} @folio-levels=${(e: CustomEvent<{ levels: LevelInfo[] }>) => (this.levels = e.detail.levels)}></folio-levels>
+        </ui-dialog>`;
       case 'new-library':
         return html`<ui-dialog open eyebrow=${this.floorName || 'Artifacts'} heading="New library" summary=${this.floorKind === 'personal' ? 'Only you can see it.' : 'Everyone on this floor can see it and add folders; its leads look after it.'}
           action-label="Make it" busy-label="Making…" .submit=${this.submitNewLibrary} @ui-close=${close}>
@@ -1768,7 +1770,7 @@ export class FolioApp extends LitElement {
     return html`<style>
         folio-app { display: block; min-height: 100%; }
         folio-app .folio-rail { display: flex; flex-direction: column; gap: var(--space-5); }
-        folio-app .folio-rail-act { padding: 0 var(--space-2); }
+        folio-app .folio-rail-act { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: 0 var(--space-2); }
         folio-app .folio-main-inner { display: flex; flex-direction: column; gap: var(--space-5); }
         folio-app .folio-actions { display: flex; gap: var(--space-2); }
         folio-app .folio-note { margin: 0; min-height: 1.5em; font-size: var(--type-small); color: var(--ink-muted); }
