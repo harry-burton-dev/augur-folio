@@ -1628,7 +1628,7 @@ export const migrations: { id: string; sql: string }[] = [
           from folio.series s;
       update folio.series set folder_id = 'series-' || id;
       update folio.series s set name = f.name from folio.folders f where f.id = s.folder_id;
-      alter table folio.series alter column folder_id set not null;
+      -- folder_id stays nullable so the release before this one can still make a series (docs/versioning.md): Folio always sets it.
       create unique index series_folder on folio.series (folder_id);
       update folio.documents d set folder_id = s.folder_id from folio.series s where d.series_id = s.id;
       -- A version's place in its life. One out to an audience now was put out as final.
