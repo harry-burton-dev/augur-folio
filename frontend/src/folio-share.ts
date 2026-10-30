@@ -53,7 +53,7 @@ export const explainPayload = (access: Access, thing: { id: string; title: strin
         level: 'read' as const,
         since: p.at,
         via: p.record.id === thing.id ? 'published up to them' : 'published up inside something',
-        chain: p.chain,
+        chain: p.chain.map(inSentence),
         shows: p.filter.map(stateName),
       })),
       ...access.grants.map((g) => shared(g, `shared with this ${thing.kind}`)),
@@ -65,9 +65,12 @@ export const explainPayload = (access: Access, thing: { id: string; title: strin
 /** A list in words: "Complete", "Complete and Issued", "In review, Complete and Issued". */
 const listWords = (list: readonly string[]) => (list.length < 2 ? (list[0] ?? '') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
 
+/** A floor's name in the middle of a sentence: "your own floor" and "the org" aren't names. */
+const inSentence = (floor: string) => (floor === 'Your own floor' || floor === 'The org' ? floor[0].toLowerCase() + floor.slice(1) : floor);
+
 /** How a step up the floors reaches them: "Up from Payroll through Finance · Shows Complete and Issued". */
 export const upLine = (p: { chain: readonly string[]; filter: readonly ContentState[] }) => {
-  const [from, ...through] = p.chain;
+  const [from, ...through] = p.chain.map(inSentence);
   return [from ? `Up from ${from}${through.length ? ` through ${listWords(through)}` : ''}` : '', `Shows ${listWords(p.filter.map(stateName))}`].filter(Boolean).join(' · ');
 };
 
