@@ -1303,6 +1303,36 @@ export class FolioApp extends LitElement {
     else await this.openLibrary(at.library, at.kind === 'folder' ? at.record : undefined);
   }
 
+  /** A folder's own tags, which count for everything inside it when filtering: changed by whoever may change the folder. */
+  private folderTags(open: OpenLibrary, folder: Folder) {
+    const tags = folder.tags ?? [];
+    if (!this.mayChange(folder))
+      return tags.length
+        ? html`<div class="folio-tags" aria-label="Tags">${tags.map((t) => {
+            const tag = open.tags.find((x) => x.id === t);
+            return tag ? html`<ui-tag quiet label=${tag.name} icon=${tag.library ? '' : 'org'}></ui-tag>` : nothing;
+          })}</div>`
+        : nothing;
+    return html`<ui-tag-picker label="Tags" placeholder="Add a tag" hint="They count for everything inside it when you filter." .options=${tagOptions(open.tags)} .values=${tags}
+      ?creatable=${open.can.addTags}
+      @ui-change=${(e: CustomEvent<{ values: string[] }>) => void this.retagFolder(folder, e.detail.values)}
+      @ui-create=${async (e: CustomEvent<{ name: string }>) => {
+        const tag = await this.addTag(e.detail.name);
+        if (tag) await this.retagFolder(folder, [...tags, tag.id]);
+      }}></ui-tag-picker>`;
+  }
+
+  private async retagFolder(folder: Folder, tags: string[]) {
+    const open = this.open;
+    if (!open) return;
+    try {
+      const tagged = await this.api.setFolderTags(open.id, folder.id, tags);
+      this.open = { ...open, folders: open.folders.map((f) => (f.id === folder.id ? { ...f, tags: tagged.tags ?? tags } : f)) };
+    } catch (err) {
+      this.note = (err as Error).message;
+    }
+  }
+
   /** Opens the details of the library or folder on screen, with its lifecycle moves. */
   private async openDetails() {
     const open = this.open;
@@ -1541,6 +1571,7 @@ export class FolioApp extends LitElement {
             { label: 'Last changed', value: ago(here?.updatedAt ?? open.updatedAt) },
             { label: 'Kept on', value: this.floorName || undefined },
           ]} missing="Not given"></ui-details>
+          ${here ? this.folderTags(open, here) : nothing}
           <ui-lifecycle label=${here?.name ?? open.name} .states=${CONTAINER_STATES} state=${state}
             .moves=${CONTAINER_LIFECYCLE.movesFrom(state, open.can.manage ? 'manage' : undefined)}
             why="Only whoever manages the library can close or archive it."

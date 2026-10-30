@@ -42,6 +42,8 @@ export interface Folder {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** Its own tags, which count for everything inside it when filtering. Listed with the library's folders. */
+  tags?: string[];
 }
 
 /** A move from one lifecycle state to another, on the record: of a version, a folder or a library. */
@@ -537,6 +539,8 @@ export interface FolioStore {
   markPurged(id: string): Promise<boolean>;
   /** Gives a document exactly these tags. Each must be the org's or its library's. */
   setDocumentTags(id: string, tags: string[]): Promise<FolioDocument | undefined>;
+  /** Replaces a folder's own tags; BadTagError for one that isn't the org's or its library's. Undefined when there's no such folder. */
+  setFolderTags(library: string, folder: string, tags: string[]): Promise<Folder | undefined>;
   /** The tags a library's documents can have: the org's and its own, by name. */
   tags(library: string): Promise<Tag[]>;
   /** The org's tags, by name. */
@@ -746,6 +750,7 @@ export class MemoryFolioStore implements FolioStore {
   private readonly renditions = new Map<string, Rendition>();
   private readonly tagList: Tag[] = [];
   private readonly docTags = new Map<string, Set<string>>();
+  private readonly folderTagMap = new Map<string, Set<string>>();
   private readonly viewList: SavedView[] = [];
   private readonly seen = new Map<string, string>();
   private readonly grantList: Grant[] = [];
@@ -810,7 +815,25 @@ export class MemoryFolioStore implements FolioStore {
   }
 
   async folders(library: string) {
-    return this.folderList.filter((f) => f.library === library).map((f) => ({ ...f })).sort(byName);
+    return this.folderList
+      .filter((f) => f.library === library)
+      .map((f) => ({ ...f, tags: [...(this.folderTagMap.get(f.id) ?? [])].sort() }))
+      .sort(byName);
+  }
+
+  /** The tags a document has with those of every folder it's inside. */
+  private allTagsOf(d: { tags: readonly string[]; folder?: string }) {
+    const all = new Set(d.tags);
+    for (let at = d.folder; at; at = this.folderList.find((f) => f.id === at)?.parent) for (const t of this.folderTagMap.get(at) ?? []) all.add(t);
+    return all;
+  }
+
+  async setFolderTags(library: string, folder: string, tags: string[]) {
+    const found = this.folderList.find((f) => f.id === folder && f.library === library);
+    if (!found) return undefined;
+    this.checkTags(library, tags);
+    this.folderTagMap.set(folder, new Set(tags));
+    return (await this.folders(library)).find((f) => f.id === folder);
   }
 
   async createFolder({ library, parent, level, name, description = '', createdBy }: { library: string; parent?: string; level?: FolderLevel; name: string; description?: string; createdBy: string }) {
@@ -1033,7 +1056,7 @@ export class MemoryFolioStore implements FolioStore {
       .map((d) => this.withLatest(d))
       .filter(
         (d) =>
-          (!query.tags?.length || query.tags.every((t) => d.tags.includes(t))) &&
+          (!query.tags?.length || query.tags.every((t) => this.allTagsOf(d).has(t))) &&
           (!query.mediaTypes?.length || query.mediaTypes.includes(d.latest.mediaType)) &&
           (!query.authors?.length || query.authors.includes(d.createdBy)) &&
           (!query.from || d.updatedAt >= new Date(query.from).toISOString()) &&
@@ -1170,7 +1193,7 @@ export class MemoryFolioStore implements FolioStore {
     if (tag.library) return;
     const absorbed = new Set(this.tagList.filter((t) => t.library && sameName(t.name, name)).map((t) => t.id));
     if (!absorbed.size) return;
-    for (const set of this.docTags.values()) {
+    for (const set of [...this.docTags.values(), ...this.folderTagMap.values()]) {
       if (![...set].some((t) => absorbed.has(t))) continue;
       for (const t of absorbed) set.delete(t);
       set.add(tag.id);
@@ -1199,7 +1222,7 @@ export class MemoryFolioStore implements FolioStore {
     const at = this.tagList.findIndex((t) => t.id === id);
     if (at < 0) return false;
     this.tagList.splice(at, 1);
-    for (const set of this.docTags.values()) set.delete(id);
+    for (const set of [...this.docTags.values(), ...this.folderTagMap.values()]) set.delete(id);
     for (const view of this.viewList) view.query = retag(view.query, new Set([id]));
     for (const run of this.seriesList) run.tags = retagged(run.tags, new Set([id])).sort();
     return true;
@@ -1890,10 +1913,22 @@ export const migrations: { id: string; sql: string }[] = [
       create unique index links_one on folio.links (from_id, relation, to_app, to_id);
       create index links_to on folio.links (to_app, to_id);`,
   },
+  {
+    id: '013_folder_tags',
+    sql: `
+      -- A folder's own tags: they count for everything inside it when filtering.
+      create table folio.folder_tags (
+        folder_id text not null references folio.folders (id),
+        tag_id text not null references folio.tags (id),
+        workspace_id text not null,
+        primary key (folder_id, tag_id)
+      );
+      create index folder_tags_tag on folio.folder_tags (tag_id);`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; state: ContainerState; created_by: string; created_at: Date; updated_at: Date };
-type FolderRow = { id: string; library_id: string; parent_id: string | null; level: FolderLevel; name: string; description: string; state: ContainerState; created_by: string; created_at: Date; updated_at: Date };
+type FolderRow = { id: string; library_id: string; parent_id: string | null; level: FolderLevel; name: string; description: string; state: ContainerState; created_by: string; created_at: Date; updated_at: Date; tags?: string[] };
 
 const fromLibraryRow = (r: LibraryRow): Library => ({
   id: r.id,
@@ -2089,6 +2124,7 @@ const fromFolderRow = (r: FolderRow): Folder => ({
   createdBy: r.created_by,
   createdAt: r.created_at.toISOString(),
   updatedAt: r.updated_at.toISOString(),
+  ...(r.tags ? { tags: r.tags } : {}),
 });
 
 /** Postgres says a unique index refused the row. */
@@ -2332,8 +2368,32 @@ export class PgFolioStore implements FolioStore {
   }
 
   async folders(library: string) {
-    const { rows } = await this.pool.query<FolderRow>(`select ${FOLDER_COLUMNS} from folio.folders where library_id = $1 order by lower(name), id`, [library]);
+    const { rows } = await this.pool.query<FolderRow>(
+      `select ${FOLDER_COLUMNS}, array(select ft.tag_id from folio.folder_tags ft where ft.folder_id = f.id order by ft.tag_id) as tags
+        from folio.folders f where library_id = $1 order by lower(name), id`,
+      [library],
+    );
     return rows.map(fromFolderRow);
+  }
+
+  async setFolderTags(library: string, folder: string, tags: string[]) {
+    const wanted = [...new Set(tags)];
+    const found = await this.inTransaction(async (client) => {
+      const { rowCount } = await client.query('select 1 from folio.folders where id = $1 and library_id = $2 for update', [folder, library]);
+      if (!rowCount) return false;
+      await client.query('delete from folio.folder_tags where folder_id = $1', [folder]);
+      if (!wanted.length) return true;
+      const { rowCount: added } = await client.query(
+        `insert into folio.folder_tags (folder_id, tag_id, workspace_id)
+          select f.id, t.id, l.workspace_id from folio.folders f join folio.libraries l on l.id = f.library_id
+            join folio.tags t on t.library_id is null or t.library_id = f.library_id
+          where f.id = $1 and t.id = any($2::text[])`,
+        [folder, wanted],
+      );
+      if (added !== wanted.length) throw new BadTagError('That tag isn’t the org’s or this library’s.');
+      return true;
+    });
+    return found ? (await this.folders(library)).find((f) => f.id === folder) : undefined;
   }
 
   async createFolder({ library, parent, level, name, description = '', createdBy }: { library: string; parent?: string; level?: FolderLevel; name: string; description?: string; createdBy: string }) {
@@ -2571,6 +2631,7 @@ export class PgFolioStore implements FolioStore {
         await client.query('update folio.placements set landed_library = null, landed_folder = null where landed_folder = $1', [id]);
         await client.query('delete from folio.series_followers where series_id in (select id from folio.series where folder_id = $1)', [id]);
         await client.query('delete from folio.series where folder_id = $1', [id]);
+        await client.query('delete from folio.folder_tags where folder_id = $1', [id]);
         const { rowCount } = await client.query('delete from folio.folders where id = $2 and library_id = $1', [library, id]);
         return rowCount === 1;
       });
@@ -2593,7 +2654,16 @@ export class PgFolioStore implements FolioStore {
       where.push('d.folder_id in (select id from place)');
     }
     const tags = [...new Set(query.tags ?? [])];
-    if (tags.length) where.push(`(select count(*) from folio.document_tags dt where dt.document_id = d.id and dt.tag_id = any(${param(tags)}::text[])) = ${param(tags.length)}`);
+    // A document has its own tags and those of every folder it's inside.
+    if (tags.length)
+      where.push(`(select count(distinct x.tag_id) from (
+          select dt.tag_id from folio.document_tags dt where dt.document_id = d.id
+          union all select ft.tag_id from folio.folder_tags ft where ft.folder_id in (
+            with recursive up(id, parent_id) as (
+              select f.id, f.parent_id from folio.folders f where f.id = d.folder_id
+              union all select f.id, f.parent_id from folio.folders f join up on f.id = up.parent_id)
+            select id from up)
+        ) x where x.tag_id = any(${param(tags)}::text[])) = ${param(tags.length)}`);
     if (query.mediaTypes?.length) where.push(`v.media_type = any(${param(query.mediaTypes)}::text[])`);
     if (query.authors?.length) where.push(`d.created_by = any(${param(query.authors)}::text[])`);
     if (query.from) where.push(`d.updated_at >= ${param(query.from)}::timestamptz`);
@@ -2841,6 +2911,12 @@ export class PgFolioStore implements FolioStore {
         select document_id, $1, workspace_id from folio.document_tags where tag_id = any($2::text[]) on conflict do nothing`,
       [into, absorbed],
     );
+    await client.query(
+      `insert into folio.folder_tags (folder_id, tag_id, workspace_id)
+        select folder_id, $1, workspace_id from folio.folder_tags where tag_id = any($2::text[]) on conflict do nothing`,
+      [into, absorbed],
+    );
+    await client.query('delete from folio.folder_tags where tag_id = any($1::text[])', [absorbed]);
     await this.untagViews(client, absorbed, into);
     await this.untagSeries(client, absorbed, into);
     await client.query('delete from folio.document_tags where tag_id = any($1::text[])', [absorbed]);
@@ -2899,6 +2975,7 @@ export class PgFolioStore implements FolioStore {
       await this.untagViews(client, [id]);
       await this.untagSeries(client, [id]);
       await client.query('delete from folio.document_tags where tag_id = $1', [id]);
+      await client.query('delete from folio.folder_tags where tag_id = $1', [id]);
       const { rowCount } = await client.query('delete from folio.tags where id = $1', [id]);
       return rowCount === 1;
     });
@@ -3212,6 +3289,11 @@ export class PgFolioStore implements FolioStore {
       await client.query('delete from folio.series_followers where series_id = $1', [id]);
       const { rows } = await client.query<{ folder_id: string }>('delete from folio.series where id = $1 returning folder_id', [id]);
       // Its series goes too, unless something else has been put in it.
+      await client.query(
+        `delete from folio.folder_tags ft where ft.folder_id = $1 and not exists (select 1 from folio.folders c where c.parent_id = ft.folder_id)
+          and not exists (select 1 from folio.documents d where d.folder_id = ft.folder_id)`,
+        [rows[0].folder_id],
+      );
       await client.query(
         `delete from folio.folders f where f.id = $1 and not exists (select 1 from folio.folders c where c.parent_id = f.id)
           and not exists (select 1 from folio.documents d where d.folder_id = f.id)`,

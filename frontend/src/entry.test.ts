@@ -104,6 +104,7 @@ const service = ({
       return Response.json({ ...v(2), state });
     }
     if (method === 'PUT' && /^\/libraries\/l-1(\/folders\/[^/]+)?\/state$/.test(where)) return Response.json({ ...hr, state: body.state });
+    if (method === 'PUT' && where === '/libraries/l-1/folders/f-hr/tags') return Response.json({ ...hr, tags: body.tags });
     if (method === 'GET' && where === '/libraries/l-1/moves') return Response.json({ moves: [{ id: 'm-1', record: 'f-hr', from: 'open', to: 'closed', by: 'u1', note: 'Year end', at: new Date().toISOString() }] });
     if (method === 'GET' && where === '/libraries/l-1/links') {
       const KINDS = [
@@ -766,6 +767,14 @@ describe('folio', () => {
     track.dispatchEvent(new CustomEvent('ui-move', { detail: { state: 'closed' } }));
     await settle(el);
     expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/folders/f-hr/state', { state: 'closed' }]);
+
+    // Its tags count for everything inside it.
+    const tags = el.querySelector('ui-dialog ui-tag-picker') as HTMLElement & { hint: string; values: string[] };
+    expect(tags.hint).toBe('They count for everything inside it when you filter.');
+    tags.dispatchEvent(new CustomEvent('ui-change', { detail: { values: ['t-pol'] } }));
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/folders/f-hr/tags', { tags: ['t-pol'] }]);
+    expect((el.querySelector('ui-dialog ui-tag-picker') as typeof tags).values).toEqual(['t-pol']);
   });
 
   it('says when a floor has no libraries, and who can start one', async () => {

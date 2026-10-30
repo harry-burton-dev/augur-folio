@@ -539,6 +539,32 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.markReminded(run.id, '2026-12-01')).toBe(true);
   });
 
+  it('counts a folder’s tags for everything inside it when filtering, and takes them along when tags merge or go', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const hr = await store.createFolder({ library: lib.id, name: 'HR', createdBy: 'u-1' });
+    const leave = await store.createFolder({ library: lib.id, parent: hr.id, name: 'Leave', createdBy: 'u-1' });
+    const people = await store.createTag({ workspace: 'w-fin', library: lib.id, name: 'People', createdBy: 'u-1' });
+    const policy = await store.createTag({ workspace: 'w-org', name: 'Policy', createdBy: 'u-1' });
+    const other = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Other', createdBy: 'u-1' });
+    const theirs = await store.createTag({ workspace: 'w-fin', library: other.id, name: 'Theirs', createdBy: 'u-1' });
+    await store.createDocument({ id: 'd-annual', library: lib.id, folder: leave.id, title: 'Annual leave', createdBy: 'u-1', tags: [policy.id] }, file('d-annual', 'v-annual'));
+    await store.createDocument({ id: 'd-loose', library: lib.id, title: 'Loose', createdBy: 'u-1', tags: [policy.id] }, file('d-loose', 'v-loose'));
+
+    expect(await store.setFolderTags(lib.id, hr.id, [people.id])).toMatchObject({ id: hr.id, tags: [people.id] });
+    await expect(store.setFolderTags(lib.id, hr.id, [theirs.id])).rejects.toBeInstanceOf(BadTagError);
+    expect(await store.setFolderTags(other.id, hr.id, [])).toBeUndefined();
+    const titles = async (tags: string[]) => (await store.documents(lib.id, { below: true, tags })).documents.map((d) => d.title);
+    expect(await titles([people.id])).toEqual(['Annual leave']);
+    expect(await titles([people.id, policy.id])).toEqual(['Annual leave']);
+    expect(await titles([policy.id])).toEqual(['Annual leave', 'Loose']);
+
+    // An org tag of the same name takes the library's in, on folders too; a tag that goes leaves them.
+    const orgPeople = await store.createTag({ workspace: 'w-org', name: 'people', createdBy: 'u-1' });
+    expect((await store.folders(lib.id)).find((f) => f.id === hr.id)?.tags).toEqual([orgPeople.id]);
+    expect(await store.deleteTag(orgPeople.id)).toBe(true);
+    expect((await store.folders(lib.id)).find((f) => f.id === hr.id)?.tags).toEqual([]);
+  });
+
   it('links records both ways, one of each kind to each, and unlinks only from where it starts', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     const ship = { app: 'atlas', kind: 'entity', id: 'ent_1', label: 'HMS Example' };
@@ -598,7 +624,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.links, folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.folder_tags, folio.links, folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
@@ -606,7 +632,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links', '013_folder_tags']);
   });
 
   it('tells the rendition worker of each new version once it is saved', async () => {
