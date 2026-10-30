@@ -884,11 +884,14 @@ export interface Place {
   published?: boolean;
   /** Something published up to this floor (`/received/<placement>`), or with `true` the list of them (`/received`). */
   received?: string | true;
+  /** What other floors have shared with the person (`/shared`). */
+  shared?: boolean;
 }
 
 export const placeFor = (path: string): Place => {
   const [first, second, third, fourth, fifth, sixth] = path.split('/').filter(Boolean).map(decodeURIComponent);
   if (first === 'published') return { published: true, adding: false };
+  if (first === 'shared') return { shared: true, adding: false };
   if (first === 'received') return { received: second || true, adding: false };
   if (first !== 'libraries' || !second) return { adding: false };
   if (second === 'new') return { adding: true };
@@ -901,8 +904,9 @@ export const placeFor = (path: string): Place => {
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder, view, series, document, version, published, received }: Omit<Place, 'adding'>) => {
+export const pathFor = ({ library, folder, view, series, document, version, published, received, shared }: Omit<Place, 'adding'>) => {
   if (published && !document) return '/published';
+  if (shared && !document) return '/shared';
   if (received && !document) return received === true ? '/received' : `/received/${encodeURIComponent(received)}`;
   if (!library) return '/libraries';
   const at = `/libraries/${encodeURIComponent(library)}`;
