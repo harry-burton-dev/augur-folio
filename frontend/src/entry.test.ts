@@ -3,7 +3,7 @@ import type { UiContents, UiDialog, UiFilterBar, UiList, UiPageHead, UiReader, U
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
-import { folderTrail, folderTree, type FolioApp } from './folio-app.js';
+import { DEFAULT_LEVELS, folderTrail, folderTree, type FolioApp } from './folio-app.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
 const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', freeTags: false, createdBy: 'u1', createdAt: '', updatedAt: '' };
@@ -40,10 +40,13 @@ const service = ({
   series = [] as unknown[],
   /** Travel policy as a series' issue: only issues still go out one version at a time. */
   anIssue = false,
+  /** Whether the caller may rename the levels: the org's leads, on the org's floor. */
+  renameLevels = false,
 } = {}) => {
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
   let folderGrants: (typeof KIM)[] = [];
+  let levels = DEFAULT_LEVELS.map((l) => ({ ...l }));
   let retried = false;
   /** Travel policy's newest version's lifecycle state, and its steps up the floors. */
   let state = 'in-progress';
@@ -66,6 +69,13 @@ const service = ({
       const tags = params.getAll('tag');
       const found = documents.filter((d) => !deleted.has(d.id) && (params.get('below') ? true : d.folder === (params.get('folder') ?? undefined)) && tags.every((t) => d.tags.includes(t)));
       return Response.json({ documents: found, total: found.length });
+    }
+    if (method === 'GET' && where === '/levels') return Response.json({ levels, top: ['collection'], can: { rename: renameLevels } });
+    const naming = where.match(/^\/levels\/([a-z]+)$/);
+    if (naming) {
+      const own = DEFAULT_LEVELS.find((l) => l.id === naming[1])!;
+      levels = levels.map((l) => (l.id === own.id ? { ...l, ...(method === 'PUT' ? body : { name: own.name, plural: own.plural }) } : l));
+      return Response.json({ levels });
     }
     if (method === 'GET' && where === '/series/s-1')
       return Response.json({ ...CASH, audience: [FINANCE], libraryName: 'Policies', following: false, next: { number: 3, periodStart: '2026-10-26', period: 'Week 44, 2026', dueBy: '2026-11-02', overdue: false }, can: { manage: lead, addIssue: true, publish: lead } });
@@ -871,6 +881,44 @@ describe('folio', () => {
     button(dialog, 'Add')!.click();
     await settle(el);
     expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/tags', { name: 'Expenses' }]);
+  });
+
+  it('lets the org’s leads rename the levels, and shows everyone else what they’re called', async () => {
+    const { fetch, calls } = service({ renameLevels: true });
+    const el = await mounted(fetch);
+    button(el, 'Level names')!.click();
+    await settle(el);
+    const levels = el.querySelector('folio-levels')!;
+    const list = () => levels.querySelector<UiList>('ui-list')!;
+    expect(list().items.map((i) => i.title)).toEqual(['Collection', 'Subcollection', 'Series', 'Subseries', 'File']);
+    expect(list().items[0].detail).toBe('More than one: Collections · Holds subcollections and series and files');
+    list().dispatchEvent(new CustomEvent('ui-action', { detail: { item: list().items[0], action: { id: 'rename' } } }));
+    await settle(el);
+    levels.querySelector('ui-text-field[name="level-name"]')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'Programme' } }));
+    levels.querySelector('ui-text-field[name="level-plural"]')!.dispatchEvent(new CustomEvent('ui-input', { detail: { value: 'Programmes' } }));
+    await settle(el);
+    button(levels, 'Save')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/levels/collection', { name: 'Programme', plural: 'Programmes' }]);
+    expect(list().items[0]).toMatchObject({ title: 'Programme', detail: expect.stringContaining('Its own name is Collection') });
+    expect(levels.querySelector('[role=status]')!.textContent).toBe('The whole org calls it Programme now.');
+    // The rest of Artifacts calls it that straight away.
+    expect(el.querySelector<FolioApp>('folio-app')!.levels[0].name).toBe('Programme');
+
+    list().dispatchEvent(new CustomEvent('ui-action', { detail: { item: list().items[0], action: { id: 'reset' } } }));
+    await settle(el);
+    expect(calls).toContainEqual(['DELETE', '/api/folio/v1/levels/collection']);
+    expect(list().items[0].title).toBe('Collection');
+  });
+
+  it('shows the level names, unchangeable, to anyone who isn’t one of the org’s leads', async () => {
+    const { fetch } = service();
+    const el = await mounted(fetch);
+    button(el, 'Level names')!.click();
+    await settle(el);
+    const levels = el.querySelector('folio-levels')!;
+    expect(levels.querySelector<UiList>('ui-list')!.items.every((i) => !i.actions)).toBe(true);
+    expect(levels.textContent).toContain('The org’s leads choose what they’re called, from the org’s floor.');
   });
 
   it('shows who can see a library, and shares it with someone found by name', async () => {
