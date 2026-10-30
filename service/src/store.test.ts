@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { following, periodStart } from './cadence.ts';
-import { BadParentError, BadTagError, ClosedError, MemoryFolioStore, migrations, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
+import { BadParentError, BadTagError, ClosedError, LinkedError, MemoryFolioStore, migrations, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
 
 const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
 const titles = async (store: FolioStore, library: string, query = {}) => (await store.documents(library, query)).documents.map((d) => d.title);
@@ -539,6 +539,20 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.markReminded(run.id, '2026-12-01')).toBe(true);
   });
 
+  it('links records both ways, one of each kind to each, and unlinks only from where it starts', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const ship = { app: 'atlas', kind: 'entity', id: 'ent_1', label: 'HMS Example' };
+    const about = await store.link({ library: lib.id, from: 'd-1', relation: 'about', to: ship, by: 'u-1' });
+    const answers = await store.link({ library: lib.id, from: 'd-2', relation: 'responds-to', to: { app: 'folio', kind: 'unit', id: `${lib.id}/d-1`, label: 'Plan' }, by: 'u-1' });
+    await expect(store.link({ library: lib.id, from: 'd-1', relation: 'about', to: ship, by: 'u-2' })).rejects.toBeInstanceOf(LinkedError);
+    expect(about).toMatchObject({ library: lib.id, from: 'd-1', relation: 'about', to: ship, by: 'u-1' });
+    const seen = await store.links('d-1', `${lib.id}/d-1`);
+    expect([seen.from.map((l) => l.id), seen.to.map((l) => l.id)]).toEqual([[about.id], [answers.id]]);
+    expect(await store.unlink('d-1', answers.id)).toBeUndefined();
+    expect(await store.unlink('d-2', answers.id)).toMatchObject({ relation: 'responds-to' });
+    expect((await store.links('d-1', `${lib.id}/d-1`)).to).toEqual([]);
+  });
+
   it('tells other apps what happened, with ids and no titles', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
@@ -584,7 +598,7 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   behavesLikeAStore(
     () => store,
     async () => {
-      await admin.query('truncate folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
+      await admin.query('truncate folio.links, folio.placements, folio.state_moves, folio.level_names, folio.looked, folio.series_followers, folio.series, folio.outbox, folio.publications, folio.readers, folio.grants, folio.renditions, folio.views, folio.document_tags, folio.tags, folio.people, folio.document_versions, folio.documents, folio.folders, folio.libraries');
     },
     async () => (await admin.query('select topic, workspace_id as workspace, payload from folio.outbox order by id')).rows,
   );
