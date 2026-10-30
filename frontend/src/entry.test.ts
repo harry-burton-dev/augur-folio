@@ -180,6 +180,7 @@ const ctx = (fetch: MountContext['fetch'], path = '/libraries'): MountContext =>
   path,
   workspace: floor,
   getWorkspace: () => floor,
+  previewOn: () => false,
   fetch,
 });
 
