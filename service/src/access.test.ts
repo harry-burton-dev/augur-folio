@@ -130,6 +130,38 @@ describe('folio access', () => {
     expect((await call(kim1, 'PUT', `/v1/libraries/${library}/documents/${travel.id}/access/tree:w-fin`, { level: 'read' })).json().error).toBe('already-in');
   });
 
+  it('shares a folder, and so everything inside it, only while it stays inside', async () => {
+    const { app, call, library, audited } = await setup();
+    const lead = on(sam, 'w-fin', 'lead');
+    const hr = (await call(lead, 'POST', `/v1/libraries/${library}/folders`, { name: 'HR' })).json();
+    const leave = (await call(lead, 'POST', `/v1/libraries/${library}/folders`, { name: 'Leave', parent: hr.id })).json();
+    const inside = (
+      await app.inject({ method: 'POST', url: `/v1/libraries/${library}/documents?filename=annual.md&folder=${leave.id}`, headers: { ...callerHeaders(lead), 'content-type': 'text/markdown' }, payload: '# Annual' })
+    ).json();
+    const kim1 = on(kim, 'w-legal');
+    expect((await call(kim1, 'GET', `/v1/libraries/${library}/documents/${inside.id}`)).statusCode).toBe(404);
+
+    // Only whoever manages the library shares a folder.
+    expect((await call(on(alex, 'w-fin'), 'PUT', `/v1/libraries/${library}/folders/${hr.id}/access/team:w-legal`, { level: 'read' })).statusCode).toBe(403);
+    const res = await call(lead, 'PUT', `/v1/libraries/${library}/folders/${hr.id}/access/team:w-legal`, { level: 'read' });
+    expect(res.json()).toMatchObject({ floor: { principal: 'tree:w-fin' }, library: [], grants: [{ principal: 'team:w-legal', name: 'Legal', level: 'read' }], can: { share: true } });
+    expect(audited.at(-1)).toMatchObject({ action: 'access.granted', target: hr.id, detail: { folder: hr.id, name: 'HR', principal: 'team:w-legal', level: 'read' } });
+    expect((await call(lead, 'GET', `/v1/libraries/${library}/folders/missing/access`)).statusCode).toBe(404);
+
+    // Kim reads what's inside it, a folder down, and sees why; the library itself stays closed to them.
+    expect((await call(kim1, 'GET', `/v1/libraries/${library}/documents/${inside.id}`)).json()).toMatchObject({ level: 'read', can: { change: false } });
+    expect((await call(kim1, 'GET', `/v1/libraries/${library}`)).statusCode).toBe(404);
+    expect((await call(kim1, 'GET', '/v1/shared')).json().documents.map((d: { title: string }) => d.title)).toEqual(['annual']);
+    expect((await call(lead, 'GET', `/v1/libraries/${library}/documents/${inside.id}/access`)).json().folders).toMatchObject([{ principal: 'team:w-legal', folder: hr.id }]);
+
+    // Moved out, it isn't shared with them any more; shared no more, nor is anything inside.
+    await call(lead, 'PATCH', `/v1/libraries/${library}/documents/${inside.id}`, { folder: null });
+    expect((await call(kim1, 'GET', `/v1/libraries/${library}/documents/${inside.id}`)).statusCode).toBe(404);
+    await call(lead, 'PATCH', `/v1/libraries/${library}/documents/${inside.id}`, { folder: leave.id });
+    expect((await call(lead, 'DELETE', `/v1/libraries/${library}/folders/${hr.id}/access/team:w-legal`)).json().grants).toEqual([]);
+    expect((await call(kim1, 'GET', `/v1/libraries/${library}/documents/${inside.id}`)).statusCode).toBe(404);
+  });
+
   it('shares only with people and teams that exist', async () => {
     const { call, library } = await setup();
     const lead = on(sam, 'w-fin', 'lead');

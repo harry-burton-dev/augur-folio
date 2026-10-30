@@ -138,7 +138,7 @@ export const placementRoutes = async (app: FastifyInstance, { store, audit, onFl
   const manages = async (caller: OnFloor, library: HeldLibrary, record: RecordRefIn) => {
     if (rightsOn(caller, library).manage) return true;
     if (record.kind !== 'document') return false;
-    return reaches(furthest(library.level, levelFrom(await store.grants(library.id, record.id), await principalsOf(caller))), 'manage');
+    return reaches(furthest(library.level, levelFrom(await store.grantsOn(record.id), await principalsOf(caller))), 'manage');
   };
 
   /** Who may change a step's filter, or take it back: whoever published it, from the floor it came from. */

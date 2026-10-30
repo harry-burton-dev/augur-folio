@@ -43,6 +43,7 @@ const service = ({
 } = {}) => {
   const calls: [string, string, unknown?][] = [];
   let grants: (typeof KIM)[] = [KIM];
+  let folderGrants: (typeof KIM)[] = [];
   let retried = false;
   /** Travel policy's newest version's lifecycle state, and its steps up the floors. */
   let state = 'in-progress';
@@ -198,6 +199,14 @@ const service = ({
     if (method === 'GET' && route === '/shared') return Response.json(shared);
     if (method === 'GET' && where === '/people') return Response.json({ people: [{ id: 'u4', name: 'Ola Bello', email: 'ola@example.org' }], teams: [{ id: 'w-legal', name: 'Legal', within: [] }] });
     if (where === '/libraries/l-1/access') return Response.json({ floor: FINANCE, grants, can: { share: lead } });
+    if (where === '/libraries/l-1/folders/f-hr/access') return Response.json({ floor: FINANCE, grants: folderGrants, library: grants, can: { share: lead } });
+    const folderSharing = where.match(/^\/libraries\/l-1\/folders\/f-hr\/access\/(.+)$/);
+    if (folderSharing) {
+      const principal = decodeURIComponent(folderSharing[1]);
+      folderGrants = folderGrants.filter((g) => g.principal !== principal);
+      if (method === 'PUT') folderGrants = [...folderGrants, { ...KIM, principal, kind: 'tree', name: 'Legal', level: body.level }];
+      return Response.json({ floor: FINANCE, grants: folderGrants, library: grants, can: { share: true } });
+    }
     const sharing = where.match(/^\/libraries\/l-1\/access\/(.+)$/);
     if (sharing) {
       const principal = decodeURIComponent(sharing[1]);
@@ -908,6 +917,33 @@ describe('folio', () => {
     await settle(el);
     expect(calls).toContainEqual(['DELETE', '/api/folio/v1/libraries/l-1/access/person%3Au3']);
     expect(shared().map((i) => i.title)).toEqual(['Ola Bello', 'Legal (just that team)']);
+  });
+
+  it('shares a folder, and so everything inside it, from inside the folder', async () => {
+    const { fetch, calls } = service();
+    const el = await mounted(fetch, '/libraries/l-1/f-hr');
+    button(el, 'Share')!.click();
+    await settle(el);
+    const dialog = el.querySelector<UiDialog>('ui-dialog')!;
+    expect([dialog.getAttribute('eyebrow'), dialog.heading]).toEqual(['Subcollection', 'Who can see HR']);
+    const share = el.querySelector('folio-share')!;
+    expect(share.querySelector('.folio-share-floor')!.textContent).toContain('sees everything inside it, while it’s inside');
+    const lists = () => [...share.querySelectorAll<UiList>('ui-list')].map((l) => [l.label, l.items.map((i) => i.title)]);
+    expect(lists()).toEqual([
+      ['Shared with, for this folder', []],
+      ['Shared with, through its library', ['Kim Lee']],
+    ]);
+
+    const picker = share.querySelector('ui-people-picker')!;
+    await picker.find('leg');
+    await settle(el);
+    const found = picker.shadowRoot!.querySelector<UiList>('ui-list')!;
+    found.dispatchEvent(new CustomEvent('ui-open', { detail: { item: found.items[1] } }));
+    await settle(el);
+    button(share, 'Share')!.click();
+    await settle(el);
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/folders/f-hr/access/tree%3Aw-legal', { level: 'read' }]);
+    expect(lists()[0]).toEqual(['Shared with, for this folder', ['Legal and the teams below it']]);
   });
 
   it('asks for who can open it, explained, and says so when nothing can explain it', async () => {

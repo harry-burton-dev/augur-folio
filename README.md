@@ -137,6 +137,8 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `GET /libraries/:id/access`, `GET /libraries/:id/documents/:doc/access` | Who may see it: its floor, who has been let in (for a document, into it and into its library), and whether the caller may share it |
 | `PUT /libraries/:id/access/:principal` `{level}`, `DELETE …` | Let a person or team into the library that far (read, edit or manage), or take them out (managers). `:principal` is `person:<id>`, `team:<id>`, `tree:<id>` or `org` |
 | `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
+| `GET /libraries/:id/folders/:folder/access` | Who may see a folder: its floor, who has been let into its library, and who into the folder |
+| `PUT /libraries/:id/folders/:folder/access/:principal` `{level}`, `DELETE …` | Let a person or team into a folder and everything inside it, while it stays inside (whoever manages the library). A document's access lists these under `folders` |
 | `GET /people?q=` | People and teams to share with, by name |
 | `GET /shared` | Libraries and documents shared with the caller from other floors |
 | `POST /libraries/:id/documents/:doc/publish` `{version, audience, note?}` | Put a version of a series' issue out to `audience` (`team:<id>`, `tree:<id>` or `org`), in place of what was out, and tell them (whoever manages it). Any other document answers 410 `publish-up`: it's published up the floors (`POST /placements`), and what was published this way before is moved there by itself |

@@ -412,6 +412,8 @@ export interface Grant {
   library: string;
   /** Just this document; the whole library when there's none. */
   document?: string;
+  /** This folder and everything inside it, for a grant on a folder. */
+  folder?: string;
   principal: string;
   level: Level;
   createdBy: string;
@@ -576,6 +578,12 @@ export interface FolioStore {
   grants(library: string, document?: string): Promise<Grant[]>;
   /** Lets a principal in that far, or with `level: null` takes them out. Each document's readers follow. */
   setGrant(input: { library: string; document?: string; principal: string; level: Level | null; by: string }): Promise<Grant | undefined>;
+  /** Who has been let into a folder, and so into everything inside it. */
+  folderGrants(library: string, folder: string): Promise<Grant[]>;
+  /** Lets a principal into a folder and everything inside it, or with `level: null` takes them out. Its documents' readers follow. */
+  setFolderGrant(input: { library: string; folder: string; principal: string; level: Level | null; by: string }): Promise<Grant | undefined>;
+  /** Every grant that reaches a document of its own: on it, and on each folder it's inside. Not the library's. */
+  grantsOn(document: string): Promise<Grant[]>;
   /** Everyone who may read a document: its library's floor, and whoever has been let into the library or the document. */
   readers(document: string): Promise<string[]>;
   /** What has been shared with these principals, in libraries on floors other than `except`. */
@@ -754,6 +762,7 @@ export class MemoryFolioStore implements FolioStore {
   private readonly viewList: SavedView[] = [];
   private readonly seen = new Map<string, string>();
   private readonly grantList: Grant[] = [];
+  private folderGrantList: Grant[] = [];
   private readonly pubs: Publication[] = [];
   private readonly seriesList: (Omit<Series, 'issues' | 'last'> & { remindedFor?: string })[] = [];
   private readonly following = new Map<string, Set<string>>();
@@ -993,6 +1002,7 @@ export class MemoryFolioStore implements FolioStore {
     if (folders.some((f) => f.parent === id)) throw new NotEmptyError('Empty the folder first: it has folders in it.');
     if ([...this.docs.values()].some((d) => d.folder === id && !d.deletedAt)) throw new NotEmptyError('Empty the folder first: it has documents in it.');
     this.folderList.splice(this.folderList.findIndex((f) => f.id === id), 1);
+    this.folderGrantList = this.folderGrantList.filter((g) => g.folder !== id);
     // An empty series takes its schedule with it, and what had landed in it goes back to "From below".
     for (const run of this.seriesList.filter((r) => r.folder === id)) await this.deleteSeries(run.id);
     for (const p of this.placementList) if (p.landed?.folder === id) delete p.landed;
@@ -1304,7 +1314,35 @@ export class MemoryFolioStore implements FolioStore {
   private readersOf(library: string, document: string) {
     const floor = this.shelves.get(library)?.floor;
     const granted = this.grantList.filter((g) => g.library === library && (!g.document || g.document === document)).map((g) => g.principal);
-    return [...new Set([...(floor ? [floor] : []), ...granted])].sort();
+    const inherited = this.folderGrantsAbove(document).map((g) => g.principal);
+    return [...new Set([...(floor ? [floor] : []), ...granted, ...inherited])].sort();
+  }
+
+  /** The grants on every folder a document is inside. */
+  private folderGrantsAbove(document: string) {
+    const above = new Set<string>();
+    for (let at = this.docs.get(document)?.folder; at; at = this.folderList.find((f) => f.id === at)?.parent) above.add(at);
+    return this.folderGrantList.filter((g) => above.has(g.folder!));
+  }
+
+  async folderGrants(library: string, folder: string) {
+    return this.folderGrantList.filter((g) => g.library === library && g.folder === folder).map((g) => ({ ...g })).sort((a, b) => a.principal.localeCompare(b.principal));
+  }
+
+  async setFolderGrant({ library, folder, principal, level, by }: { library: string; folder: string; principal: string; level: Level | null; by: string }) {
+    const shelf = await this.library(library);
+    if (level && (!shelf || !this.folderList.some((f) => f.id === folder && f.library === library))) throw new BadParentError('There’s no such library or folder.');
+    const at = this.folderGrantList.findIndex((g) => g.folder === folder && g.principal === principal);
+    if (at >= 0) this.folderGrantList.splice(at, 1);
+    if (shelf) this.tell(TOPICS.readersChanged, shelf.workspace, { library });
+    if (!level) return undefined;
+    const grant: Grant = { library, folder, principal, level, createdBy: by, createdAt: new Date().toISOString() };
+    this.folderGrantList.push(grant);
+    return { ...grant };
+  }
+
+  async grantsOn(document: string) {
+    return [...this.grantList.filter((g) => g.document === document), ...this.folderGrantsAbove(document)].map((g) => ({ ...g }));
   }
 
   async grants(library: string, document?: string) {
@@ -1341,7 +1379,7 @@ export class MemoryFolioStore implements FolioStore {
     const documents = [...this.docs.values()]
       .filter((d) => !d.deletedAt && d.workspace !== except && !reached.has(d.library) && !this.shelves.get(d.library)?.archivedAt)
       .flatMap((d) => {
-        const level = levelFrom(mine.filter((g) => g.document === d.id), principals);
+        const level = levelFrom([...mine.filter((g) => g.document === d.id), ...this.folderGrantsAbove(d.id)], principals);
         return level ? [{ ...this.withLatest(d), level }] : [];
       })
       .sort(byTitle);
@@ -1455,7 +1493,10 @@ export class MemoryFolioStore implements FolioStore {
     this.following.delete(id);
     // Its series goes too, unless something else has been put in it.
     const folder = this.folderList.findIndex((f) => f.id === run.folder);
-    if (folder >= 0 && !this.folderList.some((f) => f.parent === run.folder) && ![...this.docs.values()].some((d) => d.folder === run.folder && !d.deletedAt)) this.folderList.splice(folder, 1);
+    if (folder >= 0 && !this.folderList.some((f) => f.parent === run.folder) && ![...this.docs.values()].some((d) => d.folder === run.folder && !d.deletedAt)) {
+      this.folderList.splice(folder, 1);
+      this.folderGrantList = this.folderGrantList.filter((g) => g.folder !== run.folder);
+    }
     return true;
   }
 
@@ -1924,6 +1965,22 @@ export const migrations: { id: string; sql: string }[] = [
         primary key (folder_id, tag_id)
       );
       create index folder_tags_tag on folio.folder_tags (tag_id);`,
+  },
+  {
+    id: '014_folder_grants',
+    sql: `
+      -- Who has been let into a folder, and so into everything inside it.
+      create table folio.folder_grants (
+        workspace_id text not null,
+        library_id text not null references folio.libraries (id),
+        folder_id text not null references folio.folders (id),
+        principal text not null check (principal ~ '^((person|team|tree):.+|org)$'),
+        level text not null check (level in ('read', 'edit', 'manage')),
+        created_by text not null,
+        created_at timestamptz not null default now(),
+        primary key (folder_id, principal)
+      );
+      create index folder_grants_principal on folio.folder_grants (principal);`,
   },
 ];
 
@@ -2632,6 +2689,7 @@ export class PgFolioStore implements FolioStore {
         await client.query('delete from folio.series_followers where series_id in (select id from folio.series where folder_id = $1)', [id]);
         await client.query('delete from folio.series where folder_id = $1', [id]);
         await client.query('delete from folio.folder_tags where folder_id = $1', [id]);
+        await client.query('delete from folio.folder_grants where folder_id = $1', [id]);
         const { rowCount } = await client.query('delete from folio.folders where id = $2 and library_id = $1', [library, id]);
         return rowCount === 1;
       });
@@ -2719,6 +2777,7 @@ export class PgFolioStore implements FolioStore {
             select distinct p from (
               select coalesce(l.floor_principal, 'tree:' || l.workspace_id) as p
               union all select g.principal from folio.grants g where g.library_id = d.library_id and (g.document_id is null or g.document_id = d.id)
+              union all select fg.principal from folio.folder_grants fg where fg.folder_id in (${FOLDERS_ABOVE('d.folder_id')})
             ) x order by p)
           from folio.documents d join folio.libraries l on l.id = d.library_id
           where d.library_id = $1 and ($2::text is null or d.id = $2)
@@ -2800,6 +2859,14 @@ export class PgFolioStore implements FolioStore {
     if (!rowCount) {
       if (change.folder && (await this.document(id))) throw new BadParentError('That folder isn’t in this library.');
       return undefined;
+    }
+    // Moved, it's let in by the grants on the folders it's inside now.
+    if (change.folder !== undefined) {
+      const { rows } = await this.pool.query<{ library_id: string }>('select library_id from folio.documents where id = $1', [id]);
+      await this.inTransaction(async (client) => {
+        await client.query("select pg_advisory_xact_lock(hashtext('folio.grants'), hashtext($1))", [rows[0].library_id]);
+        await this.writeReaders(client, rows[0].library_id, id);
+      });
     }
     return this.document(id);
   }
@@ -3118,6 +3185,45 @@ export class PgFolioStore implements FolioStore {
     return rows[0]?.principals ?? [];
   }
 
+  async folderGrants(library: string, folder: string) {
+    const { rows } = await this.pool.query<GrantRow>(`select ${FOLDER_GRANT_COLUMNS} from folio.folder_grants where library_id = $1 and folder_id = $2 order by principal`, [library, folder]);
+    return rows.map(fromGrantRow);
+  }
+
+  async setFolderGrant({ library, folder, principal, level, by }: { library: string; folder: string; principal: string; level: Level | null; by: string }) {
+    return this.inTransaction(async (client) => {
+      // The same lock as the library's own grants: its readers are written from the grants as they end up.
+      await client.query("select pg_advisory_xact_lock(hashtext('folio.grants'), hashtext($1))", [library]);
+      await client.query('delete from folio.folder_grants where library_id = $1 and folder_id = $2 and principal = $3', [library, folder, principal]);
+      let grant: Grant | undefined;
+      if (level) {
+        const { rows } = await client.query<GrantRow>(
+          `insert into folio.folder_grants (workspace_id, library_id, folder_id, principal, level, created_by)
+            select l.workspace_id, l.id, f.id, $3, $4, $5 from folio.libraries l join folio.folders f on f.library_id = l.id and f.id = $2
+            where l.id = $1 and l.archived_at is null
+            returning ${FOLDER_GRANT_COLUMNS}`,
+          [library, folder, principal, level, by],
+        );
+        if (!rows[0]) throw new BadParentError('There’s no such library or folder.');
+        grant = fromGrantRow(rows[0]);
+      }
+      await this.writeReaders(client, library);
+      const { rows: shelf } = await client.query<{ workspace_id: string }>('select workspace_id from folio.libraries where id = $1', [library]);
+      if (shelf[0]) await tell(client, TOPICS.readersChanged, shelf[0].workspace_id, { library });
+      return grant;
+    });
+  }
+
+  async grantsOn(document: string) {
+    const { rows } = await this.pool.query<GrantRow>(
+      `select ${GRANT_COLUMNS.split(', ').map((c) => `g.${c}`).join(', ')}, null as folder_id from folio.grants g where g.document_id = $1
+        union all select fg.library_id, null, fg.principal, fg.level, fg.created_by, fg.created_at, fg.folder_id from folio.folder_grants fg
+          where fg.folder_id in (${FOLDERS_ABOVE('(select d.folder_id from folio.documents d where d.id = $1)')})`,
+      [document],
+    );
+    return rows.map(fromGrantRow);
+  }
+
   async shared(principals: readonly string[], except: string): Promise<Shared> {
     const { rows: libraries } = await this.pool.query<LibraryRow & { level: Level }>(
       `select ${LIBRARY_COLUMNS.split(', ').map((c) => `l.${c}`).join(', ')}, g.level from folio.libraries l
@@ -3133,8 +3239,10 @@ export class PgFolioStore implements FolioStore {
       `${DOCUMENT_SELECT}
         join folio.libraries l on l.id = d.library_id and l.archived_at is null
         cross join lateral (
-          select level from folio.grants g where g.document_id = d.id and g.principal = any($1::text[])
-          order by array_position(array['read', 'edit', 'manage'], level) desc limit 1
+          select level from (
+            select g.level from folio.grants g where g.document_id = d.id and g.principal = any($1::text[])
+            union all select fg.level from folio.folder_grants fg where fg.principal = any($1::text[]) and fg.folder_id in (${FOLDERS_ABOVE('d.folder_id')})
+          ) x order by array_position(array['read', 'edit', 'manage'], level) desc limit 1
         ) g
         where d.deleted_at is null and d.workspace_id <> $2
           and not exists (select 1 from folio.grants lg where lg.library_id = d.library_id and lg.document_id is null and lg.principal = any($1::text[]))
@@ -3290,6 +3398,11 @@ export class PgFolioStore implements FolioStore {
       const { rows } = await client.query<{ folder_id: string }>('delete from folio.series where id = $1 returning folder_id', [id]);
       // Its series goes too, unless something else has been put in it.
       await client.query(
+        `delete from folio.folder_grants fg where fg.folder_id = $1 and not exists (select 1 from folio.folders c where c.parent_id = fg.folder_id)
+          and not exists (select 1 from folio.documents d where d.folder_id = fg.folder_id)`,
+        [rows[0].folder_id],
+      );
+      await client.query(
         `delete from folio.folder_tags ft where ft.folder_id = $1 and not exists (select 1 from folio.folders c where c.parent_id = ft.folder_id)
           and not exists (select 1 from folio.documents d where d.folder_id = ft.folder_id)`,
         [rows[0].folder_id],
@@ -3400,11 +3513,18 @@ export class PgFolioStore implements FolioStore {
   }
 }
 
-type GrantRow = { library_id: string; document_id: string | null; principal: string; level: Level; created_by: string; created_at: Date };
+type GrantRow = { library_id: string; document_id?: string | null; folder_id?: string | null; principal: string; level: Level; created_by: string; created_at: Date };
 const GRANT_COLUMNS = 'library_id, document_id, principal, level, created_by, created_at';
+const FOLDER_GRANT_COLUMNS = 'library_id, folder_id, principal, level, created_by, created_at';
+/** The ids of a folder and every folder it's inside, as a subquery: `folder` is a column or parameter. */
+const FOLDERS_ABOVE = (folder: string) => `with recursive up(id, parent_id) as (
+    select f.id, f.parent_id from folio.folders f where f.id = ${folder}
+    union all select f.id, f.parent_id from folio.folders f join up on f.id = up.parent_id)
+  select id from up`;
 const fromGrantRow = (r: GrantRow): Grant => ({
   library: r.library_id,
   ...(r.document_id ? { document: r.document_id } : {}),
+  ...(r.folder_id ? { folder: r.folder_id } : {}),
   principal: r.principal,
   level: r.level,
   createdBy: r.created_by,

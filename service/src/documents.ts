@@ -154,7 +154,7 @@ export const documentFinder =
   async (caller, params, reply, { audience = false } = {}) => {
     const [doc, shelf] = await Promise.all([store.document(params.doc), reach(caller, params.id)]);
     const principals = doc && shelf && doc.library === shelf.id ? await principalsOf(caller) : undefined;
-    const level = principals ? furthest(shelf!.level, levelFrom(await store.grants(shelf!.id, doc!.id), principals)) : undefined;
+    const level = principals ? furthest(shelf!.level, levelFrom(await store.grantsOn(doc!.id), principals)) : undefined;
     const published = !level && audience && principals && doc!.published?.audience.some((a) => principals.includes(a)) ? doc!.published.version : undefined;
     // Or through a floor it was published up to: the newest version that floor lets through.
     const only = published ?? (!level && audience && principals ? await reachedVersion(store, doc!.id, principals) : undefined);

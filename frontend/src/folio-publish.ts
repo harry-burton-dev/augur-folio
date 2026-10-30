@@ -90,7 +90,7 @@ export class FolioPublish extends LitElement {
   private async load() {
     this.failure = '';
     try {
-      const [history, access] = await Promise.all([this.api.publications(this.library, this.document), this.api.access(this.library, this.document)]);
+      const [history, access] = await Promise.all([this.api.publications(this.library, this.document), this.api.access(this.library, { document: this.document })]);
       this.history = history;
       this.floor = access.floor;
       this.chosen = this.startWith(history, access.floor);

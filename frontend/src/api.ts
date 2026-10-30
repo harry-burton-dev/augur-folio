@@ -298,10 +298,15 @@ export interface Access {
   floor: Principal;
   /** Who has been let into this library, or into this document. */
   grants: Grant[];
-  /** For a document: who has been let into its whole library. */
+  /** For a document or a folder: who has been let into its whole library. */
   library?: Grant[];
+  /** For a document: who has been let into a folder it's inside, and so into it. */
+  folders?: (Grant & { folder: string })[];
   can: { share: boolean };
 }
+
+/** Something in a library to share on its own: one document, or a folder and everything inside it. */
+export type AccessTarget = { document: string; folder?: undefined } | { folder: string; document?: undefined };
 
 /** People and teams found to share with. */
 export interface Found {
@@ -761,19 +766,20 @@ export class FolioApi {
     return this.call<void>('DELETE', `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(id)}`);
   }
 
-  /** Who may see a library, or with `document` one of its documents. */
-  access(library: string, document?: string) {
-    return this.call<Access>('GET', `${this.accessPath(library, document)}`);
+  /** Who may see a library, or one of its documents or folders. */
+  access(library: string, on?: AccessTarget) {
+    return this.call<Access>('GET', this.accessPath(library, on));
   }
 
   /** Lets someone in that far, or with `null` takes them out; answers who may see it now. */
-  share(library: string, document: string | undefined, principal: string, level: Level | null) {
-    const path = `${this.accessPath(library, document)}/${encodeURIComponent(principal)}`;
+  share(library: string, on: AccessTarget | undefined, principal: string, level: Level | null) {
+    const path = `${this.accessPath(library, on)}/${encodeURIComponent(principal)}`;
     return level ? this.call<Access>('PUT', path, { level }) : this.call<Access>('DELETE', path);
   }
 
-  private accessPath(library: string, document?: string) {
-    return `/libraries/${encodeURIComponent(library)}${document ? `/documents/${encodeURIComponent(document)}` : ''}/access`;
+  private accessPath(library: string, on?: AccessTarget) {
+    const within = on?.document ? `/documents/${encodeURIComponent(on.document)}` : on?.folder ? `/folders/${encodeURIComponent(on.folder)}` : '';
+    return `/libraries/${encodeURIComponent(library)}${within}/access`;
   }
 
   /** People and teams whose names have `q` in them, to share with. */

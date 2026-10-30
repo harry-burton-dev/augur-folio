@@ -5,7 +5,7 @@ import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { documentFinder, documentRights, type HeldDocument } from './documents.ts';
 import { describePrincipals, type CallerPrincipals } from './people.ts';
 import { LEVELS } from '@augur/records';
-import { PRINCIPAL, reaches, type FolioStore, type Grant, type Level } from './store.ts';
+import { PRINCIPAL, reaches, type Folder, type FolioStore, type Grant, type Level } from './store.ts';
 
 export interface AccessDeps {
   store: FolioStore;
@@ -24,8 +24,9 @@ const LEVEL_BODY = { type: 'object', additionalProperties: false, required: ['le
 
 
 /**
- * Who may see a library or a document, and letting people and teams in: a
- * grant on a library reaches all of it, one on a document just that. Anyone who
+ * Who may see a library, a folder or a document, and letting people and teams
+ * in: a grant on a library reaches all of it, one on a folder everything inside
+ * it, one on a document just that. Anyone who
  * can see it can see who else can; whoever manages it can change that. Every
  * change is on the record, and each document's readers follow it at once.
  */
@@ -46,8 +47,16 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
   };
 
   const documentAccess = async (caller: OnFloor, doc: HeldDocument) => {
-    const [library, grants] = await Promise.all([libraryAccess(doc.shelf), store.grants(doc.library, doc.id)]);
-    return { ...library, library: library.grants, grants: await withNames(grants), can: { share: documentRights(caller, doc).share } };
+    const [library, grants, on] = await Promise.all([libraryAccess(doc.shelf), store.grants(doc.library, doc.id), store.grantsOn(doc.id)]);
+    const folders = on.filter((g) => g.folder);
+    return {
+      ...library,
+      library: library.grants,
+      // Let in to a folder it's inside, and so to it.
+      ...(folders.length ? { folders: (await withNames(folders)).map((g, i) => ({ ...g, folder: folders[i].folder })) } : {}),
+      grants: await withNames(grants),
+      can: { share: documentRights(caller, doc).share },
+    };
   };
 
   const recorded = (entry: Parameters<Audit>[0]) =>
@@ -68,18 +77,19 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
   };
 
   /** Lets a principal in, changes how far, or takes them out; on the record either way. */
-  const change = async (caller: OnFloor, target: { library: HeldLibrary; document?: HeldDocument }, principal: string, level: Level | null) => {
-    const { library, document } = target;
-    const was = (await store.grants(library.id, document?.id)).find((g) => g.principal === principal)?.level;
+  const change = async (caller: OnFloor, target: { library: HeldLibrary; document?: HeldDocument; folder?: Folder }, principal: string, level: Level | null) => {
+    const { library, document, folder } = target;
+    const was = (folder ? await store.folderGrants(library.id, folder.id) : await store.grants(library.id, document?.id)).find((g) => g.principal === principal)?.level;
     if (was === (level ?? undefined)) return;
-    await store.setGrant({ library: library.id, document: document?.id, principal, level, by: caller.id });
+    if (folder) await store.setFolderGrant({ library: library.id, folder: folder.id, principal, level, by: caller.id });
+    else await store.setGrant({ library: library.id, document: document?.id, principal, level, by: caller.id });
     const action = !level ? 'access.removed' : was ? 'access.changed' : 'access.granted';
     await recorded({
       actor: caller.id,
       action,
-      target: document?.id ?? library.id,
+      target: document?.id ?? folder?.id ?? library.id,
       workspace: library.workspace,
-      detail: { library: library.id, ...(document ? { document: document.id, title: document.title } : { name: library.name }), principal, ...(level ? { level } : {}), ...(was ? { was } : {}) },
+      detail: { library: library.id, ...(document ? { document: document.id, title: document.title } : folder ? { folder: folder.id, name: folder.name } : { name: library.name }), principal, ...(level ? { level } : {}), ...(was ? { was } : {}) },
     });
   };
 
@@ -139,6 +149,54 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
     shareLibrary(req, reply, req.body.level),
   );
   app.delete<{ Params: { id: string; principal: string } }>('/libraries/:id/access/:principal', { schema: { params: LIBRARY_PRINCIPAL } }, (req, reply) => shareLibrary(req, reply, null));
+
+  // ---- a folder, and everything inside it ----
+
+  const FOLDER = { type: 'object', properties: { id: ID, folder: ID }, required: ['id', 'folder'] } as const;
+  const FOLDER_PRINCIPAL = { type: 'object', properties: { id: ID, folder: ID, principal: PRINCIPAL_PARAM }, required: ['id', 'folder', 'principal'] } as const;
+
+  /** The folder in a library the caller can see, or undefined with a 404 sent. */
+  const folderFor = async (library: HeldLibrary, id: string, reply: FastifyReply) => {
+    const folder = (await store.folders(library.id)).find((f) => f.id === id);
+    if (!folder) reply.code(404).send({ error: 'not-found', message: 'There’s no such folder in this library.' });
+    return folder;
+  };
+
+  const folderAccess = async (caller: OnFloor, library: HeldLibrary, folder: Folder) => {
+    const [access, grants] = await Promise.all([libraryAccess(library), store.folderGrants(library.id, folder.id)]);
+    return { ...access, library: access.grants, grants: await withNames(grants), can: { share: rightsOn(caller, library).share } };
+  };
+
+  app.get<{ Params: { id: string; folder: string } }>('/libraries/:id/folders/:folder/access', { schema: { params: FOLDER } }, async (req, reply) => {
+    const caller = onFloor(req, reply);
+    if (!caller) return reply;
+    const library = await libraryFor(caller, req.params.id, reply);
+    const folder = library && (await folderFor(library, req.params.folder, reply));
+    if (!library || !folder) return reply;
+    return folderAccess(caller, library, folder);
+  });
+
+  /** A grant on a folder lets them into everything inside it, down to its documents: whoever manages the library. */
+  const shareFolder = async (req: FastifyRequest<{ Params: { id: string; folder: string; principal: string } }>, reply: FastifyReply, level: Level | null) => {
+    const caller = onFloor(req, reply);
+    if (!caller) return reply;
+    const library = await libraryFor(caller, req.params.id, reply);
+    const folder = library && (await folderFor(library, req.params.folder, reply));
+    if (!library || !folder) return reply;
+    if (!rightsOn(caller, library).share) return managers(reply, 'library');
+    if (level && !(await checkPrincipal(req.params.principal, library.floor, reply))) return reply;
+    await change(caller, { library, folder }, req.params.principal, level);
+    return folderAccess(caller, library, folder);
+  };
+
+  app.put<{ Params: { id: string; folder: string; principal: string }; Body: { level: Level } }>(
+    '/libraries/:id/folders/:folder/access/:principal',
+    { schema: { params: FOLDER_PRINCIPAL, body: LEVEL_BODY } },
+    (req, reply) => shareFolder(req, reply, req.body.level),
+  );
+  app.delete<{ Params: { id: string; folder: string; principal: string } }>('/libraries/:id/folders/:folder/access/:principal', { schema: { params: FOLDER_PRINCIPAL } }, (req, reply) =>
+    shareFolder(req, reply, null),
+  );
 
   // ---- one document ----
 
