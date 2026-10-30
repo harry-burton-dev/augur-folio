@@ -140,15 +140,15 @@ export class FolioPicker extends LitElement {
     const empty = this.query.trim()
       ? 'Nothing you can read matches that.'
       : this.libraries.length
-        ? 'There’s nothing in this library yet.'
-        : 'There are no libraries on this floor yet. Type to find a document anywhere you can read.';
+        ? 'There’s nothing in this collection yet.'
+        : 'There are no collections on this floor yet. Type to find a document anywhere you can read.';
     return html`<style>
         folio-picker { display: flex; flex-direction: column; gap: var(--space-5); min-width: min(40rem, 100%); }
         folio-picker .folio-picker-find { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end; }
         folio-picker .folio-picker-find ui-text-field { flex: 2; min-width: 14rem; }
         folio-picker .folio-picker-find ui-select { flex: 1; min-width: 12rem; }
       </style>
-      <ui-heading eyebrow="Pick from Artifacts" heading=${this.purpose || 'Pick a document'} summary="Find one by its title, a tag or words in it, or look through a library."></ui-heading>
+      <ui-heading eyebrow="Pick from Artifacts" heading=${this.purpose || 'Pick a document'} summary="Find one by its title, a tag or words in it, or look through a collection."></ui-heading>
       <div class="folio-picker-find">
         <ui-text-field label="Find" placeholder="Title, tag or words in it" .value=${this.query} @ui-input=${(e: CustomEvent<{ value: string }>) => this.search(e.detail.value)}></ui-text-field>
         ${options.length && !this.query.trim()

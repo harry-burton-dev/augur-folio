@@ -45,7 +45,7 @@ export const explainPayload = (access: Access, thing: { id: string; title: strin
     thing: { app: 'folio', appName: 'Artifacts', id: thing.id, title: thing.title, kind: thing.kind },
     audience: [
       { principal: floor.principal, ...(floor.name ? { name: floor.name } : {}), level: floor.kind === 'person' ? 'manage' : 'read', via: 'its floor' },
-      ...(access.library ?? []).map((g) => shared(g, 'its library')),
+      ...(access.library ?? []).map((g) => shared(g, 'its collection')),
       ...(access.folders ?? []).map((g) => shared(g, 'a folder it’s in')),
       ...(access.placed ?? []).map((p) => ({
         principal: p.principal,
@@ -78,7 +78,7 @@ const iconOf = (p: Principal) => (p.kind === 'person' ? 'account' : p.kind === '
 
 /** Who its floor lets in, as a sentence. */
 export const floorWords = (floor: Principal, what: Shareable, me = '') => {
-  const it = what === 'library' ? 'this library' : `this ${what}’s library`;
+  const it = what === 'library' ? 'this collection' : `this ${what}’s collection`;
   if (floor.principal === `person:${me}`) return 'It’s on your own floor: only you can see it, and whoever you share it with.';
   if (floor.kind === 'person') return `It’s on ${floor.name ? `${floor.name}’s` : 'someone’s'} own floor: only they can see it, and whoever they share it with.`;
   if (floor.kind === 'org') return `It’s on the org’s floor, so everyone in the org can read it. The org’s leads manage ${it}.`;
@@ -306,7 +306,7 @@ export class FolioShare extends LitElement {
       ${access.can.share
         ? this.form()
         : what === 'folder'
-          ? html`<p class="folio-share-floor">Only whoever manages the library shares a folder.</p>`
+          ? html`<p class="folio-share-floor">Only whoever manages the collection shares a folder.</p>`
           : nothing}
       <ui-list label=${what === 'library' ? 'Shared with' : `Shared with, for this ${what}`} density="compact" .noun=${['person or team', 'people and teams']}
         .items=${this.grantRows(access.grants, access.can.share)}
@@ -326,7 +326,7 @@ export class FolioShare extends LitElement {
             }))}></ui-list>`
         : nothing}
       ${what !== 'library' && access.library?.length
-        ? html`<ui-list label="Shared with, through its library" density="compact" .noun=${['person or team', 'people and teams']} .items=${this.grantRows(access.library, false)}></ui-list>`
+        ? html`<ui-list label="Shared with, through its collection" density="compact" .noun=${['person or team', 'people and teams']} .items=${this.grantRows(access.library, false)}></ui-list>`
         : nothing}
       <p class="folio-note" role="status">${this.note}</p>`;
   }

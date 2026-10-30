@@ -197,8 +197,8 @@ export class FolioLinks extends LitElement {
       <ui-select label="Link it" .options=${kinds} .value=${this.relation}
         @ui-change=${(e: CustomEvent<{ value: string }>) => (this.relation = e.detail.value as RelationKind['id'])}></ui-select>
       ${toFolio
-        ? html`<ui-select label="To" placeholder="Choose from this library" .options=${targets} .value=${this.target}
-            hint=${targets.length ? 'Something in another library links here from there.' : 'There’s nothing else in this library yet.'}
+        ? html`<ui-select label="To" placeholder="Choose from this collection" .options=${targets} .value=${this.target}
+            hint=${targets.length ? 'Something in another collection links here from there.' : 'There’s nothing else in this collection yet.'}
             @ui-change=${(e: CustomEvent<{ value: string }>) => (this.target = e.detail.value)}></ui-select>`
         : nothing}
       <div class="folio-actions">

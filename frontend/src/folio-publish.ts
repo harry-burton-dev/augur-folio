@@ -141,7 +141,7 @@ export class FolioPublish extends LitElement {
 
   private out() {
     const out = this.history?.publications.find((p) => !p.ended);
-    if (!out) return html`<p class="folio-publish-lead">It hasn’t been published: only those who can see the library, or it’s been shared with, can read it.</p>`;
+    if (!out) return html`<p class="folio-publish-lead">It hasn’t been published: only those who can see the collection, or it’s been shared with, can read it.</p>`;
     return html`<div class="folio-publish-out">
       <p class="folio-publish-lead"><ui-icon name="publish" size="20"></ui-icon> Version ${out.version} went out to ${audienceWords(out.audience)} ${agoWords(out.publishedAt)}.</p>
       ${out.note ? html`<p class="folio-publish-said">“${out.note}”</p>` : nothing}
