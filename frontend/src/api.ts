@@ -886,6 +886,10 @@ export interface Place {
   received?: string | true;
   /** What other floors have shared with the person (`/shared`). */
   shared?: boolean;
+  /** The app's front page (`/`). */
+  home?: boolean;
+  /** The person's collections (`/libraries`). */
+  collections?: boolean;
 }
 
 export const placeFor = (path: string): Place => {
@@ -893,6 +897,8 @@ export const placeFor = (path: string): Place => {
   if (first === 'published') return { published: true, adding: false };
   if (first === 'shared') return { shared: true, adding: false };
   if (first === 'received') return { received: second || true, adding: false };
+  if (!first) return { home: true, adding: false };
+  if (first === 'libraries' && !second) return { collections: true, adding: false };
   if (first !== 'libraries' || !second) return { adding: false };
   if (second === 'new') return { adding: true };
   if (third === 'documents' && fourth) {
@@ -904,7 +910,8 @@ export const placeFor = (path: string): Place => {
   return { library: second, ...(third ? { folder: third } : {}), adding: false };
 };
 
-export const pathFor = ({ library, folder, view, series, document, version, published, received, shared }: Omit<Place, 'adding'>) => {
+export const pathFor = ({ library, folder, view, series, document, version, published, received, shared, home }: Omit<Place, 'adding'>) => {
+  if (home && !document) return '/';
   if (published && !document) return '/published';
   if (shared && !document) return '/shared';
   if (received && !document) return received === true ? '/received' : `/received/${encodeURIComponent(received)}`;
