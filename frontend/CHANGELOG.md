@@ -1,5 +1,21 @@
 # @apps/folio-frontend
 
+## 0.5.0
+
+### Minor Changes
+
+- 2a05a51: Artifacts gets the three-column app layout from the live session with Harry: a rail that folds to icons (the app's name on top opens its front page, then Your collections, Shared libraries, From below, and the open collection), the content in the middle with Back above its title and a search above the grid, and a drawer on the right that says what's on screen. Collections, folders and documents are tiles that answer hover by rank; right-click one, or the empty grid, for a ring of what can be done with it. The front page shows only what needs you, what's new, and your collections. What was "Published to you" sits under Shared libraries. The reader keeps its facts and actions in the drawer too.
+
+  New in the kit: `ui-tile`/`ui-tiles`, `ui-toolbar`, `ui-radial-menu`, and `ui-app-frame` gains a folding rail and a drawer. `pnpm dev:app` now runs on Windows.
+
+### Patch Changes
+
+- Updated dependencies [2a05a51]
+- Updated dependencies [4c1bb55]
+- Updated dependencies [5ab5009]
+  - @augur/ui-kit@1.8.0
+  - @augur/mfe-sdk@1.9.0
+
 ## 0.4.0
 
 ### Minor Changes
