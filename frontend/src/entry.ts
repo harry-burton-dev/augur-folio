@@ -105,7 +105,7 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
-/** Asks whichever app explains access (Auspex) to say who can open a library or document, over Artifacts. */
+/** Asks whichever app explains access (Explorer) to say who can open a library or document, over Artifacts. */
 export const ACCESS_EXPLAIN = 'access.explain';
 
 /** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
