@@ -42,8 +42,12 @@ export interface ArtifactsProps {
   place: Place;
   /** Where the person went, so the address bar follows. */
   onPlace: (place: Omit<Place, 'adding'>) => void;
-  /** Go to the classic layout at this place. */
-  onClassic: (place: Omit<Place, 'adding'>) => void;
+  /**
+   * Go to the classic layout at this place: for this visit only when the new
+   * layout hasn't got that part yet, or as the device's choice when the person
+   * picked the classic layout itself (`chosen`).
+   */
+  onClassic: (place: Omit<Place, 'adding'>, chosen?: boolean) => void;
   propose?: unknown;
   pickRef?: PickRef;
   openRef?: OpenRef;
@@ -482,7 +486,7 @@ export function Artifacts(props: ArtifactsProps) {
       <RailLink icon="people" label="Shared libraries" current={screen === 'shared'} onPress={() => go({ shared: true })} />
       <RailLink icon="inbox" label="Published to you" current={screen === 'published'} count={glance?.published.new || undefined} onPress={() => go({ published: true })} />
       <RailLink icon="publish" label="From below" current={screen === 'received'} onPress={() => go({ received: true })} />
-      <RailLink icon="history" label="Classic layout" onPress={() => onClassic(place)} />
+      <RailLink icon="history" label="Classic layout" onPress={() => onClassic(place, true)} />
     </>
   );
 

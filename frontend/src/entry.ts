@@ -147,9 +147,10 @@ export default defineMicroFrontend({
       mountedAt = pathFor(place);
     };
     const moved = (e: CustomEvent<Omit<Place, 'adding'>>) => follow(e.detail);
-    // Either layout, at a place; switching goes to the other one at the same place.
-    const show = (layout: Layout, place: Place) => {
-      keepLayout(layout);
+    // Either layout, at a place; switching goes to the other one at the same place. `keep` makes it
+    // the device's choice; a visit to the classic layout for a part not rebuilt yet isn't one.
+    const show = (layout: Layout, place: Place, keep = true) => {
+      if (keep) keepLayout(layout);
       // Each layout gets a fresh host, so neither React nor Lit finds the other's nodes.
       const was = hosts.get(el);
       if (was) unmountArtifacts(was);
@@ -167,10 +168,10 @@ export default defineMicroFrontend({
           app: { name: APP_NAME, icon: 'library' },
           place,
           onPlace: follow,
-          onClassic: (at) => {
+          onClassic: (at, chosen) => {
             follow(at);
             // After React has finished the event that asked for it.
-            setTimeout(() => show('classic', { ...at, adding: false }));
+            setTimeout(() => show('classic', { ...at, adding: false }, chosen === true));
           },
           propose: proposeFrom(ctx),
           pickRef: pickFrom(ctx),
@@ -181,7 +182,7 @@ export default defineMicroFrontend({
       }
       render(
         html`<div class="folio-layout-switch">
-            <ui-button kind="ghost" size="sm" @click=${() => show('new', placeFor(mountedAt))}>Try the new layout</ui-button>
+            <ui-button kind="ghost" size="sm" @click=${() => show('new', placeFor(mountedAt))}>${keep ? 'Try the new layout' : 'Back to the new layout'}</ui-button>
           </div>
           <folio-app
             .api=${api}

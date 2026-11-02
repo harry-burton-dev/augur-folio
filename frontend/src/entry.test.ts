@@ -1467,4 +1467,13 @@ describe('Artifacts, new layout (PDR-010)', () => {
     await open('/libraries/l-1/views/vw-1');
     expect(document.body.textContent).toContain('isn’t in the new layout yet');
   });
+
+  it('opens the classic layout for a part not rebuilt yet for that visit only', async () => {
+    const { el } = await open('/libraries/l-1/views/vw-1');
+    [...el.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.includes('Open it in the classic layout'))!.click();
+    await settle(el);
+    expect(el.querySelector('folio-app')).not.toBeNull();
+    expect(localStorage.getItem(LAYOUT_KEY)).not.toBe('classic');
+    expect(button(el, 'Back to the new layout')).toBeDefined();
+  });
 });
