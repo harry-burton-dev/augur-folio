@@ -7,3 +7,15 @@
 .folio-picker { display: flex; flex-direction: column; gap: var(--space-5); min-width: min(40rem, 100%); }
 .folio-picker-find { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-4); align-items: end; }
 .folio-picker-note { margin: 0; font-size: var(--type-small); line-height: var(--leading-small); color: var(--ink-muted); }
+
+/* Who something goes to, and a series on its own page. */
+.folio-audience, .folio-series { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.folio-series { gap: var(--space-5); }
+.folio-audience-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-4); align-items: end; }
+.folio-series-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.folio-series-actions { display: flex; gap: var(--space-2); }
+.folio-series-facts { display: flex; flex-direction: column; gap: var(--space-2); }
+.folio-series-facts p { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.folio-series-facts p[data-late] { color: var(--warn-ink, var(--ink)); }
+.folio-levels, .folio-levels-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.folio-levels-form { gap: var(--space-3); }

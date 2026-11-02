@@ -174,6 +174,7 @@ export default defineMicroFrontend({
           pickRef: pickFrom(ctx),
           openRef: openFrom(ctx),
           explain,
+          publisher: ctx.user.roles.includes('publisher'),
         });
         return;
       }

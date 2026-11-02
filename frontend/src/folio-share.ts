@@ -11,12 +11,8 @@ const LEVEL_OPTIONS = (document: boolean): SelectOption[] => [
   { value: 'manage', label: 'Can manage', detail: 'And share it' },
 ];
 
-/** Who a principal is, in a few words: "Kim Lee", "Payroll and the teams below it", "Everyone in the org". */
-export const whoWords = (p: Principal) => {
-  if (p.kind === 'org') return 'Everyone in the org';
-  if (!p.name) return p.kind === 'person' ? 'Someone no longer here' : 'A team that’s gone';
-  return p.kind === 'tree' ? `${p.name} and the teams below it` : p.kind === 'team' ? `${p.name} (just that team)` : p.name;
-};
+import { whoWords } from './words.js';
+export { whoWords };
 
 /** The line under a name: an email, or where a team sits. */
 const detailOf = (p: Principal) => (p.kind === 'person' ? (p.email ?? '') : p.within?.length ? `In ${p.within.join(' / ')}` : p.kind === 'org' ? '' : 'Team');

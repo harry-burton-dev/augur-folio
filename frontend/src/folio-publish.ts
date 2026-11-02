@@ -11,11 +11,8 @@ export const agoWords = (time: string) => {
   return short === 'now' ? 'just now' : `${short} ago`;
 };
 
-/** Who a version went to, in a few words: "Finance and the teams below it, and Legal". */
-export const audienceWords = (audience: readonly Principal[]) => {
-  const words = audience.map(whoWords);
-  return words.length <= 1 ? (words[0] ?? 'No one') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
-};
+import { audienceWords } from './words.js';
+export { audienceWords };
 
 /** How a publication ended, or that it's out. */
 const endWords = (p: Publication<Principal>) =>

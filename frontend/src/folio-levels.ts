@@ -1,15 +1,9 @@
 import { LitElement, html, nothing } from 'lit';
 import type { ListItem } from '@augur/ui-kit';
 import type { FolioApi, LevelInfo, UnitLevel } from './api.js';
+import { DEFAULT_LEVELS } from './words.js';
 
-/** The levels as Artifacts calls them before the org renames any. */
-export const DEFAULT_LEVELS: LevelInfo[] = [
-  { id: 'collection', name: 'Collection', plural: 'Collections', holds: ['subcollection', 'series', 'file'] },
-  { id: 'subcollection', name: 'Subcollection', plural: 'Subcollections', holds: ['series', 'file'] },
-  { id: 'series', name: 'Series', plural: 'Series', holds: ['subseries', 'file'] },
-  { id: 'subseries', name: 'Subseries', plural: 'Subseries', holds: ['file'] },
-  { id: 'file', name: 'File', plural: 'Files', holds: [] },
-];
+export { DEFAULT_LEVELS };
 
 /** A level's own name, before the org renamed it. */
 const ownName = (id: UnitLevel) => DEFAULT_LEVELS.find((l) => l.id === id)!;

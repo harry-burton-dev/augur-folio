@@ -1,6 +1,6 @@
 import { LitElement, html, nothing } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
-import { ago, filterValue, type ButtonKind, type DialogSubmit, type PageAction, type FieldCheck, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TagOption, type TreeItem, type UiTextField, type RadialAction } from '@augur/ui-kit';
+import { ago, filterValue, type ButtonKind, type DialogSubmit, type PageAction, type FilterDef, type FilterValue, type ListItem, type SelectOption, type TreeItem, type UiTextField, type RadialAction } from '@augur/ui-kit';
 import './folio-reader.js';
 import type { Propose } from './folio-reader.js';
 import './folio-share.js';
@@ -14,7 +14,9 @@ import type { OpenRef, PickRef } from './folio-links.js';
 import { filterWords, floorWords } from './folio-publish-up.js';
 import { CONTAINER_LIFECYCLE } from '@augur/records';
 import type { Chosen } from './folio-audience.js';
-import { whoWords, type Explainer } from './folio-share.js';
+import { type Explainer } from './folio-share.js';
+import { CADENCE_OPTIONS, nameCheck, tagOptions, whoWords } from './words.js';
+export { tagOptions };
 import {
   ACCEPT,
   KINDS,
@@ -102,12 +104,6 @@ export const SORTS: SelectOption[] = [
   { value: 'period', label: 'Series period' },
 ];
 
-const CADENCE_OPTIONS: SelectOption[] = [
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'quarterly', label: 'Quarterly' },
-  { value: 'adhoc', label: 'Now and then', detail: 'No due dates' },
-];
 
 const STATE_OPTIONS: SelectOption[] = [
   { value: 'draft', label: 'Drafts' },
@@ -135,10 +131,6 @@ export const filtersFor = (open: Pick<OpenLibrary, 'tags' | 'authors'> & { serie
   { id: 'state', label: 'Published', options: STATE_OPTIONS },
   ...(open.series?.length ? [{ id: 'series', label: 'Series', single: true, options: open.series.map((r) => ({ value: r.id, label: r.name })) }] : []),
 ];
-
-/** Tags as a picker offers them: the org's marked as such. */
-export const tagOptions = (tags: readonly Tag[]): TagOption[] =>
-  tags.map((t) => ({ value: t.id, label: t.name, ...(t.library ? {} : { detail: 'Org', icon: 'org' }) }));
 
 /** The bar's filters and sort as a saved view keeps them. */
 export const queryFrom = (filters: FilterValue, sort: DocumentSort, folder?: string): ViewQuery => ({
@@ -224,16 +216,6 @@ export const folderTrail = (folders: readonly Folder[], id: string | undefined):
   return trail;
 };
 
-const nameCheck =
-  (taken: readonly string[], what: string, slashes = true, most = 80) =>
-  (value: string): FieldCheck | null => {
-    const name = value.trim();
-    if (!name) return { state: 'error', message: `Give the ${what} a name.` };
-    if (name.length > most) return { state: 'error', message: `Keep it to ${most} characters.` };
-    if (!slashes && /[/\\]/.test(name)) return { state: 'error', message: 'A folder’s name can’t have a slash in it.' };
-    if (taken.some((t) => t.toLocaleLowerCase() === name.toLocaleLowerCase())) return { state: 'error', message: `There’s already a ${what} called ${name} here.` };
-    return null;
-  };
 
 /**
  * Folio inside the shell's top bar: everything below it is Folio's own layout.

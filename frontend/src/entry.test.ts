@@ -1465,6 +1465,69 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(tile('HR')).toBeDefined();
   });
 
+  it('opens a series on its own page, adds the next issue, and follows it', async () => {
+    const { el, calls } = await open('/libraries/l-1/series/s-1', { series: [CASH] });
+    const page = el.querySelector<HTMLElement>('[data-folio-series]')!;
+    expect(page.querySelector('[role="heading"]')!.textContent).toBe('Cash report');
+    expect(page.querySelector('.folio-series-facts')!.textContent!.replace(/\s+/g, ' ').trim()).toBe(
+      'Every week. Each issue goes out to Finance and the teams below it as it’s added.Next: Week 44, 2026, due by Monday 2 November.',
+    );
+    expect(rowsOf(page)).toEqual([
+      ['Cash report: Week 43, 2026', 'Issue 2 · Week 43, 2026 · Published'],
+      ['Cash report: Week 42, 2026', 'Issue 1 · Week 42, 2026 · Published'],
+    ]);
+    const input = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', { value: [new File(['%PDF'], 'cash.pdf', { type: 'application/pdf' })], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await ready();
+    expect(calls.some(([m, p]) => m === 'POST' && p === '/api/folio/v1/libraries/l-1/documents?filename=cash.pdf&series=s-1')).toBe(true);
+    expect(page.querySelector('[role="status"]')!.textContent).toBe('Cash report: Week 44, 2026 is out to Finance and the teams below it.');
+    page.querySelector<HTMLElement>('[role="switch"], input[type="checkbox"]')!.click();
+    await ready();
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/series/s-1/follow', { following: true }]);
+  });
+
+  it('makes a series from a collection’s ring, and opens it', async () => {
+    const { el, calls } = await open('/libraries/l-1', { series: [CASH] });
+    el.querySelector('.quill-tiles')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    expect(ring()).toContain('New series');
+    await pressRing('New series');
+    const dialog = document.querySelector<HTMLElement>('.augur-dialog')!;
+    expect(dialog.textContent).toContain('New series');
+    const name = dialog.querySelector<HTMLInputElement>('input')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, ' Board pack ');
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    await ready();
+    [...dialog.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === 'Make it')!.click();
+    await ready();
+    expect(calls).toContainEqual(['POST', '/api/folio/v1/libraries/l-1/series', { name: 'Board pack', description: '', cadence: 'weekly', tags: [], audience: [] }]);
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/series/s-new');
+  });
+
+  it('lets the org’s leads rename the levels from the shelf’s ring, and the shelf follows', async () => {
+    const { calls } = await open('/libraries', { renameLevels: true });
+    document.querySelector('.quill-tiles')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    await pressRing('Level names');
+    const levels = document.querySelector<HTMLElement>('[data-folio-levels]')!;
+    expect(rowsOf(levels).map(([title]) => title)).toEqual(['Collection', 'Subcollection', 'Series', 'Subseries', 'File']);
+    expect(rowsOf(levels)[0]![1]).toBe('More than one: Collections · Holds subcollections and series and files');
+    reactButton(levels.querySelector('.quill-list-row')!, 'Rename')!.click();
+    await ready();
+    const [name, plural] = [...levels.querySelectorAll<HTMLInputElement>('.folio-levels-form input')];
+    for (const [input, text] of [[name!, 'Programme'], [plural!, 'Programmes']] as const) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await ready();
+    reactButton(levels, 'Save')!.click();
+    await ready();
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/levels/collection', { name: 'Programme', plural: 'Programmes' }]);
+    expect(levels.querySelector('[role=status]')!.textContent).toBe('The whole org calls it Programme now.');
+    expect(document.querySelector('.quill-tile')!.textContent).toContain('Programme');
+  });
+
   it('sends anything not rebuilt yet to the classic layout, saying so', async () => {
     await open('/libraries/l-1/views/vw-1');
     expect(document.body.textContent).toContain('isn’t in the new layout yet');

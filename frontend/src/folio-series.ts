@@ -1,28 +1,9 @@
 import { LitElement, html, nothing } from 'lit';
 import { ago, type ListItem } from '@augur/ui-kit';
-import { ACCEPT, MAX_UPLOAD_MB, type Cadence, type FolioApi, type FolioDocument, type Principal, type SeriesView } from './api.js';
-import { audienceWords } from './folio-publish.js';
+import { ACCEPT, MAX_UPLOAD_MB, type FolioApi, type FolioDocument, type Principal, type SeriesView } from './api.js';
+import { audienceWords, CADENCE_WORDS, issueDetail, nextWords } from './words.js';
 
-/** How often a series comes out, in a few words. */
-export const CADENCE_WORDS: Record<Cadence, string> = { weekly: 'Every week', monthly: 'Every month', quarterly: 'Every quarter', adhoc: 'Now and then' };
-
-const DAY = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
-
-/** "Monday 2 November", from a day (`YYYY-MM-DD`). */
-export const dayWords = (day: string) => DAY.format(new Date(`${day}T00:00:00Z`)).replace(',', '');
-
-/** When the next issue is wanted, in a sentence: none for a series that comes out now and then, or before its first. */
-export const nextWords = ({ next, cadence, issues }: Pick<SeriesView, 'next' | 'cadence' | 'issues'>) => {
-  if (!issues) return `Its first issue will be ${cadence === 'adhoc' ? 'issue 1' : `for ${next.period}`}.`;
-  if (!next.dueBy) return `The next is issue ${next.number}.`;
-  return next.overdue ? `The issue for ${next.period} is late: it was due by ${dayWords(next.dueBy)}.` : `Next: ${next.period}, due by ${dayWords(next.dueBy)}.`;
-};
-
-/** An issue's row: where it comes in the run, and where it is in being published. */
-export const issueDetail = (d: FolioDocument) =>
-  [d.issue ? `Issue ${d.issue.number}` : '', d.issue && !d.issue.period.startsWith('Issue') ? d.issue.period : '', d.state === 'published' ? 'Published' : d.state === 'withdrawn' ? 'Withdrawn' : 'Draft']
-    .filter(Boolean)
-    .join(' · ');
+export { CADENCE_WORDS, dayWords, issueDetail, nextWords } from './words.js';
 
 type Loaded = Omit<SeriesView, 'audience'> & { audience: Principal[] };
 
