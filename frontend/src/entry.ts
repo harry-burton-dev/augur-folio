@@ -27,7 +27,7 @@ export const proposeFrom =
       return `Sent to ${receipt.queue}. Its leads decide what it names.`;
     } catch (err) {
       if (isIntentCancelled(err)) return 'Not sent.';
-      if ((err as Error).message.includes(`"${ENTITY_PROPOSE}"`)) throw new Error('Data Atlas isn’t open to you on this floor, so there’s nowhere to add it.');
+      if ((err as Error).message.includes(`"${ENTITY_PROPOSE}"`)) throw new Error('Data Atlas isn’t open to you on this floor, so there’s nowhere to add it.', { cause: err });
       throw err;
     }
   };
@@ -55,7 +55,7 @@ export const pickFrom =
     } catch (err) {
       if (isIntentCancelled(err)) return undefined;
       const intent = app === 'atlas' ? ENTITY_PICK : AIM_PICK;
-      if ((err as Error).message.includes(`"${intent}"`)) throw new Error(`${app === 'atlas' ? 'Data Atlas' : 'Mandate'} isn’t open to you on this floor, so there’s nothing to pick from.`);
+      if ((err as Error).message.includes(`"${intent}"`)) throw new Error(`${app === 'atlas' ? 'Data Atlas' : 'Mandate'} isn’t open to you on this floor, so there’s nothing to pick from.`, { cause: err });
       throw err;
     }
   };

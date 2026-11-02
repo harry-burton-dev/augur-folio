@@ -18,7 +18,6 @@ import { whoWords, type Explainer } from './folio-share.js';
 import {
   ACCEPT,
   KINDS,
-  MAX_UPLOAD_MB,
   fileTypeOf,
   sizeWords,
   type DocumentSort,

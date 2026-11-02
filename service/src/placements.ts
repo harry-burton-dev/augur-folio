@@ -4,7 +4,7 @@ import type { AudienceLookup, DirectorySearch } from '@augur/service-kit';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import type { Notify } from './notices.ts';
-import { describePrincipals, type CallerPrincipals } from './people.ts';
+import type { CallerPrincipals } from './people.ts';
 import { PUBLISHER_ROLE } from './publishing.ts';
 import { BadParentError, PlacedError, type Folder, type FolioDocument, type FolioStore, type Library, type Placement, type RecordRefIn } from './store.ts';
 import { UNIT_LEVELS, type UnitLevel } from './units.ts';
@@ -85,7 +85,6 @@ export const floorsFrom = (directory: DirectorySearch) => async (keys: readonly 
  */
 
 export const placementRoutes = async (app: FastifyInstance, { store, audit, onFloor, reach, principalsOf, directory, audience, notify, log }: PlacementDeps) => {
-  const describe = describePrincipals(directory);
   const recorded = (entry: Parameters<Audit>[0]) =>
     audit(entry).catch((err: Error) => log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
 
