@@ -22,14 +22,21 @@ import {
   type RingSubject,
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { stateName, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type Received, type SeriesView, type Shared } from '../api.js';
+import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type Received, type RecordLink, type SeriesView, type Shared, type Tag } from '../api.js';
 import { folderTrail, levelsInside } from '../folio-app.js';
 import { DEFAULT_LEVELS } from '../words.js';
 import { Levels } from './levels.js';
 import type { OpenRef, PickRef } from '../folio-links.js';
 import type { ExplainPayload } from '../folio-share.js';
 import { ARTIFACTS_FRONT } from './front.js';
-import { Lit } from './lit.js';
+import { Publish } from './publish.js';
+import { PublishUp } from './publish-up.js';
+import { Share } from './share.js';
+import { PlaceDetails } from './details.js';
+import { TagsDialog } from './tags.js';
+import { DocumentDialog } from './document.js';
+import { ReadingContents, ReadingMain, ReadingSide, useReading, type Propose } from './reading.js';
+import { agoWords } from '../folio-publish.js';
 import { SeriesDialog, SeriesPage, type LoadedSeries } from './series.js';
 
 /** What the new layout needs from the shell: the same as the classic one. */
@@ -51,7 +58,8 @@ export interface ArtifactsProps {
    * picked the classic layout itself (`chosen`).
    */
   onClassic: (place: Omit<Place, 'adding'>, chosen?: boolean) => void;
-  propose?: unknown;
+  /** Offers words marked in a document to Data Atlas. */
+  propose?: Propose;
   pickRef?: PickRef;
   openRef?: OpenRef;
   explain?: (payload: ExplainPayload) => Promise<unknown>;
@@ -126,13 +134,17 @@ type Ask =
   | { kind: 'publish-up'; library: string; record: { kind: 'library' | 'folder' | 'document'; id: string; name: string } }
   | { kind: 'publish'; doc: OpenDocument }
   | { kind: 'series'; library: OpenLibrary; series?: LoadedSeries }
-  | { kind: 'levels' };
+  | { kind: 'levels' }
+  | { kind: 'document'; doc: OpenDocument }
+  | { kind: 'details'; library: OpenLibrary; folder?: Folder }
+  | { kind: 'tags'; library: OpenLibrary };
 
 /**
  * Artifacts on Quill (PDR-010): the front page from config, the rail with the
  * lit path, tiles you walk into, every object's actions in its radial menu,
- * find on `/`, and depth instead of scrims. The reader, sharing and publishing
- * are still Folio's Lit parts, inside it.
+ * find on `/`, and depth instead of scrims. Reading, sharing and publishing
+ * are React too; only tags, saved views and what came from below still open
+ * the classic layout.
  */
 export function Artifacts(props: ArtifactsProps) {
   const { api, userId, floorKey, floorName, floorKind, app, onPlace, onClassic, front = ARTIFACTS_FRONT, depth, ringShape } = props;
@@ -160,6 +172,7 @@ export function Artifacts(props: ArtifactsProps) {
   const [seriesShown, setSeriesShown] = useState(0);
 
   const screen = screenFor(place);
+  const reading = useReading(api, screen === 'document' && doc?.id === place.document ? doc : undefined, place.version);
   const shelfName = floorKind === 'personal' ? 'Your collections' : floorName ? `Collections on ${floorName}` : 'Collections';
   const levelName = useCallback((id: LevelInfo['id']) => levels.find((l) => l.id === id)?.name ?? id, [levels]);
   const fail = (err: unknown) => setNote(err instanceof Error ? err.message : String(err));
@@ -369,6 +382,7 @@ export function Artifacts(props: ArtifactsProps) {
         newFolder(lib, f),
         { id: 'share', label: lib.can.share ? 'Share' : 'Who can see it', icon: 'people', run: () => setAsk({ kind: 'share', library: lib.id, folder: f.id, name: f.name, eyebrow: levelName(f.level) }) },
         { id: 'publish-up', label: 'Publish up', icon: 'publish', ...only(lib.can.manage, 'Only whoever manages the collection can publish it up.'), run: () => setAsk({ kind: 'publish-up', library: lib.id, record: { kind: 'folder', id: f.id, name: f.name } }) },
+        { id: 'details', label: 'Details', icon: 'info', run: () => setAsk({ kind: 'details', library: lib, folder: f }) },
         {
           id: 'rename',
           label: 'Rename',
@@ -437,7 +451,9 @@ export function Artifacts(props: ArtifactsProps) {
         newFolder(lib, here),
         ...(here ? [] : [{ id: 'new-series', label: 'New series', icon: 'series' as const, ...only(lib.can.manage, 'Only whoever manages the collection can start a series.'), run: () => setAsk({ kind: 'series', library: lib }) }]),
         { id: 'share', label: 'Share', icon: 'people', run: () => setAsk({ kind: 'share', library: lib.id, ...(here ? { folder: here.id } : {}), name: here?.name ?? lib.name, eyebrow: levelName(here?.level ?? 'collection') }) },
-        { id: 'classic', label: 'Tags, views, details', icon: 'view', run: () => onClassic(place) },
+        { id: 'details', label: 'Details', icon: 'info', run: () => setAsk({ kind: 'details', library: lib, ...(here ? { folder: here } : {}) }) },
+        { id: 'tags', label: 'Tags', icon: 'tag', run: () => setAsk({ kind: 'tags', library: lib }) },
+        { id: 'classic', label: 'Saved views', icon: 'view', run: () => onClassic(place) },
       ],
       here?.name ?? lib.name,
     );
@@ -625,34 +641,66 @@ export function Artifacts(props: ArtifactsProps) {
     );
   };
 
+  /** The other end of a link: in another app, or one of Artifacts' own records. */
+  const openLink = (link: RecordLink) => {
+    const end = link.to ?? link.from;
+    if (!end || 'unavailable' in end) return;
+    if ('app' in end && end.app !== 'folio') {
+      void props.openRef?.(end).catch(fail);
+      return;
+    }
+    const at = 'app' in end ? { library: end.library, record: end.record, kind: end.unitKind } : { library: end.library, record: end.record, kind: end.kind };
+    if (!at.library || !at.record) return;
+    setAsk(undefined);
+    if (at.kind === 'document') go({ library: at.library, document: at.record });
+    else go({ library: at.library, ...(at.kind === 'folder' ? { folder: at.record } : {}) });
+  };
+  const rereadDoc = (d: OpenDocument) => api.document(d.library, d.id).then(setDoc, fail);
+  const download = (d: OpenDocument, version: number) => {
+    const v = d.versions.find((x) => x.number === version);
+    if (v) void api.original(d.library, d.id, v.number).then((b) => save(b, v.filename), fail);
+  };
+  const retry = (d: OpenDocument, version: number) => void api.retryReader(d.library, d.id, version).then(() => rereadDoc(d));
+  const readingLib = doc && open?.id === doc.library ? open : undefined;
+  const readerBack = doc ? (readingLib ? [readingLib.name, ...folderTrail(readingLib.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName) : '';
+
   const readerPage = () => {
     if (!doc || doc.id !== place.document) return null;
-    const lib = open?.id === doc.library ? open : undefined;
     return (
-      <Lit
-        tag="folio-reader"
-        props={{ api, doc, version: place.version, tags: lib?.tags ?? [], propose: props.propose, pickRef: props.pickRef, libraryName: doc.libraryName }}
-        on={{
-          'folio-back': () => go(doc.folder ? { library: doc.library, folder: doc.folder } : { library: doc.library }),
-          'folio-read': (e) => go({ library: doc.library, document: doc.id, ...(e.detail?.version ? { version: e.detail.version } : {}) }),
-          'folio-issue': (e) => go({ library: e.detail.library, document: e.detail.document }),
-          'folio-share': () => setAsk({ kind: 'share', library: doc.library, document: doc.id, name: doc.title, eyebrow: 'Document' }),
-          'folio-publish': () => setAsk({ kind: 'publish', doc }),
-          'folio-publish-up': () => setAsk({ kind: 'publish-up', library: doc.library, record: { kind: 'document', id: doc.id, name: doc.title } }),
-          'folio-download': (e) => {
-            const v = doc.versions.find((x) => x.number === e.detail.version);
-            if (v) void api.original(doc.library, doc.id, v.number).then((b) => save(b, v.filename), fail);
-          },
-          'folio-retry': (e) => void api.retryReader(doc.library, doc.id, e.detail.version).then(() => api.document(doc.library, doc.id)).then(setDoc, fail),
-          'folio-follow': (e) => void (doc.run ? api.follow(doc.run.id, e.detail.following).then(() => api.document(doc.library, doc.id)).then(setDoc, fail) : undefined),
-          'folio-move': (e) => void api.setVersionState(doc.library, doc.id, e.detail.version, e.detail.state).then(() => api.document(doc.library, doc.id)).then(setDoc, fail),
-          'folio-manage': () => onClassic(place),
-          'folio-series': (e) => go({ library: doc.library, series: e.detail.series }),
-          'folio-open-link': () => onClassic(place),
+      <ReadingMain
+        reading={reading}
+        backLabel={readerBack}
+        actions={{
+          onBack: () => go(doc.folder ? { library: doc.library, folder: doc.folder } : { library: doc.library }),
+          onRead: (version) => go({ library: doc.library, document: doc.id, ...(version ? { version } : {}) }),
+          onIssue: (library, document) => go({ library, document }),
+          onRetry: (version) => retry(doc, version),
         }}
       />
     );
   };
+
+  const readerSide = () =>
+    doc && doc.id === place.document ? (
+      <ReadingSide
+        reading={reading}
+        api={api}
+        tags={readingLib?.tags ?? []}
+        propose={props.propose}
+        pickRef={props.pickRef}
+        agoWords={agoWords}
+        onRead={(version) => go({ library: doc.library, document: doc.id, ...(version ? { version } : {}) })}
+        onDownload={(version) => download(doc, version)}
+        onManage={() => setAsk({ kind: 'document', doc })}
+        onShare={() => setAsk({ kind: 'share', library: doc.library, document: doc.id, name: doc.title, eyebrow: 'Document' })}
+        onPublish={() => setAsk({ kind: 'publish', doc })}
+        onPublishUp={() => setAsk({ kind: 'publish-up', library: doc.library, record: { kind: 'document', id: doc.id, name: doc.title } })}
+        onMove={(version, state: ContentState) => api.setVersionState(doc.library, doc.id, version, state).then(() => rereadDoc(doc), fail)}
+        onSeries={(series) => go({ library: doc.library, series })}
+        onFollow={(following) => (doc.run ? api.follow(doc.run.id, following).then(() => rereadDoc(doc)) : Promise.resolve())}
+        onOpenLink={openLink}
+      />
+    ) : null;
 
   const seriesPage = () => {
     if (!place.series) return null;
@@ -760,7 +808,13 @@ export function Artifacts(props: ArtifactsProps) {
 
   return (
     <>
-      <AppFrame app={app} onFront={home} rail={rail} railLabel={app.name} busy={busy} screen={`${screen}:${place.library ?? ''}:${place.folder ?? ''}:${place.document ?? ''}`} measure={screen === 'document' ? 'read' : 'wide'} depth={depth} ringShape={ringShape}>
+      <AppFrame
+        app={app}
+        onFront={home}
+        rail={rail}
+        railLabel={app.name}
+        {...(screen === 'document' ? { drawer: readerSide(), drawerLabel: 'About this document', aside: <ReadingContents reading={reading} /> } : {})}
+        busy={busy} screen={`${screen}:${place.library ?? ''}:${place.folder ?? ''}:${place.document ?? ''}`} measure={screen === 'document' ? 'read' : 'wide'} depth={depth} ringShape={ringShape}>
         {note ? (
           <p className="text-meta text-ink-muted" role="status">
             {note}
@@ -779,6 +833,26 @@ export function Artifacts(props: ArtifactsProps) {
           open={open}
           after={() => void refresh().catch(fail)}
           onLevels={setLevels}
+          onDocument={setDoc}
+          onTags={(tags) => setOpen((was) => (was ? { ...was, tags } : was))}
+          onDeleted={(d) => {
+            setAsk(undefined);
+            setDoc(undefined);
+            go(d.folder ? { library: d.library, folder: d.folder } : { library: d.library });
+          }}
+          onDownload={download}
+          onRetry={retry}
+          floorName={floorName}
+          pickRef={props.pickRef}
+          levelName={levelName}
+          onChanged={refresh}
+          onArchived={(id) => {
+            setAsk(undefined);
+            setOpen(undefined);
+            void loadLibraries();
+            if (place.library === id) go({ collections: true });
+          }}
+          onOpenLink={openLink}
           onSeries={(saved) => {
             setSeriesShown((n) => n + 1);
             go({ library: saved.library, series: saved.id });
@@ -790,7 +864,7 @@ export function Artifacts(props: ArtifactsProps) {
   );
 }
 
-/** The dialog an action asked for: a name, a confirmation, or one of Folio's Lit parts. */
+/** The dialog an action asked for: a name, a confirmation, sharing, publishing, or changing a document. */
 function Asking({
   ask,
   close,
@@ -803,6 +877,17 @@ function Asking({
   after,
   onSeries,
   onLevels,
+  onDocument,
+  onTags,
+  onDeleted,
+  onDownload,
+  onRetry,
+  floorName,
+  pickRef,
+  levelName,
+  onChanged,
+  onArchived,
+  onOpenLink,
 }: {
   ask: Ask | undefined;
   close: () => void;
@@ -815,6 +900,17 @@ function Asking({
   after: () => void;
   onSeries: (saved: SeriesView) => void;
   onLevels: (levels: LevelInfo[]) => void;
+  onDocument: (doc: OpenDocument) => void;
+  onTags: (tags: Tag[]) => void;
+  onDeleted: (doc: OpenDocument) => void;
+  onDownload: (doc: OpenDocument, version: number) => void;
+  onRetry: (doc: OpenDocument, version: number) => void;
+  floorName: string;
+  pickRef?: PickRef;
+  levelName: (id: LevelInfo['id']) => string;
+  onChanged: () => Promise<unknown>;
+  onArchived: (library: string) => void;
+  onOpenLink: (link: RecordLink) => void;
 }) {
   if (!ask) return null;
   switch (ask.kind) {
@@ -828,14 +924,14 @@ function Asking({
       const folderNames = new Map(open?.id === ask.library ? open.folders.map((f) => [f.id, f.name]) : []);
       return (
         <Dialog open light onClose={() => (close(), after())} eyebrow={ask.eyebrow} heading={`Who can see ${ask.name}`} cancelLabel="Done">
-          <Lit tag="folio-share" props={{ api, explain, folderNames, name: ask.name, me: userId, library: ask.library, document: ask.document, folder: ask.folder }} />
+          <Share api={api} explain={explain} folderNames={folderNames} name={ask.name} me={userId} library={ask.library} document={ask.document} folder={ask.folder} />
         </Dialog>
       );
     }
     case 'publish-up':
       return (
         <Dialog open light size="read" onClose={close} eyebrow="Publish up" heading={ask.record.name} summary="Put it on a floor above, showing only versions in the states you choose. It stays a live window: what reaches those states shows there." cancelLabel="Done">
-          <Lit tag="folio-publish-up" props={{ api, library: ask.library, here: floorKey, record: ask.record }} />
+          <PublishUp api={api} library={ask.library} here={floorKey} record={ask.record} />
         </Dialog>
       );
     case 'levels':
@@ -844,12 +940,48 @@ function Asking({
           <Levels api={api} onLevels={onLevels} />
         </Dialog>
       );
+    case 'document':
+      return (
+        <DocumentDialog
+          api={api}
+          doc={ask.doc}
+          library={open?.id === ask.doc.library ? open : undefined}
+          onClose={() => (close(), after())}
+          onChanged={onDocument}
+          onTags={onTags}
+          onDeleted={() => onDeleted(ask.doc)}
+          onDownload={(v) => onDownload(ask.doc, v)}
+          onRetry={(v) => onRetry(ask.doc, v)}
+        />
+      );
+    case 'details': {
+      const library = open?.id === ask.library.id ? open : ask.library;
+      const folder = ask.folder ? (library.folders.find((f) => f.id === ask.folder!.id) ?? ask.folder) : undefined;
+      return (
+        <PlaceDetails
+          api={api}
+          userId={userId}
+          library={library}
+          folder={folder}
+          levelName={levelName(folder?.level ?? 'collection')}
+          floorName={floorName}
+          pickRef={pickRef}
+          onClose={close}
+          onChanged={onChanged}
+          onArchived={() => onArchived(library.id)}
+          onTags={onTags}
+          onOpenLink={onOpenLink}
+        />
+      );
+    }
+    case 'tags':
+      return <TagsDialog api={api} library={open?.id === ask.library.id ? open : ask.library} onClose={close} onChanged={onChanged} />;
     case 'series':
       return <SeriesDialog api={api} library={ask.library} series={ask.series} org={publisher} onClose={close} onSaved={onSeries} />;
     case 'publish':
       return (
         <Dialog open light size="read" onClose={() => (close(), after())} eyebrow="Publish" heading={ask.doc.title} summary="Put a version out to teams or the whole org, or take it back." cancelLabel="Done">
-          <Lit tag="folio-publish" props={{ api, library: ask.doc.library, document: ask.doc.id, issue: Boolean(ask.doc.issue), versions: ask.doc.versions.map((v) => v.number) }} />
+          <Publish api={api} library={ask.doc.library} document={ask.doc.id} issue={Boolean(ask.doc.issue)} versions={ask.doc.versions.map((v) => v.number)} />
         </Dialog>
       );
   }

@@ -1541,4 +1541,76 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(localStorage.getItem(LAYOUT_KEY)).not.toBe('classic');
     expect(button(el, 'Back to the new layout')).toBeDefined();
   });
+
+  it('reads a document with its contents beside it and its facts in the drawer', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:map');
+    URL.revokeObjectURL = vi.fn();
+    const { el, calls } = await open('/libraries/l-1/documents/d-1');
+    await ready();
+    const head = el.querySelector<HTMLElement>('.folio-reading-head')!;
+    expect(head.querySelector('h1')!.textContent).toBe('Travel policy');
+    expect(head.querySelector('p')!.textContent).toContain('Version 2 · PDF');
+    const article = el.querySelector<HTMLElement>('.quill-reader')!;
+    expect(article.textContent).toContain('Book through the travel desk.');
+    // Its own first heading only repeats the title above it, so the contents start below it.
+    expect([...el.querySelectorAll('.quill-contents a')].map((a) => a.textContent)).toEqual(['Claims']);
+    expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/reader/images/1.png']);
+    expect(calls.some(([, p]) => p.includes('tracker'))).toBe(false);
+    expect(article.querySelector('img')!.getAttribute('src')).toBe('blob:map');
+    const side = el.querySelector<HTMLElement>('.folio-reading-side')!;
+    expect(rowsOf(side).map(([t]) => t).filter((t) => t?.startsWith('Version'))).toEqual(['Version 2, reading', 'Version 1']);
+  });
+
+  it('moves the newest version on through its lifecycle from the drawer', async () => {
+    const { el, calls } = await open('/libraries/l-1/documents/d-1');
+    await ready();
+    const moves = () => [...el.querySelectorAll('.quill-lifecycle-moves button')].map((b) => b.textContent);
+    expect(el.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('In progress');
+    expect(moves()).toEqual(['Make it In review', 'Make it Complete']);
+    reactButton(el, 'Make it Complete')!.click();
+    await ready();
+    expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/state', { state: 'complete' }]);
+    expect(el.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('Complete');
+  });
+
+  it('changes a document from the drawer: its tags, and renaming it', async () => {
+    const { el, calls } = await open('/libraries/l-1/documents/d-1');
+    await ready();
+    reactButton(el, 'Change it')!.click();
+    await ready();
+    const dialog = document.querySelector<HTMLElement>('.augur-dialog')!;
+    expect(dialog.querySelector('[role="heading"], h2')!.textContent).toBe('Travel policy');
+    expect(rowsOf(dialog).map(([t]) => t)).toEqual(['Version 2', 'Version 1']);
+    reactButton(dialog, 'Rename or move')!.click();
+    await ready();
+    const field = document.querySelector<HTMLInputElement>('.augur-dialog input[name="title"], .augur-dialog input')!;
+    expect(field.value).toBe('Travel policy');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'Travel rules');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    await ready();
+    reactButton(document.querySelector<HTMLElement>('.augur-dialog')!, 'Save')!.click();
+    await ready();
+    expect(calls).toContainEqual(['PATCH', '/api/folio/v1/libraries/l-1/documents/d-1', { title: 'Travel rules', folder: null }]);
+  });
+
+
+  it('keeps a collection’s tags and details in the new layout, from the space between its tiles', async () => {
+    const { el, calls } = await open('/libraries/l-1');
+    el.querySelector<HTMLElement>('.quill-tiles')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    expect(ring()).toEqual(['Add files', 'New subcollection', 'New series', 'Share', 'Details', 'Tags', 'Saved views']);
+    await pressRing('Tags');
+    const tags = document.querySelector<HTMLElement>('[data-folio-tags]')!;
+    expect(tags).not.toBeNull();
+    expect(calls.some(([m, p]) => m === 'GET' && p.endsWith('/tags'))).toBe(true);
+    [...document.querySelectorAll<HTMLElement>('.augur-dialog button')].find((b) => b.textContent?.endsWith('Done'))!.click();
+    await ready();
+    el.querySelector<HTMLElement>('.quill-tiles')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    await pressRing('Details');
+    const details = document.querySelector<HTMLElement>('[data-folio-details]')!;
+    expect(details.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('Open');
+    expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/moves']);
+  });
+
 });

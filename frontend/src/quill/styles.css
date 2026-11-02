@@ -19,3 +19,36 @@
 .folio-series-facts p[data-late] { color: var(--warn-ink, var(--ink)); }
 .folio-levels, .folio-levels-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .folio-levels-form { gap: var(--space-3); }
+
+/* Reading a document: the title over the reader copy, the drawer beside it. */
+.folio-reading { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.folio-reading-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); width: 100%; max-width: var(--measure-read); margin: 0 auto; }
+.folio-reading[data-wide] .folio-reading-head { max-width: var(--measure-wide); }
+.folio-reading-head h1, .folio-reading-head p { margin: 0; }
+.folio-reading-turns { display: flex; justify-content: space-between; gap: var(--space-3); align-self: stretch; }
+.folio-reading-side { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.folio-reading-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+.folio-reading-section > .quill-lifecycle, .folio-reading-section > .folio-links { align-self: stretch; }
+.folio-reading-row, .folio-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.folio-reading-said { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--type-small); line-height: var(--leading-small); }
+.folio-reading-said > svg { flex: none; color: var(--ink-muted); }
+.folio-reading-note, .folio-note, .folio-links-hint { margin: 0; font-size: var(--type-small); line-height: var(--leading-small); color: var(--ink-muted); }
+.folio-reading-note[data-refused] { color: var(--danger); }
+.folio-tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.folio-link { all: unset; cursor: pointer; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px; }
+.folio-link:hover { text-decoration-color: var(--ink-muted); }
+.folio-link:focus-visible { outline: var(--focus-ring) solid var(--focus); outline-offset: var(--focus-gap); border-radius: var(--radius-key); }
+
+/* Links, and changing a document. */
+.folio-links, .folio-links-form, .folio-document-dialog { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.folio-links-form { gap: var(--space-3); }
+
+/* Sharing and publishing, inside their dialogs. */
+.folio-share, .folio-publish, .folio-publish-up { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.folio-share-pick, .folio-publish-out, .folio-publish-form, .folio-up-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.folio-share-floor, .folio-publish-said { margin: 0; color: var(--ink-muted); }
+.folio-share-who { display: flex; align-items: center; gap: var(--space-3); margin: 0; font-weight: 600; }
+.folio-publish-lead { display: flex; align-items: center; gap: var(--space-3); margin: 0; }
+.folio-up-lead { margin: 0; }
+.folio-publish-hint, .folio-up-hint { margin: 0; font-size: var(--type-small); line-height: var(--leading-small); color: var(--ink-muted); }
+.folio-add-tag { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; }
