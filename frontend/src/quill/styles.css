@@ -1,3 +1,9 @@
 @import 'tailwindcss/utilities' layer(utilities);
 @import '@augur/app-kit/theme.css';
 @source '.';
+
+/* Home's card, and the picker another app opens Artifacts as. */
+.folio-glance { display: flex; flex-direction: column; gap: var(--space-3); }
+.folio-picker { display: flex; flex-direction: column; gap: var(--space-5); min-width: min(40rem, 100%); }
+.folio-picker-find { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-4); align-items: end; }
+.folio-picker-note { margin: 0; font-size: var(--type-small); line-height: var(--leading-small); color: var(--ink-muted); }

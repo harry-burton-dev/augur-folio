@@ -4,14 +4,11 @@ import '@augur/ui-kit';
 import manifest from '../../manifest.json' with { type: 'json' };
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
 import './folio-app.js';
-import './folio-glance.js';
-import './folio-picker.js';
-import type { Picked } from './folio-picker.js';
 import type { OpenRef, PickRef } from './folio-links.js';
 import type { ExplainPayload } from './folio-share.js';
 import type { MarkedPassage } from '@augur/ui-kit';
 import { keepLayout, readLayout, type Layout } from './quill/layout.js';
-import { mountArtifacts, unmountArtifacts } from './quill/mount.js';
+import { mountArtifacts, mountGlance, mountPicker, unmountArtifacts } from './quill/mount.js';
 
 /**
  * Offers words marked in a document to whichever app keeps entities (Data
@@ -124,16 +121,16 @@ export default defineMicroFrontend({
     if (ctx.intent?.type === DOCUMENT_PICK && ctx.reply) {
       const reply = ctx.reply;
       const pick = (ctx.intent.payload ?? {}) as DocumentPick;
-      render(
-        html`<folio-picker
-          .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
-          purpose=${typeof pick.purpose === 'string' ? pick.purpose : ''}
-          .accept=${Array.isArray(pick.accept) ? pick.accept.filter((a) => typeof a === 'string') : []}
-          @folio-picked=${(e: CustomEvent<{ document: Picked }>) => reply.respond(e.detail.document)}
-          @folio-cancel=${() => reply.cancel()}
-        ></folio-picker>`,
-        el,
-      );
+      const host = document.createElement('div');
+      el.replaceChildren(host);
+      hosts.set(el, host);
+      mountPicker(host, {
+        api: new FolioApi((path, init) => ctx.fetch(path, init)),
+        purpose: typeof pick.purpose === 'string' ? pick.purpose : '',
+        accept: Array.isArray(pick.accept) ? pick.accept.filter((a): a is string => typeof a === 'string') : [],
+        onPicked: (document) => reply.respond(document),
+        onCancel: () => reply.cancel(),
+      });
       return;
     }
     let mountedAt = ctx.path;
@@ -214,17 +211,14 @@ export default defineMicroFrontend({
     /** The card on Home: what's new to the person, and the floor's drafts for its leads. */
     './Glance': {
       mount(el: HTMLElement, ctx: MountContext) {
-        render(
-          html`<folio-glance
-            .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
-            @folio-open-document=${(e: CustomEvent<{ document: Brief }>) => void openDocument(ctx, { app: 'folio', id: e.detail.document.id, title: e.detail.document.title })}
-            @folio-open-published=${() => void ctx.raise({ type: FOLIO_OPEN, payload: { path: '/published' } })}
-          ></folio-glance>`,
-          el,
-        );
+        mountGlance(el, {
+          api: new FolioApi((path, init) => ctx.fetch(path, init)),
+          onOpenDocument: (document: Brief) => void openDocument(ctx, { app: 'folio', id: document.id, title: document.title }),
+          onOpenPublished: () => void ctx.raise({ type: FOLIO_OPEN, payload: { path: '/published' } }),
+        });
       },
       unmount(el: HTMLElement) {
-        render(html``, el);
+        unmountArtifacts(el);
       },
     },
   },
