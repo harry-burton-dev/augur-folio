@@ -1,5 +1,39 @@
 # @apps/folio-frontend
 
+## 0.6.0
+
+### Minor Changes
+
+- 409b8bd: Artifacts opens in a new layout on Quill (PDR-010): a front page built from config with Actions, New and Upcoming reels; the lit path in the rail; tiles shaped by kind; every object's actions in its radial menu, with what you can't do saying why; find on `/`; and dialogs that rack the app out of focus instead of a scrim. The classic layout stays one press away, at the same place, for what isn't rebuilt yet.
+- 0573c3a: Artifacts' new layout no longer borrows Lit parts. Reading a document is React and Quill: the reader copy in the middle, its contents beside it, and its facts, lifecycle, links, Data Atlas and versions in the drawer. Sharing, publishing and publishing up are React dialogs, and "Change it" (tags, versions, the next version, rename, move, delete), a collection's or folder's Details (lifecycle, tags, links) and the Tags dialog now open in the new layout instead of the classic one. Only saved views and what came from below still open the classic layout. Marked words now reach Data Atlas from the new layout with the document they came from.
+- 58901fd: Series and level names are in Artifacts' new layout (PER-243). A series opens on its own page, with its cadence, who its issues go to, the next issue it expects, a place to drop that issue, and its issues listed. You can follow it there. Its leads can change it, or remove it while it has no issues. A collection's ring has **New series**. The front page's Late and Soon cards and a series tile now open the series in place, without going to the classic layout. **Level names** opens from the shelf's ring in a dialog, where the org's leads rename a level or give it its own name back.
+
+### Patch Changes
+
+- ec7dad3: Artifacts opens in the new layout again. A part the new layout hasn't got yet (series, tags, views, level names, something from below) opens the classic layout for that visit only, with "Back to the new layout"; only choosing "Classic layout" in the rail is kept on the device. Devices that a visit had left on the classic layout start on the new one.
+- 5638112: Artifacts' card on Home and the picker other apps open it as (`document.pick`) are on React and Quill, part of moving every frontend onto the React kits (PER-243). They look and behave as before.
+- Updated dependencies [f8e9b46]
+- Updated dependencies [2a827a0]
+- Updated dependencies [d994d7b]
+- Updated dependencies [2a827a0]
+- Updated dependencies [2a827a0]
+- Updated dependencies [2a827a0]
+- Updated dependencies [2a827a0]
+- Updated dependencies [cccd9ea]
+- Updated dependencies [527a413]
+- Updated dependencies [f8e9b46]
+- Updated dependencies [da54ae3]
+- Updated dependencies [7c8027d]
+- Updated dependencies [d500567]
+- Updated dependencies [a8854e2]
+- Updated dependencies [fccb126]
+- Updated dependencies [d64d724]
+- Updated dependencies [bab2360]
+  - @augur/kit-common@0.2.0
+  - @augur/ui-kit@1.9.0
+  - @augur/app-kit@0.2.0
+  - @augur/mfe-sdk@1.10.0
+
 ## 0.5.0
 
 ### Minor Changes
