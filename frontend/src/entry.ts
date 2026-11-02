@@ -1,6 +1,7 @@
 import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, isUnitRef, UNIT_OPEN, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
+import manifest from '../../manifest.json' with { type: 'json' };
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
 import './folio-app.js';
 import './folio-glance.js';
@@ -9,6 +10,8 @@ import type { Picked } from './folio-picker.js';
 import type { OpenRef, PickRef } from './folio-links.js';
 import type { ExplainPayload } from './folio-share.js';
 import type { MarkedPassage } from '@augur/ui-kit';
+import { keepLayout, readLayout, type Layout } from './quill/layout.js';
+import { mountArtifacts, unmountArtifacts } from './quill/mount.js';
 
 /**
  * Offers words marked in a document to whichever app keeps entities (Data
@@ -105,8 +108,14 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
+/** What Artifacts is called, as its manifest names it (apps/folio/manifest.json). */
+export const APP_NAME = manifest.name;
+
 /** Asks whichever app explains access (Explorer) to say who can open a library or document, over Artifacts. */
 export const ACCESS_EXPLAIN = 'access.explain';
+
+/** Where each mount's layout lives inside the element the shell gave it. */
+const hosts = new WeakMap<HTMLElement, HTMLElement>();
 
 /** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
 export default defineMicroFrontend({
@@ -128,32 +137,77 @@ export default defineMicroFrontend({
       return;
     }
     let mountedAt = ctx.path;
-    const moved = (e: CustomEvent<Omit<Place, 'adding'>>) => {
-      const to = addressFor(window.location.pathname, mountedAt, e.detail);
+    const api = new FolioApi((path, init) => ctx.fetch(path, init));
+    const floorKey = ctx.workspace.kind === 'org' ? 'org' : ctx.workspace.id;
+    const explain = (payload: ExplainPayload) => ctx.request({ type: ACCESS_EXPLAIN, payload });
+    const follow = (place: Omit<Place, 'adding'>) => {
+      const to = addressFor(window.location.pathname, mountedAt, place);
       if (!to || to === window.location.pathname) return;
       window.history.pushState(window.history.state, '', to);
-      mountedAt = pathFor(e.detail);
+      mountedAt = pathFor(place);
     };
-    render(
-      html`<folio-app
-        .api=${new FolioApi((path, init) => ctx.fetch(path, init))}
-        .userId=${ctx.user.id}
-        .floorKey=${ctx.workspace.kind === 'org' ? 'org' : ctx.workspace.id}
-        .propose=${proposeFrom(ctx)}
-        .pickRef=${pickFrom(ctx)}
-        .openRef=${openFrom(ctx)}
-        ?publisher=${ctx.user.roles.includes('publisher')}
-        floor-name=${ctx.workspace.name}
-        floor-kind=${ctx.workspace.kind}
-        .place=${placeForIntent(ctx.intent) ?? placeFor(ctx.path)}
-        .explain=${(payload: ExplainPayload) => ctx.request({ type: ACCESS_EXPLAIN, payload })}
-        @folio-place=${moved}
-      ></folio-app>`,
-      el,
-    );
+    const moved = (e: CustomEvent<Omit<Place, 'adding'>>) => follow(e.detail);
+    // Either layout, at a place; switching goes to the other one at the same place.
+    const show = (layout: Layout, place: Place) => {
+      keepLayout(layout);
+      // Each layout gets a fresh host, so neither React nor Lit finds the other's nodes.
+      const was = hosts.get(el);
+      if (was) unmountArtifacts(was);
+      const host = document.createElement('div');
+      host.className = 'folio-host';
+      el.replaceChildren(host);
+      hosts.set(el, host);
+      if (layout === 'new') {
+        mountArtifacts(host, {
+          api,
+          userId: ctx.user.id,
+          floorKey,
+          floorName: ctx.workspace.name,
+          floorKind: ctx.workspace.kind,
+          app: { name: APP_NAME, icon: 'library' },
+          place,
+          onPlace: follow,
+          onClassic: (at) => {
+            follow(at);
+            // After React has finished the event that asked for it.
+            setTimeout(() => show('classic', { ...at, adding: false }));
+          },
+          propose: proposeFrom(ctx),
+          pickRef: pickFrom(ctx),
+          openRef: openFrom(ctx),
+          explain,
+        });
+        return;
+      }
+      render(
+        html`<div class="folio-layout-switch">
+            <ui-button kind="ghost" size="sm" @click=${() => show('new', placeFor(mountedAt))}>Try the new layout</ui-button>
+          </div>
+          <folio-app
+            .api=${api}
+            .userId=${ctx.user.id}
+            .floorKey=${floorKey}
+            .propose=${proposeFrom(ctx)}
+            .pickRef=${pickFrom(ctx)}
+            .openRef=${openFrom(ctx)}
+            ?publisher=${ctx.user.roles.includes('publisher')}
+            floor-name=${ctx.workspace.name}
+            floor-kind=${ctx.workspace.kind}
+            .place=${place}
+            .explain=${explain}
+            @folio-place=${moved}
+          ></folio-app>`,
+        host,
+      );
+    };
+    show(readLayout(), placeForIntent(ctx.intent) ?? placeFor(ctx.path));
   },
   unmount(el: HTMLElement) {
+    const host = hosts.get(el);
+    if (host) unmountArtifacts(host);
+    hosts.delete(el);
     render(html``, el);
+    el.replaceChildren();
   },
   surfaces: {
     /** The card on Home: what's new to the person, and the floor's drafts for its leads. */

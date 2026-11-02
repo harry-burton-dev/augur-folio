@@ -1,10 +1,11 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
 import type { UiContents, UiDialog, UiFilterBar, UiList, UiPageHead, UiRadialMenu, UiReader, UiTagPicker, UiTile, UiTree } from '@augur/ui-kit';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pathFor, placeFor, type ReaderState } from './api.js';
 import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
 import { DEFAULT_LEVELS, folderTrail, folderTree, type FolioApp } from './folio-app.js';
 import { explainPayload } from './folio-share.js';
+import { LAYOUT_KEY } from './quill/layout.js';
 
 const floor: Workspace = { id: 'w-fin', kind: 'team', name: 'Finance', slug: 'finance', path: [], role: 'lead' };
 const policies = { id: 'l-1', workspace: 'w-fin', name: 'Policies', description: 'How we work', freeTags: false, createdBy: 'u1', createdAt: '', updatedAt: '' };
@@ -339,6 +340,8 @@ const button = (el: HTMLElement, text: string): HTMLElement | undefined =>
     return action ? [Object.assign(document.createElement('span'), { click: () => head.dispatchEvent(new CustomEvent('ui-action', { detail: { action } })) })] : [];
   })[0];
 
+// These tests drive the classic layout; the new one has its own, at the end.
+beforeEach(() => localStorage.setItem(LAYOUT_KEY, 'classic'));
 afterEach(() => {
   document.body.innerHTML = '';
   localStorage.clear();
@@ -1388,5 +1391,80 @@ describe('folio as a picker', () => {
     expect(reply.respond).toHaveBeenCalledWith({ app: 'folio', id: 'd-9', version: '1', title: 'Shared plan' });
     button(el, 'Cancel')!.click();
     expect(reply.cancel).toHaveBeenCalled();
+  });
+});
+
+describe('Artifacts, new layout (PDR-010)', () => {
+  beforeEach(() => localStorage.removeItem(LAYOUT_KEY));
+  /** React renders, the fetches answer, React renders again. */
+  const ready = async () => {
+    for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r));
+  };
+  const open = async (path: string, options: Parameters<typeof service>[0] = {}) => {
+    const s = service({ documents: [travel], ...options });
+    const el = document.createElement('div');
+    document.body.append(el);
+    window.history.replaceState(null, '', `/@finance/folio${path === '/' ? '' : path}`);
+    await app.mount(el, ctx(s.fetch, path));
+    await ready();
+    return { el, calls: s.calls };
+  };
+  const tile = (name: string) => [...document.querySelectorAll<HTMLElement>('.quill-tile')].find((t) => t.querySelector('.quill-tile-name')?.textContent === name);
+  const ring = () => [...document.querySelectorAll('[role="menuitem"]')].map((i) => i.querySelector('.quill-ring-label')!.textContent);
+  const pressRing = async (label: string) => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.querySelector('.quill-ring-label')!.textContent === label)!;
+    item.click();
+    await new Promise((r) => setTimeout(r, 400));
+    await ready();
+  };
+
+  it('opens on the front page its config describes: what needs you, then what’s new', async () => {
+    await open('/');
+    expect(document.querySelector('.quill-title-name')!.textContent).toBe('Artifacts');
+    expect(document.querySelector('#front-actions')!.textContent).toContain('Actions');
+    expect([...document.querySelectorAll('.quill-reel-light')].map((l) => l.getAttribute('aria-label'))).toContain('Bring in the next action. 1 waiting.');
+    expect(document.querySelector('.quill-frame')!.textContent).toContain('Collections on Finance');
+  });
+
+  it('shows a collection as tiles, lights the path in the rail, and keeps every action on the object', async () => {
+    await open('/libraries/l-1');
+    expect(tile('HR')).toBeDefined();
+    expect(tile('Travel policy')!.getAttribute('data-kind')).toBe('document');
+    expect(document.querySelector('[role="treeitem"][aria-current="page"]')!.textContent).toContain('Policies');
+    tile('Travel policy')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    expect(ring()).toEqual(['Open', 'Download', 'Share', 'Publish', 'Publish up', 'Rename', 'Delete']);
+    await pressRing('Rename');
+    const field = document.querySelector<HTMLInputElement>('.augur-dialog input')!;
+    expect(field.value).toBe('Travel policy');
+  });
+
+  it('opens a folder in place, and the path follows it', async () => {
+    await open('/libraries/l-1');
+    tile('HR')!.click();
+    await ready();
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1/f-hr');
+    expect(tile('Leave')).toBeDefined();
+    const lit = [...document.querySelectorAll('.quill-tree-lit')].map((r) => r.querySelector('.quill-tree-label')!.textContent);
+    expect(lit).toEqual(['Policies', 'HR']);
+  });
+
+  it('switches to the classic layout at the same place, keeps the choice, and comes back', async () => {
+    const { el } = await open('/libraries/l-1');
+    [...el.querySelectorAll<HTMLElement>('.quill-rail-link')].find((b) => b.textContent?.includes('Classic layout'))!.click();
+    await settle(el);
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe('classic');
+    expect(el.querySelector<FolioApp>('folio-app')).not.toBeNull();
+    expect(el.querySelector('.quill-frame')).toBeNull();
+    button(el, 'Try the new layout')!.click();
+    await ready();
+    expect(localStorage.getItem(LAYOUT_KEY)).toBe('new');
+    expect(el.querySelector('folio-app')).toBeNull();
+    expect(tile('HR')).toBeDefined();
+  });
+
+  it('sends anything not rebuilt yet to the classic layout, saying so', async () => {
+    await open('/libraries/l-1/views/vw-1');
+    expect(document.body.textContent).toContain('isn’t in the new layout yet');
   });
 });
