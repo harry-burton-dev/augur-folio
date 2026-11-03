@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { above, chainOf, CONTENT_LIFECYCLE, floorRank, floorsAbove, furthest, levelFrom, newestPassing, ownerOf, placementRefusal, reaches, viewFor, within, type ContentState, type Floor, type Placement as Step } from '@augur/records';
+import { above, chainOf, CONTENT_LIFECYCLE, floorRank, floorsAbove, furthest, levelFrom, newestPassing, ownerOf, placementRefusal, reaches, viewFor, within, type ContentState, type Placement as Step } from '@augur/records';
 import type { AudienceLookup, DirectorySearch } from '@augur/service-kit';
+import type { FloorView, RecordView } from './api-types.ts';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import type { Notify } from './notices.ts';
@@ -28,24 +29,8 @@ export const callerFloor = (caller: OnFloor) => (caller.workspace.kind === 'org'
 /** Who a floor lets in, to see what's put on it. */
 export const principalOfFloor = (floor: string) => (floor === 'org' ? 'org' : `tree:${floor}`);
 
-/** A floor as people see it: its name, and how high it sits. */
-export interface FloorView {
-  id: string;
-  kind: Floor['kind'];
-  name: string;
-  rank: number;
-  path: string[];
-}
-
-/** What a record is, as a placement shows it. */
-export interface RecordView {
-  kind: RecordRefIn['kind'];
-  id: string;
-  level: UnitLevel;
-  name: string;
-  library: string;
-  libraryName: string;
-}
+/** A floor as people see it, and what a record is as a placement shows it (see `api-types.ts`). */
+export type { FloorView, RecordView };
 
 const ID = { type: 'string', maxLength: 64 } as const;
 const FILTER = { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', enum: CONTENT_LIFECYCLE.states.map((s) => s.id) } } as const;

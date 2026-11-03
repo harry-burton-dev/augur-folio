@@ -39,7 +39,9 @@ export function PlaceDetails({ api, userId, library, folder, levelName, floorNam
   const inside = library.folders.filter((f) => f.parent === folder?.id).length;
   const mayTag = Boolean(folder && (library.can.manage || folder.createdBy === userId));
 
-  const loadMoves = useCallback(() => api.moves(library.id, folder ? { folder: folder.id } : {}).then((m) => setMoves(m.moves), () => setMoves([])), [api, library.id, folder]);
+  // The shared wire type says what the service sends: a move has no id, and a first move no `from`. This list
+  // expects both; the cast keeps it as it is until that's mended in a change of its own.
+  const loadMoves = useCallback(() => api.moves(library.id, folder ? { folder: folder.id } : {}).then((m) => setMoves(m.moves as unknown as NonNullable<typeof moves>), () => setMoves([])), [api, library.id, folder]);
   useEffect(() => void loadMoves(), [loadMoves]);
 
   const move = async (to: ContainerState) => {
