@@ -1,4 +1,5 @@
-import { appCredentialsFromEnv, identityAudience, identityDirectory, identityPrincipals, type AudienceLookup, type DirectoryResult, type DirectorySearch } from '@augur/service-kit';
+import { peopleFor, type AudienceLookup, type DirectoryResult, type DirectorySearch } from '@augur/service-kit';
+import { manifest } from './manifest.ts';
 import type { OnFloor } from './app.ts';
 import type { FolioStore } from './store.ts';
 
@@ -32,11 +33,10 @@ const noAudience: AudienceLookup = async () => [];
  * Folio has seen.
  */
 export const peopleFromEnv = (store: FolioStore, env = process.env): { principals: CallerPrincipals; directory: DirectorySearch; audience: AudienceLookup } => {
-  const credentials = appCredentialsFromEnv('folio', env);
-  const identityUrl = env.IDENTITY_URL;
-  if (!identityUrl || !credentials) return { principals: floorPrincipals, directory: seenPeople(store), audience: noAudience };
-  const lookup = identityPrincipals({ identityUrl, credentials });
-  return { principals: (caller) => lookup(caller.id), directory: identityDirectory({ identityUrl, credentials }), audience: identityAudience({ identityUrl, credentials }) };
+  const fallback = { principals: async () => [], directory: seenPeople(store), audience: noAudience };
+  const people = peopleFor(manifest.id, { fallback, env });
+  if (people === fallback) return { principals: floorPrincipals, directory: fallback.directory, audience: noAudience };
+  return { principals: (caller) => people.principals(caller.id, caller.workspace), directory: people.directory, audience: people.audience };
 };
 
 /** A floor's principal: who a library made on it lets in. */

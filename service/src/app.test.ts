@@ -28,7 +28,7 @@ describe('folio', () => {
     expect((await call(undefined, 'GET', '/v1/libraries')).statusCode).toBe(401);
     const off = await call(sam, 'GET', '/v1/libraries');
     expect(off.statusCode).toBe(400);
-    expect(off.json().error).toBe('floor-needed');
+    expect(off.json()).toMatchObject({ error: 'floor_needed', reason: 'floor_needed' });
   });
 
   it('believes only the caller the gateway signed for it', async () => {
