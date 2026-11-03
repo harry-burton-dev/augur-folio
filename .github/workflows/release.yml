@@ -1,0 +1,75 @@
+name: Release
+# On main: Changesets keeps a "Version packages" pull request open while changes wait to be released.
+# Merging it moves the app's version; this workflow then builds, pushes and signs the app's bundle and
+# makes the GitHub release app/<id>@<version> with its app-release.json (@augur/app-tools, augur-app).
+# Deployments trust it because AUGUR's release/app-repos.json names this repository for this app, and the
+# signature names this workflow on main (ADR 0047 in the AUGUR repository). Every release starts as a beta.
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: release
+  cancel-in-progress: false
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+  id-token: write # cosign keyless: the signature names this workflow
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Version packages pull request
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm version-packages
+          title: Version packages
+          commit: Version packages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Is this version released yet?
+        id: pending
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: echo "pending=$(pnpm exec augur-app pending)" >> "$GITHUB_OUTPUT"
+      - if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        uses: sigstore/cosign-installer@v3
+      - if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        uses: oras-project/setup-oras@v1
+      - name: Build, sign and release
+        if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        run: |
+          pnpm build && pnpm release-out
+          pnpm exec augur-app bundle beta > "$RUNNER_TEMP/bundle.json"
+          pnpm exec augur-app publish "$RUNNER_TEMP/bundle.json"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TARGET: ${{ github.sha }}
+      - name: Tell AUGUR's release feed
+        if: steps.pending.outputs.pending && steps.pending.outputs.pending != '[]'
+        run: GH_TOKEN="$(printf %s "$APP_TOKEN" | tr -d '\r\n')" gh workflow run feed.yml -R "${{ vars.AUGUR_REPO || 'harry-burton-dev/im-platform' }}"
+        env:
+          APP_TOKEN: ${{ secrets.APP_RELEASES_TOKEN }}

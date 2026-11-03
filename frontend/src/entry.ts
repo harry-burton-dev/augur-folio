@@ -101,7 +101,7 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
-/** What Artifacts is called, as its manifest names it (apps/folio/manifest.json). */
+/** What Artifacts is called, as its manifest names it (manifest.json). */
 export const APP_NAME = manifest.name;
 
 /** Asks whichever app explains access (Explorer) to say who can open a library or document, over Artifacts. */

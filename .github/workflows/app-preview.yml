@@ -1,0 +1,81 @@
+name: App previews
+# Each pull request that changes the app gets a preview: a signed bundle with the version
+# <x.y.z>-pr.<pr>.<run>, which the app runner runs beside the app for its developers. Closing the pull
+# request removes its previews.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths: ['frontend/**', 'service/**', 'manifest.json', 'Dockerfile']
+concurrency:
+  group: app-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: write
+  packages: write
+  id-token: write # signed keyless as this workflow on the pull request's merge ref
+jobs:
+  preview:
+    # Only pull requests from this repository: a fork's can't sign as it.
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: sigstore/cosign-installer@v3
+      - uses: oras-project/setup-oras@v1
+      - name: Build, sign and release the preview
+        run: |
+          version=$(pnpm exec augur-app preview "$PR_NUMBER" "$GITHUB_RUN_NUMBER")
+          pnpm build && pnpm release-out
+          pnpm exec augur-app bundle preview > "$RUNNER_TEMP/bundle.json"
+          pnpm exec augur-app publish "$RUNNER_TEMP/bundle.json"
+          pnpm exec augur-app clean-previews "$PR_NUMBER" "app/$(jq -r .id manifest.json)@$version"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
+      - name: Tell AUGUR's release feed
+        run: GH_TOKEN="$(printf %s "$APP_TOKEN" | tr -d '\r\n')" gh workflow run feed.yml -R "${{ vars.AUGUR_REPO || 'harry-burton-dev/im-platform' }}"
+        env:
+          APP_TOKEN: ${{ secrets.APP_RELEASES_TOKEN }}
+  clean:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Remove the pull request's previews
+        run: npx -y --package "@harry-burton-dev/augur-app-tools" augur-app clean-previews "${{ github.event.pull_request.number }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

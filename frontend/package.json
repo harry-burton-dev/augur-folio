@@ -10,10 +10,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@augur/app-kit": "workspace:*",
-    "@augur/kit-common": "workspace:*",
-    "@augur/mfe-sdk": "workspace:*",
-    "@augur/records": "workspace:*",
+    "@augur/app-kit": "npm:@harry-burton-dev/augur-app-kit@^0.3.0",
+    "@augur/kit-common": "npm:@harry-burton-dev/augur-kit-common@^0.2.0",
+    "@augur/mfe-sdk": "npm:@harry-burton-dev/augur-mfe-sdk@^1.10.0",
+    "@augur/records": "npm:@harry-burton-dev/augur-records@^0.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

@@ -2,11 +2,11 @@
 
 People see Folio as **Artifacts**: that's its name in the manifest and in everything it says to them. Folio stays its id, route, schema, bucket, containers and code name.
 
-AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](../../docs/app-patterns.md)). It is built only on the public app contract, like any other app.
+AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-patterns.md)). It is built only on the public app contract, like any other app.
 
 Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to 200 MB each; uploads stream straight through to the bucket.
 
-This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](../../docs/folio.md).
+This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](https://github.com/harry-burton-dev/im-platform/blob/main/docs/folio.md).
 
 | Path | What it is |
 | --- | --- |
@@ -15,7 +15,7 @@ This README is for developers. To use Folio, or run it as an admin, see [the Art
 | `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
 | `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |
 
-Run it in a stand-in shell with `pnpm dev:app folio`. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](../../docs/app-storage.md) to keep it. In production it won't start without both.
+Run it in a stand-in shell with `pnpm dev:app folio` from an AUGUR checkout. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-storage.md) to keep it. In production it won't start without both.
 
 ## Shipped with AUGUR
 
@@ -174,3 +174,16 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `PATCH /libraries/:id/tags/:tag` `{name}`, `DELETE /libraries/:id/tags/:tag` | Rename or remove one of its tags (leads) |
 | `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?, series?}` |
 | `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |
+
+## Releases
+
+It lives in its own repository and ships with AUGUR: CI here builds, tests, signs and releases it, and each AUGUR release takes the version pinned in AUGUR's `release/shipped-apps.json`.
+
+| Workflow | When | What |
+| --- | --- | --- |
+| CI | Every pull request | Lint, typecheck, test and build; the rendition worker's tests against a real Postgres |
+| App previews | A pull request that changes the app | A signed preview its developers can run beside the app |
+| App dev builds | Every merge into main | A signed dev build for preview servers |
+| Release | Merging Version packages | The beta release `app/folio@<version>`, which AUGUR's next release can pin |
+
+Each needs two secrets: `PACKAGES_READ_TOKEN` (reads AUGUR's packages) and `APP_RELEASES_TOKEN` (starts AUGUR's release feed workflow).

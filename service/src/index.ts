@@ -34,7 +34,7 @@ const { databaseUrl, bucket } = appStorageFromEnv();
 if ((!databaseUrl || !bucket) && process.env.NODE_ENV === 'production') throw new Error('Folio needs DATABASE_URL and its bucket (S3_*): give it its storage (docs/app-storage.md).');
 const store = databaseUrl ? await PgFolioStore.connect(databaseUrl) : new MemoryFolioStore();
 const objects = bucket ? new S3ObjectStore(bucket) : new MemoryObjectStore();
-// With Postgres the rendition worker (apps/folio/worker) makes reader copies; without it, a stand-in does.
+// With Postgres the rendition worker (worker/) makes reader copies; without it, a stand-in does.
 if (store instanceof MemoryFolioStore) store.onQueued = devRenderer(store, objects);
 const notify = notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
 const app = await buildApp({ store, objects, notify });
@@ -58,7 +58,7 @@ void move();
 
 // Put Folio in the platform's catalogue on every start, so the shell can offer it, with no admin step.
 // It signs in as itself with SERVICE_CLIENT_SECRET: in a deployment, FOLIO_CLIENT_SECRET, which identity
-// makes its sign-in from. The build puts the manifest beside the code; from source it's in apps/folio.
+// makes its sign-in from. The build puts the manifest beside the code; from source it's in the repository root.
 // The image carries Folio's built frontend too (APP_FRONTEND, or /app/frontend), which it gives the
 // registry first, so the shell loads this version's own copy of it.
 const { REGISTRY_URL, APP_MANIFEST, APP_FRONTEND } = process.env;

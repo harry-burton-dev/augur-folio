@@ -1698,7 +1698,7 @@ export const migrations: { id: string; sql: string }[] = [
   {
     id: '004_renditions',
     sql: `
-      -- A version's reader copy, thumbnail and text, as the rendition worker (apps/folio/worker) makes them.
+      -- A version's reader copy, thumbnail and text, as the rendition worker (worker/) makes them.
       -- The table is the worker's queue too: a row waits as queued until a worker leases it.
       create table folio.renditions (
         version_id text primary key references folio.document_versions (id),
