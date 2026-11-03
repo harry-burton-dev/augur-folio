@@ -2,6 +2,7 @@
   "name": "@apps/folio-frontend",
   "version": "0.7.1",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "description": "Folio's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
   "scripts": {

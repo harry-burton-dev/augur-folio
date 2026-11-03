@@ -2,6 +2,7 @@
 #   docker build -f worker/Dockerfile -t folio-worker .
 FROM python:3.12-slim-bookworm
 LABEL org.opencontainers.image.source="https://github.com/harry-burton-dev/augur-folio"
+LABEL org.opencontainers.image.licenses="LicenseRef-AUGUR-Proprietary"
 
 # Docling's PDF pipeline draws pages with these.
 RUN apt-get update \
