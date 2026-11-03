@@ -1,0 +1,28 @@
+{
+  "name": "augur-folio",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-version.mjs",
+    "release-out": "pnpm --filter ./service deploy --prod --legacy out && cp -r frontend/dist out/frontend"
+  },
+  "devDependencies": {
+    "@augur/app-tools": "npm:@harry-burton-dev/augur-app-tools@^0.2.0",
+    "@changesets/cli": "^2.31.1",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.72.1"
+  }
+}

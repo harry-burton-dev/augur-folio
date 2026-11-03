@@ -1,5 +1,5 @@
 {
-  "extends": "../../../tsconfig.base.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src", "rewriteRelativeImportExtensions": true },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]

@@ -1,0 +1,121 @@
+name: CI
+# Every pull request: lint, typecheck, test and build, in one job (a few minutes). Images are built only
+# by the release, dev build and preview workflows.
+on:
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: write # only to commit a missing pnpm-lock.yaml back to the pull request
+  packages: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || '' }}
+      - name: Install
+        run: |
+          if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
+      - name: Commit the lockfile, the first time
+        if: hashFiles('pnpm-lock.yaml') != '' && github.event_name == 'pull_request'
+        run: |
+          if [ -n "$(git status --porcelain pnpm-lock.yaml)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pnpm-lock.yaml && git commit -m "Add pnpm-lock.yaml" && git push
+          fi
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  # The rendition worker, in Python: its tests against a real Postgres with Artifacts' schema, PDFs
+  # included (Docling fetches its models once; they're cached), and its image.
+  # Only when the worker or the schema it reads (the service) changed: it installs Torch and Docling.
+  worker-changed:
+    runs-on: ubuntu-latest
+    outputs:
+      worker: ${{ steps.diff.outputs.worker }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          base="${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
+          if git diff --quiet "$base" HEAD -- worker service .github/workflows/ci.yml; then echo worker=false; else echo worker=true; fi >> "$GITHUB_OUTPUT"
+  worker:
+    needs: worker-changed
+    if: needs.worker-changed.outputs.worker == 'true'
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform-ci-only
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://platform:platform-ci-only@localhost:5432/platform
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        run: |
+          if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worker/pyproject.toml
+      # Torch's CPU-only build, as the image has it.
+      - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -e "worker[test]"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: docling-models-${{ hashFiles('worker/pyproject.toml') }}
+      # The worker works on the tables the service makes.
+      - run: pnpm --filter @apps/folio migrate
+      - run: python -m pytest worker -v
+        env:
+          RUN_PDF_TESTS: "1"
+      - name: The worker's image builds, holds its models and doesn't run as root
+        run: |
+          docker build -f worker/Dockerfile -t folio-worker .
+          test "$(docker run --rm folio-worker id -u)" != 0
+          docker run --rm folio-worker python -c "from folio_worker.render import ENGINE_VERSION; print(ENGINE_VERSION)"
+          test -n "$(docker run --rm folio-worker sh -c 'ls "$DOCLING_ARTIFACTS_PATH"')"

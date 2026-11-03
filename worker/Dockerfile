@@ -1,7 +1,7 @@
 # Folio's rendition worker. Built from the repo root:
-#   docker build -f apps/folio/worker/Dockerfile -t folio-worker .
+#   docker build -f worker/Dockerfile -t folio-worker .
 FROM python:3.12-slim-bookworm
-LABEL org.opencontainers.image.source="https://github.com/harry-burton-dev/im-platform"
+LABEL org.opencontainers.image.source="https://github.com/harry-burton-dev/augur-folio"
 
 # Docling's PDF pipeline draws pages with these.
 RUN apt-get update \
@@ -11,8 +11,8 @@ RUN apt-get update \
 RUN useradd --create-home --uid 1000 folio
 WORKDIR /app
 
-COPY apps/folio/worker/pyproject.toml ./
-COPY apps/folio/worker/folio_worker ./folio_worker
+COPY worker/pyproject.toml ./
+COPY worker/folio_worker ./folio_worker
 # Torch's CPU-only build: the CUDA one is gigabytes the worker never uses.
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu .
 

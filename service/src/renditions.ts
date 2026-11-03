@@ -27,7 +27,7 @@ const contained = (reply: FastifyReply, contentType: string) =>
     .header('cache-control', 'private, no-store');
 
 /**
- * A version's renditions, as the rendition worker (apps/folio/worker) leaves them:
+ * A version's renditions, as the rendition worker (worker/) leaves them:
  * its reader copy in Markdown and the pictures that shows, a thumbnail of its first
  * page, and its words as plain text. Anyone who may see the document may read them;
  * whoever may change it may ask for a failed one again.
