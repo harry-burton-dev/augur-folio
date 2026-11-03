@@ -1,5 +1,12 @@
 # @apps/folio-frontend
 
+## 0.7.0
+
+### Minor Changes
+
+- 2509edf: Artifacts' classic layout (Lit) is gone: everything it did is in the layout on Quill, and a device that had chosen the classic layout opens the new one. Artifacts no longer loads Lit or the Lit kit.
+- a089f2d: Artifacts' new layout now has the filter bar, saved views (open, save, rename, delete) and what came from below, and adding a collection opens its dialog there. Nothing sends a person to the classic layout any more.
+
 ## 0.6.1
 
 ### Patch Changes
