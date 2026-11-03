@@ -1,4 +1,7 @@
 import { defineLevels, type ContainerState, type ContentState } from '@augur/records';
+import type { FolderLevel, UnitLevel } from './api-types.ts';
+
+export type { FolderLevel, UnitLevel };
 
 /**
  * The form a floor's library takes: collection › subcollection › series ›
@@ -17,9 +20,6 @@ export const UNIT_LEVELS = defineLevels<UnitLevel>(
   ['collection'],
 );
 
-export type UnitLevel = 'collection' | 'subcollection' | 'series' | 'subseries' | 'file';
-/** The levels between a collection and its files: what the store keeps as folders. */
-export type FolderLevel = 'subcollection' | 'series' | 'subseries';
 export const FOLDER_LEVELS: readonly FolderLevel[] = ['subcollection', 'series', 'subseries'];
 
 /** The first level a new folder in `parent` can be, when nobody says: the next one down. */
