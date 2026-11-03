@@ -1991,6 +1991,13 @@ export const migrations: { id: string; sql: string }[] = [
       );
       create index folder_grants_principal on folio.folder_grants (principal);`,
   },
+  {
+    id: '015_renditions_on_jobs',
+    sql: `
+      -- The worker now takes renditions as jobs (DBOS), not by leasing rows. Any the old worker held
+      -- when it stopped are queued again, so the service hands them to the new one.
+      update folio.renditions set state = 'queued', locked_until = null, updated_at = now() where state = 'running';`,
+  },
 ];
 
 type LibraryRow = { id: string; workspace_id: string; floor_principal: string | null; name: string; description: string; free_tags: boolean; state: ContainerState; created_by: string; created_at: Date; updated_at: Date };

@@ -667,10 +667,10 @@ describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {
   it('migrates once, however often it starts', async () => {
     await Promise.all([store.migrate(), store.migrate()]);
     const { rows } = await admin.query('select id from folio.migrations');
-    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links', '013_folder_tags', '014_folder_grants']);
+    expect(rows.map((r) => r.id)).toEqual(['001_libraries', '002_documents', '003_tags_views', '004_renditions', '005_access', '006_publishing', '007_series', '008_search', '009_retention', '010_units', '011_placements', '012_links', '013_folder_tags', '014_folder_grants', '015_renditions_on_jobs']);
   });
 
-  it('tells the rendition worker of each new version once it is saved', async () => {
+  it('tells the service of each new version for the worker once it is saved', async () => {
     const listener = await admin.connect();
     try {
       const heard: string[] = [];

@@ -17,7 +17,8 @@ const CHANNEL = 'folio_renditions';
 export const runIdFor = (version: string, queuedAt: string) => `${RENDITIONS_JOB}-${version}-${Date.parse(queuedAt)}`;
 
 export const renditionQueue = (store: FolioStore, jobs: Jobs, log: JobLogger) => {
-  const job = jobs.elsewhere<{ version: string }>(RENDITIONS_JOB);
+  // Docling is heavy: each worker makes one at a time.
+  const job = jobs.elsewhere<{ version: string }>(RENDITIONS_JOB, { workerConcurrency: 1 });
   let running: Promise<number> | undefined;
   let again = false;
 
