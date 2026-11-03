@@ -1528,18 +1528,21 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(document.querySelector('.quill-tile')!.textContent).toContain('Programme');
   });
 
-  it('sends anything not rebuilt yet to the classic layout, saying so', async () => {
-    await open('/libraries/l-1/views/vw-1');
-    expect(document.body.textContent).toContain('isn’t in the new layout yet');
+  it('opens a saved view with its filters chosen and its name on the Views menu', async () => {
+    const { el, calls } = await open('/libraries/l-1/views/vw-1');
+    await ready();
+    expect(el.querySelector('.quill-filter-bar')).not.toBeNull();
+    expect(el.querySelector('.quill-filter-chips')?.textContent ?? el.textContent).toContain('Policy');
+    expect(calls.some(([m, path]) => m === 'GET' && String(path).includes('tag=t-pol'))).toBe(true);
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.startsWith('Views ('))).toBe(true);
   });
 
-  it('opens the classic layout for a part not rebuilt yet for that visit only', async () => {
-    const { el } = await open('/libraries/l-1/views/vw-1');
-    [...el.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.includes('Open it in the classic layout'))!.click();
-    await settle(el);
-    expect(el.querySelector('folio-app')).not.toBeNull();
-    expect(localStorage.getItem(LAYOUT_KEY)).not.toBe('classic');
-    expect(button(el, 'Back to the new layout')).toBeDefined();
+  it('opens what came from below in the new layout', async () => {
+    const { el } = await open('/received/pl-9');
+    await ready();
+    expect(el.querySelector('.folio-arrived')).not.toBeNull();
+    expect(el.textContent).toContain('Q3 return');
+    expect(el.textContent).not.toContain('isn’t in the new layout yet');
   });
 
   it('reads a document with its contents beside it and its facts in the drawer', async () => {
@@ -1598,7 +1601,7 @@ describe('Artifacts, new layout (PDR-010)', () => {
     const { el, calls } = await open('/libraries/l-1');
     el.querySelector<HTMLElement>('.quill-tiles')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     await ready();
-    expect(ring()).toEqual(['Add files', 'New subcollection', 'New series', 'Share', 'Details', 'Tags', 'Saved views']);
+    expect(ring()).toEqual(['Add files', 'New subcollection', 'New series', 'Share', 'Details', 'Tags', 'Save this view']);
     await pressRing('Tags');
     const tags = document.querySelector<HTMLElement>('[data-folio-tags]')!;
     expect(tags).not.toBeNull();

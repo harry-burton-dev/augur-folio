@@ -3,6 +3,8 @@ import {
   AppFrame,
   Button,
   Dialog,
+  FilterBar,
+  filterValue,
   FrontPage,
   frontSections,
   Icon,
@@ -13,6 +15,8 @@ import {
   TextField,
   Tiles,
   type Depth,
+  type FilterDef,
+  type FilterValue,
   type FrontPageConfig,
   type PaletteItem,
   type PathNode,
@@ -22,8 +26,8 @@ import {
   type RingSubject,
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type Received, type RecordLink, type SeriesView, type Shared, type Tag } from '../api.js';
-import { folderTrail, levelsInside } from '../folio-app.js';
+import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag } from '../api.js';
+import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../folio-app.js';
 import { DEFAULT_LEVELS } from '../words.js';
 import { Levels } from './levels.js';
 import type { OpenRef, PickRef } from '../folio-links.js';
@@ -34,6 +38,8 @@ import { PublishUp } from './publish-up.js';
 import { Share } from './share.js';
 import { PlaceDetails } from './details.js';
 import { TagsDialog } from './tags.js';
+import { SaveView, ViewsMenu } from './views.js';
+import { Arrived } from './arrived.js';
 import { DocumentDialog } from './document.js';
 import { ReadingContents, ReadingMain, ReadingSide, useReading, type Propose } from './reading.js';
 import { agoWords } from '../folio-publish.js';
@@ -72,26 +78,22 @@ export interface ArtifactsProps {
   ringShape?: RingShape;
 }
 
-type Screen = 'home' | 'collections' | 'library' | 'document' | 'series' | 'shared' | 'published' | 'received' | 'classic';
+type Screen = 'home' | 'collections' | 'library' | 'document' | 'series' | 'shared' | 'published' | 'received' | 'arrived';
 
-/** Which screen a place opens. Anything the new layout doesn't have yet opens the classic one's notice. */
+/** Which screen a place opens. */
 export const screenFor = (place: Place): Screen => {
   if (place.document) return 'document';
   if (place.series) return 'series';
-  if (place.view || place.adding) return 'classic';
+  if (place.adding) return 'collections';
   if (place.library) return 'library';
   if (place.shared) return 'shared';
   if (place.published) return 'published';
+  if (typeof place.received === 'string') return 'arrived';
   if (place.received) return 'received';
   if (place.collections) return 'collections';
   return 'home';
 };
 
-/** What a place is called in the classic notice. */
-const MISSING: Partial<Record<keyof Place, string>> = {
-  view: 'Saved views',
-  adding: 'Making a collection from the address',
-};
 
 const save = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -137,7 +139,8 @@ type Ask =
   | { kind: 'levels' }
   | { kind: 'document'; doc: OpenDocument }
   | { kind: 'details'; library: OpenLibrary; folder?: Folder }
-  | { kind: 'tags'; library: OpenLibrary };
+  | { kind: 'tags'; library: OpenLibrary }
+  | { kind: 'save-view'; library: OpenLibrary };
 
 /**
  * Artifacts on Quill (PDR-010): the front page from config, the rail with the
@@ -170,6 +173,10 @@ export function Artifacts(props: ArtifactsProps) {
   const issueFor = useRef<{ library: string; series: string }>(undefined);
   /** Counts the series' changes, so its page reads it again after its dialog saves. */
   const [seriesShown, setSeriesShown] = useState(0);
+  /** How the documents where you are are narrowed and sorted, as the filter bar and saved views keep them. */
+  const [filters, setFilters] = useState<FilterValue>({});
+  const [sort, setSort] = useState<DocumentSort>('title');
+  const [total, setTotal] = useState(0);
 
   const screen = screenFor(place);
   const reading = useReading(api, screen === 'document' && doc?.id === place.document ? doc : undefined, place.version);
@@ -197,6 +204,20 @@ export function Artifacts(props: ArtifactsProps) {
     api.levels().then((l) => setLevels(l.levels), () => setLevels(DEFAULT_LEVELS));
   }, [api, loadLibraries]);
 
+  // A saved view puts its folder, filters and sort in place; leaving the collection clears them.
+  const viewing = open?.id === place.library ? open?.views.find((v) => v.id === place.view) : undefined;
+  const folderHere = viewing ? viewing.query.folder : place.folder;
+  useEffect(() => {
+    if (!viewing || !open) return;
+    setFilters(filterValue(filtersFor(open) as FilterDef[], filtersFrom(viewing.query)));
+    setSort(viewing.query.sort ?? 'title');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewing?.id, open?.id]);
+  useEffect(() => {
+    setFilters({});
+    setSort('title');
+  }, [place.library]);
+
   // The open collection and the documents where you are in it.
   const loadPlace = useCallback(async () => {
     const id = place.library;
@@ -205,8 +226,12 @@ export function Artifacts(props: ArtifactsProps) {
     try {
       const lib = open?.id === id ? open : await api.library(id);
       setOpen(lib);
-      const list = await api.documents(id, place.folder ? { folder: place.folder } : {});
-      setDocs(list.documents.filter((d) => (d.folder ?? undefined) === (place.folder ?? undefined)));
+      const view = place.view ? lib.views.find((v) => v.id === place.view) : undefined;
+      const folder = view ? view.query.folder : place.folder;
+      const narrowed = filtering(filters);
+      const list = await api.documents(id, { ...queryFrom(filters, sort, folder), below: narrowed, limit: 200 });
+      setDocs(narrowed ? list.documents : list.documents.filter((d) => (d.folder ?? undefined) === (folder ?? undefined)));
+      setTotal(narrowed ? list.total : list.documents.filter((d) => (d.folder ?? undefined) === (folder ?? undefined)).length);
     } catch (err) {
       fail(err);
     } finally {
@@ -214,7 +239,7 @@ export function Artifacts(props: ArtifactsProps) {
     }
     // `open` is a cache: reading it mustn't reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, place.library, place.folder, screen]);
+  }, [api, place.library, place.folder, place.view, screen, filters, sort]);
   useEffect(() => void loadPlace(), [loadPlace]);
   const refresh = async () => {
     if (!place.library) return loadLibraries();
@@ -264,7 +289,7 @@ export function Artifacts(props: ArtifactsProps) {
       api.published().then((p) => setPublished(p.documents), fail);
       void api.looked().catch(() => undefined);
     }
-    if (screen === 'received') api.received().then(setReceived, fail);
+    if (screen === 'received' || screen === 'arrived') api.received().then(setReceived, fail);
   }, [api, screen]);
 
   // Find, from anywhere: `/` opens the palette.
@@ -453,7 +478,7 @@ export function Artifacts(props: ArtifactsProps) {
         { id: 'share', label: 'Share', icon: 'people', run: () => setAsk({ kind: 'share', library: lib.id, ...(here ? { folder: here.id } : {}), name: here?.name ?? lib.name, eyebrow: levelName(here?.level ?? 'collection') }) },
         { id: 'details', label: 'Details', icon: 'info', run: () => setAsk({ kind: 'details', library: lib, ...(here ? { folder: here } : {}) }) },
         { id: 'tags', label: 'Tags', icon: 'tag', run: () => setAsk({ kind: 'tags', library: lib }) },
-        { id: 'classic', label: 'Saved views', icon: 'view', run: () => onClassic(place) },
+        { id: 'save-view', label: 'Save this view', icon: 'view', ...only(filtering(filters) || sort !== 'title', 'Filter or sort what’s here first.'), run: () => setAsk({ kind: 'save-view', library: lib }) },
       ],
       here?.name ?? lib.name,
     );
@@ -481,6 +506,15 @@ export function Artifacts(props: ArtifactsProps) {
       ],
       shelfName,
     );
+
+  // `/libraries/new`: the shelf, with a new collection being named, for whoever may make one.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!place.adding || asked.current || !canCreate) return;
+    asked.current = true;
+    shelfRing().onAction('new');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [place.adding, canCreate]);
 
   // ---- The rail: where you can go, and the path you took, lit. ----
   const trail = open && place.library === open.id ? folderTrail(open.folders, place.folder) : [];
@@ -511,7 +545,7 @@ export function Artifacts(props: ArtifactsProps) {
       ) : null}
       <RailLink icon="people" label="Shared libraries" current={screen === 'shared'} onPress={() => go({ shared: true })} />
       <RailLink icon="inbox" label="Published to you" current={screen === 'published'} count={glance?.published.new || undefined} onPress={() => go({ published: true })} />
-      <RailLink icon="publish" label="From below" current={screen === 'received'} onPress={() => go({ received: true })} />
+      <RailLink icon="publish" label="From below" current={screen === 'received' || screen === 'arrived'} onPress={() => go({ received: true })} />
       <RailLink icon="history" label="Classic layout" onPress={() => onClassic(place, true)} />
     </>
   );
@@ -577,16 +611,54 @@ export function Artifacts(props: ArtifactsProps) {
 
   const libraryPage = () => {
     if (!open || open.id !== place.library) return null;
-    const here = place.folder ? byId(place.folder) : undefined;
-    const children = open.folders.filter((f) => f.parent === (here?.id ?? undefined));
-    const series = here ? [] : open.series;
-    const up = here ? (here.parent ? { label: byId(here.parent)?.name ?? open.name, to: { library: open.id, folder: here.parent } } : { label: open.name, to: { library: open.id } }) : { label: shelfName, to: { collections: true } };
+    const here = folderHere ? byId(folderHere) : undefined;
+    // Filtering looks in every folder below, so folders and series leave the tiles.
+    const narrowed = filtering(filters);
+    const children = narrowed ? [] : open.folders.filter((f) => f.parent === (here?.id ?? undefined));
+    const series = here || narrowed ? [] : open.series;
+    const up = viewing
+      ? { label: open.name, to: { library: open.id } }
+      : here
+        ? here.parent
+          ? { label: byId(here.parent)?.name ?? open.name, to: { library: open.id, folder: here.parent } }
+          : { label: open.name, to: { library: open.id } }
+        : { label: shelfName, to: { collections: true } };
+    const where = here?.name ?? open.name;
     return (
       <>
         <Button kind="ghost" onPress={() => go(up.to)}>
           {up.label}
         </Button>
-        <h1 className="text-title-s">{here?.name ?? open.name}</h1>
+        <h1 className="text-title-s">{viewing?.name ?? where}</h1>
+        <FilterBar
+          label={`Filter what’s in ${where}`}
+          filters={filtersFor(open) as FilterDef[]}
+          value={filters}
+          sorts={SORTS}
+          sort={sort}
+          count={total}
+          noun={['document', 'documents']}
+          busy={busy}
+          onChange={(value, next) => {
+            setFilters(value);
+            setSort(next as DocumentSort);
+          }}
+          actions={
+            <ViewsMenu
+              api={api}
+              library={open}
+              userId={userId}
+              current={viewing}
+              query={queryFrom(filters, sort, folderHere)}
+              changed={filtering(filters) || sort !== 'title'}
+              onOpen={(view) => go({ library: open.id, view: view.id })}
+              onSaved={(view) => void refresh().then(() => go({ library: open.id, view: view.id }))}
+              onRenamed={() => void refresh()}
+              onDeleted={() => void refresh().then(() => go({ library: open.id }))}
+            />
+          }
+        />
+        {narrowed && !docs.length ? <p className="quill-empty">Nothing in {where} matches these filters.</p> : null}
         <input ref={file} type="file" multiple hidden onChange={(e) => void uploaded(e.target.files)} />
         <Tiles label={`In ${here?.name ?? open.name}`} ring={() => placeRing(open, here)}>
           {children.map((f) => (
@@ -764,7 +836,7 @@ export function Artifacts(props: ArtifactsProps) {
   const receivedPage = () => (
     <>
       <h1 className="text-title-s">From below</h1>
-      <p className="text-meta text-ink-muted">What floors below have published up to this one. Opening one shows it in the classic layout, for now.</p>
+      <p className="text-meta text-ink-muted">What floors below have published up to this one. Each sits here until a lead gives it a place.</p>
       {received && !received.here.length && !received.signposts.length ? <p className="quill-empty">Nothing has been published up to this floor.</p> : null}
       <Tiles label="From below">
         {(received?.here ?? []).map((p) => (
@@ -774,25 +846,17 @@ export function Artifacts(props: ArtifactsProps) {
             eyebrow={p.record.level ? levelName(p.record.level) : p.record.kind === 'document' ? 'Document' : levelName('collection')}
             name={p.record.name ?? p.record.id}
             owner={p.fromFloor?.name}
-            onOpen={() => onClassic({ received: p.id })}
+            onOpen={() => go({ received: p.id })}
           />
         ))}
       </Tiles>
     </>
   );
 
-  const classicPage = () => {
-    const what = (Object.keys(MISSING) as (keyof Place)[]).find((k) => place[k]);
-    return (
-      <div className="flex flex-col gap-4 items-start">
-        <h1 className="text-title-s">{what ? MISSING[what] : 'Not here yet'}</h1>
-        <p>This part of {app.name} isn’t in the new layout yet. The classic layout has it, and you can come back from there.</p>
-        <Button kind="primary" onPress={() => onClassic(place)}>
-          Open it in the classic layout
-        </Button>
-      </div>
-    );
-  };
+  const arrivedPage = () =>
+    typeof place.received === 'string' ? (
+      <Arrived key={place.received} api={api} placement={place.received} levelName={levelName} signposts={received?.signposts ?? []} onBack={() => go({ received: true })} onRead={(library, document) => go({ library, document })} onFail={fail} />
+    ) : null;
 
   const main: Record<Screen, () => ReactNode> = {
     home: frontPage,
@@ -803,7 +867,7 @@ export function Artifacts(props: ArtifactsProps) {
     shared: sharedPage,
     published: publishedPage,
     received: receivedPage,
-    classic: classicPage,
+    arrived: arrivedPage,
   };
 
   return (
@@ -853,6 +917,8 @@ export function Artifacts(props: ArtifactsProps) {
             if (place.library === id) go({ collections: true });
           }}
           onOpenLink={openLink}
+          query={queryFrom(filters, sort, folderHere)}
+          onViewSaved={(view) => void refresh().then(() => go({ library: view.library, view: view.id }))}
           onSeries={(saved) => {
             setSeriesShown((n) => n + 1);
             go({ library: saved.library, series: saved.id });
@@ -888,6 +954,8 @@ function Asking({
   onChanged,
   onArchived,
   onOpenLink,
+  query,
+  onViewSaved,
 }: {
   ask: Ask | undefined;
   close: () => void;
@@ -911,6 +979,8 @@ function Asking({
   onChanged: () => Promise<unknown>;
   onArchived: (library: string) => void;
   onOpenLink: (link: RecordLink) => void;
+  query: ViewQuery;
+  onViewSaved: (view: SavedView) => void;
 }) {
   if (!ask) return null;
   switch (ask.kind) {
@@ -974,6 +1044,8 @@ function Asking({
         />
       );
     }
+    case 'save-view':
+      return <SaveView api={api} library={ask.library} query={query} onClose={close} onSaved={onViewSaved} />;
     case 'tags':
       return <TagsDialog api={api} library={open?.id === ask.library.id ? open : ask.library} onClose={close} onChanged={onChanged} />;
     case 'series':

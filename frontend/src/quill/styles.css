@@ -52,3 +52,6 @@
 .folio-up-lead { margin: 0; }
 .folio-publish-hint, .folio-up-hint { margin: 0; font-size: var(--type-small); line-height: var(--leading-small); color: var(--ink-muted); }
 .folio-add-tag { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; }
+.folio-arrived { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); min-width: 0; }
+.folio-arrived > .quill-cards, .folio-arrived > .quill-surface { align-self: stretch; }
+.folio-arrived h1, .folio-arrived p { margin: 0; }
