@@ -1,10 +1,9 @@
 import { Button, List, Select, State, type ListItem, type SelectOption } from '@augur/app-kit';
 import { useCallback, useEffect, useState } from 'react';
 import type { FolioApi, RecordLink, RecordLinks, RecordView, RelationKind } from '../api.js';
-import { linkRow as litRow, relationTarget, type LinkRef, type PickRef } from '../folio-links.js';
+import { linkRow, relationTarget, type LinkRef, type PickRef } from '../links.js';
 
 /** A link as a row; its icons are the kit's own. */
-const linkRow = (l: RecordLink, change: boolean) => litRow(l, change) as ListItem;
 
 /** The app a link's other end is in, by name. */
 const APP_NAMES: Record<string, string> = { atlas: 'Data Atlas', mandate: 'Mandate' };

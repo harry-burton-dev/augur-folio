@@ -1,13 +1,9 @@
 import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, isUnitRef, UNIT_OPEN, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
-import { html, render } from 'lit';
-import '@augur/ui-kit';
 import manifest from '../../manifest.json' with { type: 'json' };
 import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
-import './folio-app.js';
-import type { OpenRef, PickRef } from './folio-links.js';
-import type { ExplainPayload } from './folio-share.js';
-import type { MarkedPassage } from '@augur/ui-kit';
-import { keepLayout, readLayout, type Layout } from './quill/layout.js';
+import type { OpenRef, PickRef } from './links.js';
+import type { ExplainPayload } from './access.js';
+import type { MarkedPassage } from '@augur/app-kit';
 import { mountArtifacts, mountGlance, mountPicker, unmountArtifacts } from './quill/mount.js';
 
 /**
@@ -143,69 +139,30 @@ export default defineMicroFrontend({
       window.history.pushState(window.history.state, '', to);
       mountedAt = pathFor(place);
     };
-    const moved = (e: CustomEvent<Omit<Place, 'adding'>>) => follow(e.detail);
-    // Either layout, at a place; switching goes to the other one at the same place. `keep` makes it
-    // the device's choice; a visit to the classic layout for a part not rebuilt yet isn't one.
-    const show = (layout: Layout, place: Place, keep = true) => {
-      if (keep) keepLayout(layout);
-      // Each layout gets a fresh host, so neither React nor Lit finds the other's nodes.
-      const was = hosts.get(el);
-      if (was) unmountArtifacts(was);
-      const host = document.createElement('div');
-      host.className = 'folio-host';
-      el.replaceChildren(host);
-      hosts.set(el, host);
-      if (layout === 'new') {
-        mountArtifacts(host, {
-          api,
-          userId: ctx.user.id,
-          floorKey,
-          floorName: ctx.workspace.name,
-          floorKind: ctx.workspace.kind,
-          app: { name: APP_NAME, icon: 'library' },
-          place,
-          onPlace: follow,
-          onClassic: (at, chosen) => {
-            follow(at);
-            // After React has finished the event that asked for it.
-            setTimeout(() => show('classic', { ...at, adding: false }, chosen === true));
-          },
-          propose: proposeFrom(ctx),
-          pickRef: pickFrom(ctx),
-          openRef: openFrom(ctx),
-          explain,
-          publisher: ctx.user.roles.includes('publisher'),
-        });
-        return;
-      }
-      render(
-        html`<div class="folio-layout-switch">
-            <ui-button kind="ghost" size="sm" @click=${() => show('new', placeFor(mountedAt))}>${keep ? 'Try the new layout' : 'Back to the new layout'}</ui-button>
-          </div>
-          <folio-app
-            .api=${api}
-            .userId=${ctx.user.id}
-            .floorKey=${floorKey}
-            .propose=${proposeFrom(ctx)}
-            .pickRef=${pickFrom(ctx)}
-            .openRef=${openFrom(ctx)}
-            ?publisher=${ctx.user.roles.includes('publisher')}
-            floor-name=${ctx.workspace.name}
-            floor-kind=${ctx.workspace.kind}
-            .place=${place}
-            .explain=${explain}
-            @folio-place=${moved}
-          ></folio-app>`,
-        host,
-      );
-    };
-    show(readLayout(), placeForIntent(ctx.intent) ?? placeFor(ctx.path));
+    const host = document.createElement('div');
+    host.className = 'folio-host';
+    el.replaceChildren(host);
+    hosts.set(el, host);
+    mountArtifacts(host, {
+      api,
+      userId: ctx.user.id,
+      floorKey,
+      floorName: ctx.workspace.name,
+      floorKind: ctx.workspace.kind,
+      app: { name: APP_NAME, icon: 'library' },
+      place: placeForIntent(ctx.intent) ?? placeFor(ctx.path),
+      onPlace: follow,
+      propose: proposeFrom(ctx),
+      pickRef: pickFrom(ctx),
+      openRef: openFrom(ctx),
+      explain,
+      publisher: ctx.user.roles.includes('publisher'),
+    });
   },
   unmount(el: HTMLElement) {
     const host = hosts.get(el);
     if (host) unmountArtifacts(host);
     hosts.delete(el);
-    render(html``, el);
     el.replaceChildren();
   },
   surfaces: {

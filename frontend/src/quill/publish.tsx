@@ -1,7 +1,7 @@
 import { Button, Icon, List, Select, State, TextField, relativeTime, type ListItem, type SelectOption } from '@augur/app-kit';
 import { useCallback, useEffect, useState } from 'react';
 import type { FolioApi, Principal, Publication, Publications } from '../api.js';
-import { agoWords } from '../folio-publish.js';
+import { agoWords } from '../words.js';
 import { audienceWords, whoWords } from '../words.js';
 import { Audience, type Chosen } from './audience.js';
 

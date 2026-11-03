@@ -1,3 +1,4 @@
+import { relativeTime } from '@augur/app-kit';
 import type { Cadence, FolioDocument, LevelInfo, Principal, SeriesView, Tag, UnitLevel } from './api.js';
 
 /**
@@ -74,3 +75,6 @@ export const DEFAULT_LEVELS: LevelInfo[] = [
 
 /** A level's own name, before the org renamed it. */
 export const ownLevel = (id: UnitLevel) => DEFAULT_LEVELS.find((l) => l.id === id)!;
+
+/** When, in a sentence: "just now", "4 min ago". */
+export const agoWords = (time: string) => relativeTime(time);

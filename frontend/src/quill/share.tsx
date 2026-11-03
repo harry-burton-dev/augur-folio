@@ -2,7 +2,7 @@ import { Button, Icon, List, PeoplePicker, Select, State, Toggle, relativeTime, 
 import { isIntentCancelled } from '@augur/mfe-sdk';
 import { useCallback, useEffect, useState } from 'react';
 import type { Access, AccessTarget, FolioApi, Grant, Level, Principal } from '../api.js';
-import { LEVEL_WORDS, explainPayload, floorWords, upLine, type Explainer, type Shareable } from '../folio-share.js';
+import { LEVEL_WORDS, explainPayload, floorWords, upLine, type Explainer, type Shareable } from '../access.js';
 import { whoWords } from '../words.js';
 
 const levelOptions = (document: boolean): SelectOption[] => [

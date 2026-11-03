@@ -27,11 +27,11 @@ import {
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag } from '../api.js';
-import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../folio-app.js';
+import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../places.js';
 import { DEFAULT_LEVELS } from '../words.js';
 import { Levels } from './levels.js';
-import type { OpenRef, PickRef } from '../folio-links.js';
-import type { ExplainPayload } from '../folio-share.js';
+import type { OpenRef, PickRef } from '../links.js';
+import type { ExplainPayload } from '../access.js';
 import { ARTIFACTS_FRONT } from './front.js';
 import { Publish } from './publish.js';
 import { PublishUp } from './publish-up.js';
@@ -42,10 +42,10 @@ import { SaveView, ViewsMenu } from './views.js';
 import { Arrived } from './arrived.js';
 import { DocumentDialog } from './document.js';
 import { ReadingContents, ReadingMain, ReadingSide, useReading, type Propose } from './reading.js';
-import { agoWords } from '../folio-publish.js';
+import { agoWords } from '../words.js';
 import { SeriesDialog, SeriesPage, type LoadedSeries } from './series.js';
 
-/** What the new layout needs from the shell: the same as the classic one. */
+/** What Artifacts needs from the shell. */
 export interface ArtifactsProps {
   api: FolioApi;
   userId: string;
@@ -58,12 +58,6 @@ export interface ArtifactsProps {
   place: Place;
   /** Where the person went, so the address bar follows. */
   onPlace: (place: Omit<Place, 'adding'>) => void;
-  /**
-   * Go to the classic layout at this place: for this visit only when the new
-   * layout hasn't got that part yet, or as the device's choice when the person
-   * picked the classic layout itself (`chosen`).
-   */
-  onClassic: (place: Omit<Place, 'adding'>, chosen?: boolean) => void;
   /** Offers words marked in a document to Data Atlas. */
   propose?: Propose;
   pickRef?: PickRef;
@@ -145,12 +139,10 @@ type Ask =
 /**
  * Artifacts on Quill (PDR-010): the front page from config, the rail with the
  * lit path, tiles you walk into, every object's actions in its radial menu,
- * find on `/`, and depth instead of scrims. Reading, sharing and publishing
- * are React too; only tags, saved views and what came from below still open
- * the classic layout.
+ * find on `/`, and depth instead of scrims.
  */
 export function Artifacts(props: ArtifactsProps) {
-  const { api, userId, floorKey, floorName, floorKind, app, onPlace, onClassic, front = ARTIFACTS_FRONT, depth, ringShape } = props;
+  const { api, userId, floorKey, floorName, floorKind, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape } = props;
   const [place, setPlace] = useState<Place>(props.place);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [canCreate, setCanCreate] = useState(false);
@@ -546,7 +538,6 @@ export function Artifacts(props: ArtifactsProps) {
       <RailLink icon="people" label="Shared libraries" current={screen === 'shared'} onPress={() => go({ shared: true })} />
       <RailLink icon="inbox" label="Published to you" current={screen === 'published'} count={glance?.published.new || undefined} onPress={() => go({ published: true })} />
       <RailLink icon="publish" label="From below" current={screen === 'received' || screen === 'arrived'} onPress={() => go({ received: true })} />
-      <RailLink icon="history" label="Classic layout" onPress={() => onClassic(place, true)} />
     </>
   );
 

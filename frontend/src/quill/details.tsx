@@ -2,8 +2,8 @@ import { CONTAINER_LIFECYCLE } from '@augur/records';
 import { Details, Dialog, Lifecycle, List, Tag, TagPicker, relativeTime, type ListItem } from '@augur/app-kit';
 import { useCallback, useEffect, useState } from 'react';
 import { CONTAINER_STATES, stateName, type ContainerState, type Folder, type FolioApi, type OpenLibrary, type RecordLink, type Tag as FolioTag } from '../api.js';
-import type { PickRef } from '../folio-links.js';
-import { closedWords, stateOf } from '../folio-app.js';
+import type { PickRef } from '../links.js';
+import { closedWords, stateOf } from '../places.js';
 import { tagOptions } from '../words.js';
 import { Links } from './links.js';
 

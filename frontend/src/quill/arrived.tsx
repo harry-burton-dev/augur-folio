@@ -1,8 +1,8 @@
 import { Button, Card, Cards, List, State, Surface, relativeTime, type ListItem } from '@augur/app-kit';
 import { useEffect, useState } from 'react';
 import { stateName, type FloorView, type FolioApi, type LevelInfo, type ReceivedPage, type RecordView } from '../api.js';
-import { folderTrail } from '../folio-app.js';
-import { filterWords, floorWords } from '../folio-publish-up.js';
+import { folderTrail } from '../places.js';
+import { filterWords, floorWords } from '../placements.js';
 
 export interface ArrivedProps {
   api: FolioApi;

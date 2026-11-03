@@ -1,8 +1,8 @@
 import { Button, Checkbox, CheckboxGroup, List, Path, Select, State, TextField, type ListItem, type PathStep, type SelectOption } from '@augur/app-kit';
 import { useCallback, useEffect, useState } from 'react';
 import { CONTENT_STATES, type ContentState, type FolioApi, type Placements, type RecordView } from '../api.js';
-import { agoWords } from '../folio-publish.js';
-import { chainSteps, filterWords, floorWords } from '../folio-publish-up.js';
+import { agoWords } from '../words.js';
+import { chainSteps, filterWords, floorWords } from '../placements.js';
 
 /** What a newly published step lets through at first: what's done, never the working states. */
 const DEFAULT_FILTER: ContentState[] = ['complete', 'issued'];

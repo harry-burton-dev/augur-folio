@@ -17,7 +17,7 @@ import {
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CONTENT_STATES, fileTypeOf, sizeWords, stateName, type ContentState, type FolioApi, type OpenDocument, type RecordLink, type Tag as FolioTag } from '../api.js';
-import type { PickRef } from '../folio-links.js';
+import type { PickRef } from '../links.js';
 import { Links } from './links.js';
 
 /** How a person likes to read, kept in their browser for every document. */

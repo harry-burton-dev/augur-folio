@@ -1,7 +1,7 @@
 import { Button, Dialog, DropZone, List, Note, Select, Tag, TagPicker, TextField, relativeTime, type ListItem, type SelectOption } from '@augur/app-kit';
 import { useState } from 'react';
 import { ACCEPT, sizeWords, type FolioApi, type OpenDocument, type OpenLibrary, type Tag as FolioTag } from '../api.js';
-import { documentLine, folderTrail, readerWords } from '../folio-app.js';
+import { documentLine, folderTrail, readerWords } from '../places.js';
 import { tagOptions } from '../words.js';
 
 export interface DocumentDialogProps {
