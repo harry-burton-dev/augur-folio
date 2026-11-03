@@ -5,9 +5,10 @@ argument, `{"version": "<document version id>"}`, in DBOS's portable JSON. The w
 listens to that queue only and runs each workflow as three steps:
 
 1. start: marks the row running and finds the original, unless it is ready, failed or gone;
-2. render: counts the try, renders the file and puts the results in the bucket. DBOS tries
-   it again after a minute, then four, if it fails for a reason that may pass;
-3. finish or fail: records what came of it.
+2. render: counts the try, renders the file, puts the results in the bucket and records them
+   on the row. DBOS tries it again after a minute, then four, if it fails for a reason that
+   may pass. The row is written inside the step so DBOS keeps only a small result, not the text;
+3. fail: records why, when the file can't be rendered or the tries ran out.
 
 DBOS keeps where each workflow got to in Folio's database, so a worker that dies mid-file
 carries on from the step it was in when it, or another worker, starts again.
@@ -93,8 +94,9 @@ def dbos_config(app_id: str, database_url: str) -> DBOSConfig:
 def render_once(version: str, object_key: str, media_type: str, *, last_try: bool) -> dict[str, Any]:
     """One try at a version's renditions: counts it, renders, uploads.
 
-    Returns `{"made": …}` with what to record, `{"error": why}` when the file can't be rendered
-    (trying again won't help), or `{"gone": True}` when the row was finished or removed meanwhile.
+    Records what it made on the row and returns `{"ready": True, "images": n, "pages": p}`, or
+    `{"error": why}` when the file can't be rendered (trying again won't help), or `{"gone": True}`
+    when the row was finished or removed meanwhile.
     Anything else raises, for DBOS to try again; the row says so meanwhile, unless this was the last try.
     """
     deps = _now()
@@ -128,16 +130,20 @@ def render_once(version: str, object_key: str, media_type: str, *, last_try: boo
             with _connect() as conn:
                 rows.wait_to_retry(conn, version, rows.try_again(err))
         raise
-    return {
-        "made": {
-            "engine": list(made.engine),
-            "reader_key": f"{at}reader.md",
-            "thumbnail_key": thumbnail_key,
-            "images": images,
-            "pages": made.pages,
-            "text": made.text,
-        }
-    }
+    with _connect() as conn:
+        recorded = rows.finish(
+            conn,
+            version,
+            engine=list(made.engine),
+            reader_key=f"{at}reader.md",
+            thumbnail_key=thumbnail_key,
+            images=images,
+            pages=made.pages,
+            text=made.text,
+        )
+    if not recorded:
+        return {"gone": True}
+    return {"ready": True, "images": len(images), "pages": made.pages}
 
 
 @DBOS.step(name="start")
@@ -152,12 +158,6 @@ def make(version: str, object_key: str, media_type: str) -> dict[str, Any]:
     status = DBOS.step_status
     last_try = status is None or status.current_attempt is None or status.max_attempts is None or status.current_attempt + 1 >= status.max_attempts
     return render_once(version, object_key, media_type, last_try=last_try)
-
-
-@DBOS.step(name="finish")
-def finish(version: str, made: dict[str, Any]) -> bool:
-    with _connect() as conn:
-        return rows.finish(conn, version, **made)
 
 
 @DBOS.step(name="fail")
@@ -186,12 +186,8 @@ def renditions(job: dict[str, Any]) -> str:
     if "error" in result:
         fail(version, result["error"])
         return "failed"
-    if finish(version, result["made"]):
-        made = result["made"]
-        log.info("rendered", extra={"version": version, "images": len(made["images"]), "pages": made["pages"]})
-        return "ready"
-    log.info("finished elsewhere", extra={"version": version})
-    return "skipped"
+    log.info("rendered", extra={"version": version, "images": result["images"], "pages": result["pages"]})
+    return "ready"
 
 
 def launch(app_id: str, deps: Deps, log_format: logging.Formatter | None = None) -> None:

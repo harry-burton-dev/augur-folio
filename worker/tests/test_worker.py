@@ -91,19 +91,17 @@ def test_start_leaves_a_finished_or_missing_rendition_alone(conn, objects):
     assert row(conn, "v-1")[0] == "ready"
 
 
-def test_a_try_makes_a_reader_copy_and_finishing_records_it(conn, objects):
+def test_a_try_makes_a_reader_copy_and_records_it(conn, objects):
     key = upload(conn, objects, "v-1", b"Hello *world*")
     rows.start(conn, "v-1")
     result = worker.render_once("v-1", key, "text/plain", last_try=False)
-    assert row(conn, "v-1")[:2] == ("running", 1)
+    # DBOS keeps the step's result, so it stays small: the text lives on the row only.
+    assert result == {"ready": True, "images": 0, "pages": None}
     assert objects.files["renditions/v-1/reader.md"] == b"Hello \\*world\\*\n"
     assert objects.types["renditions/v-1/reader.md"].startswith("text/markdown")
-    made = result["made"]
-    assert made["reader_key"] == "renditions/v-1/reader.md" and made["engine"] == ["folio-text", "1"]
-    assert rows.finish(conn, "v-1", **made)
     assert row(conn, "v-1") == ("ready", 1, None, "renditions/v-1/reader.md", [], "Hello *world*", "folio-text")
     # Finishing again changes nothing.
-    assert not rows.finish(conn, "v-1", **{**made, "text": "other"})
+    assert not rows.finish(conn, "v-1", engine=["x", "1"], reader_key="k", thumbnail_key=None, images=[], pages=None, text="other")
     assert row(conn, "v-1")[5] == "Hello *world*"
 
 
