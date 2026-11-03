@@ -1,0 +1,49 @@
+name: Lockfile
+# Brings pnpm-lock.yaml up to date on a pull request's branch and pushes it. For a change that adds or bumps
+# a package from GitHub Packages (AUGUR's @augur/* packages) made where no read token is set, such as a
+# cloud session: Actions → Lockfile → Run workflow, with the branch. It pushes with RELEASE_TOKEN when set (else
+# this run's own token, and then CI doesn't run on the new commit: push any commit after it). Never on main.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: The pull request's branch
+        required: true
+permissions:
+  contents: read
+  packages: read
+jobs:
+  lock:
+    if: inputs.branch != 'main' && !startsWith(inputs.branch, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: pnpm install --no-frozen-lockfile --ignore-scripts
+      - name: Push it, if it changed
+        run: |
+          if [ -z "$(git status --porcelain pnpm-lock.yaml)" ]; then
+            echo "pnpm-lock.yaml is already up to date" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml
+          git commit -m "Update pnpm-lock.yaml"
+          git push origin "HEAD:$BRANCH"
+        env:
+          BRANCH: ${{ inputs.branch }}
