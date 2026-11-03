@@ -1,58 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { CONTAINER_LIFECYCLE, CONTENT_LIFECYCLE, furthest, levelFrom, reaches, type ContainerState, type ContentState, type Level, type LevelName, type StateChange } from '@augur/records';
+import { CONTAINER_LIFECYCLE, CONTENT_LIFECYCLE, furthest, levelFrom, reaches, type ContainerState, type ContentState, type Level, type LevelName } from '@augur/records';
 import { nextIssue, type Cadence, type IssuePlace } from './cadence.ts';
 import { UNIT_LEVELS, nextLevel, type FolderLevel, type UnitLevel } from './units.ts';
+import type { DocumentSort, DocumentState, DocumentVersion, Folder, FolioDocument, IssueLink, Library, Person, Publication, ReaderState, RenditionState, SavedView, Series, Since, StateMove, Tag, ViewQuery } from './api-types.ts';
+
+/** What crosses the wire as it is kept is written once, in api-types.ts. */
+export type { DocumentSort, DocumentState, DocumentVersion, Folder, FolioDocument, Issue, IssueLink, Library, Person, Publication, ReaderState, RenditionState, SavedView, Series, Since, StateMove, Tag, ViewQuery } from './api-types.ts';
 
 export { furthest, levelFrom, reaches, type Level };
-
-/** A library: a shelf of documents that belongs to one floor (someone's own, a team's, or the org's). */
-export interface Library {
-  id: string;
-  workspace: string;
-  /**
-   * Who its floor lets in, as a principal: `person:<owner>` on someone's own
-   * floor, `tree:<team>` on a team's (its members and those of the teams below
-   * it), `org` on the org's.
-   */
-  floor: string;
-  name: string;
-  description: string;
-  /** Anyone who may tag a document here may also make new tags, not only pick the library's. */
-  freeTags: boolean;
-  /** Open to more, closed to more, or archived (off its floor's list). */
-  state: ContainerState;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * A folder in a library: a subcollection, a series or a subseries, by `level`.
- * Top-level folders have no parent. Which level may sit in which is UNIT_LEVELS'.
- */
-export interface Folder {
-  id: string;
-  library: string;
-  parent?: string;
-  level: FolderLevel;
-  name: string;
-  description: string;
-  state: ContainerState;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-  /** Its own tags, which count for everything inside it when filtering. Listed with the library's folders. */
-  tags?: string[];
-}
-
-/** A move from one lifecycle state to another, on the record: of a version, a folder or a library. */
-export interface StateMove extends StateChange<string> {
-  /** The library, folder or document it happened to. */
-  record: string;
-  /** For a document's version, its number. */
-  version?: number;
-}
 
 /** What an org calls a level instead of Folio's own name. */
 export type LevelNames = Partial<Record<UnitLevel, LevelName>>;
@@ -111,45 +67,7 @@ export interface RecordLink {
 /** The same link is already there. */
 export class LinkedError extends Error {}
 
-/** One file as it was uploaded. A document's versions are numbered from 1 and never change. */
-export interface DocumentVersion {
-  id: string;
-  document: string;
-  number: number;
-  /** The name it had on the uploader's computer. */
-  filename: string;
-  mediaType: string;
-  /** In bytes. */
-  size: number;
-  /** Hex SHA-256 of the file, so a copy can be shown to be the one that was uploaded. */
-  sha256: string;
-  createdBy: string;
-  createdAt: string;
-  /** Where it is in its life: in progress, in review, complete, issued or retired. */
-  state: ContentState;
-  /** How its reader copy is coming along. */
-  reader: ReaderState;
-}
-
-/**
- * Where a version's reader copy is: queued for the rendition worker, being made,
- * ready to read, or failed (with why, after the worker gave up).
- */
-export type RenditionState = 'queued' | 'running' | 'ready' | 'failed';
 export const RENDITION_STATES: readonly RenditionState[] = ['queued', 'running', 'ready', 'failed'];
-
-/** A version's reader copy, as a document's versions show it. */
-export interface ReaderState {
-  state: RenditionState;
-  /** Why it failed, in words a person can act on. */
-  error?: string;
-  /** How many pages the original has, when it has pages (PDF). */
-  pages?: number;
-  /** There's a picture of its first page. */
-  thumbnail: boolean;
-  /** What made it, such as "docling 2.14". */
-  engine?: string;
-}
 
 /**
  * A version's renditions as the worker left them: its reader copy (Markdown) and
@@ -198,94 +116,7 @@ export interface StoredVersion extends DocumentVersion {
   objectKey: string;
 }
 
-/** A document: a title over a run of versions, in a library and perhaps a folder. */
-export interface FolioDocument {
-  id: string;
-  workspace: string;
-  library: string;
-  folder?: string;
-  title: string;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-  /** The newest version. */
-  latest: DocumentVersion;
-  /** Its tags, by id: the org's or its library's. */
-  tags: string[];
-  /** Where it is in being published. */
-  state: DocumentState;
-  /** The version out now, when it's published. */
-  published?: Publication;
-  /** Where it comes in its series, when it's an issue of one. */
-  issue?: Issue;
-}
-
-/**
- * A named run of documents in one library that comes out on a cadence, such
- * as a weekly report. Each issue is a document with a number and a period;
- * the series gives the next one its title, tags and audience.
- */
-export interface Series {
-  id: string;
-  workspace: string;
-  library: string;
-  name: string;
-  description: string;
-  cadence: Cadence;
-  /** Who each issue is published to when it's added, if anyone: as a publication's audience. */
-  audience: string[];
-  /** The tags each issue starts with, by id. */
-  tags: string[];
-  /** The series in the library its issues go in: a folder at the series level. */
-  folder: string;
-  /** Its owner, who is reminded when an issue is late. */
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-  /** How many issues it has. */
-  issues: number;
-  /** Its newest issue. */
-  last?: IssuePlace & { document: string };
-}
-
-/** A document's place in its series. */
-export interface Issue extends IssuePlace {
-  series: string;
-}
-
-/** An issue as the reader's previous and next show it. */
-export interface IssueLink {
-  id: string;
-  library: string;
-  title: string;
-  number: number;
-  period: string;
-}
-
-/** Where a document is in being published: never yet, out to an audience now, or taken back. */
-export type DocumentState = 'draft' | 'published' | 'withdrawn';
 export const DOCUMENT_STATES: readonly DocumentState[] = ['draft', 'published', 'withdrawn'];
-
-/**
- * One version put out to an audience, who may then read that version (and only
- * that one) from wherever they are, and are told it's there. Publishing a
- * document again ends the publication before it; so does withdrawing it.
- */
-export interface Publication {
-  id: string;
-  document: string;
-  library: string;
-  /** The version's number. */
-  version: number;
-  /** Who it went to: `team:<id>`, `tree:<id>` or `org`. */
-  audience: string[];
-  /** What the publisher said about it, shown with it. */
-  note?: string;
-  publishedBy: string;
-  publishedAt: string;
-  /** How it ended, if it has: withdrawn, or replaced by a later publication. */
-  ended?: { as: 'withdrawn' | 'replaced'; by: string; at: string; reason?: string };
-}
 
 /** Who a version can be published to: teams, a team and those below it, or the org. People are let in by sharing. */
 export const AUDIENCE = /^(?:(?:team|tree):[A-Za-z0-9._@-]{1,100}|org)$/;
@@ -310,27 +141,10 @@ export interface OutboxEvent {
   payload: Record<string, unknown>;
 }
 
-/**
- * A word to find documents by. The org's tags (no library) are shared by every
- * library; a library's own are its managers' to keep.
- */
-export interface Tag {
-  id: string;
-  workspace: string;
-  /** Whose tag it is; none for the org's. */
-  library?: string;
-  name: string;
-  createdBy: string;
-  createdAt: string;
-}
-
-/** How a list of documents is ordered. */
-export type DocumentSort = 'title' | 'newest' | 'updated' | 'period';
 export const DOCUMENT_SORTS: readonly DocumentSort[] = ['title', 'newest', 'updated', 'period'];
 
 /** "Changed in the past …", in days, so a saved view keeps meaning the past week, not one week. */
-export const SINCE = { week: 7, month: 31, quarter: 92, year: 366 } as const;
-export type Since = keyof typeof SINCE;
+export const SINCE = { week: 7, month: 31, quarter: 92, year: 366 } as const satisfies Record<Since, number>;
 
 /** Which documents to list, as the store asks for them. */
 export interface DocumentQuery {
@@ -367,38 +181,6 @@ export interface DocumentQuery {
 export interface DocumentPage {
   documents: FolioDocument[];
   total: number;
-}
-
-/** A set of filters as people choose them, kept so a saved view means the same tomorrow. */
-export interface ViewQuery {
-  folder?: string;
-  tags?: string[];
-  /** File kinds: pdf, word, html, markdown, text. */
-  types?: string[];
-  authors?: string[];
-  since?: Since;
-  from?: string;
-  to?: string;
-  sort?: DocumentSort;
-  states?: DocumentState[];
-  series?: string;
-  lifecycle?: ContentState[];
-}
-
-/** A filter set saved in a library, for everyone there, in its side rail. */
-export interface SavedView {
-  id: string;
-  library: string;
-  name: string;
-  query: ViewQuery;
-  createdBy: string;
-  createdAt: string;
-}
-
-/** Someone who added documents, by the name they last had in Folio. */
-export interface Person {
-  id: string;
-  name: string;
 }
 
 /**

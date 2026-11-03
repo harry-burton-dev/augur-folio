@@ -15,6 +15,7 @@ import {
   type CallerWorkspace,
   type DirectorySearch,
 } from '@augur/service-kit';
+import type { LibraryRights } from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
 import { documentRoutes } from './documents.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
@@ -57,19 +58,8 @@ export interface Options {
   notify?: Notify;
 }
 
-/** What the caller may do with a library, so the app only offers what will work. */
-export interface LibraryRights {
-  /** Rename, describe and archive the library, and tidy anyone's folders: the floor's leads. */
-  manage: boolean;
-  /** Make folders: anyone on the floor. */
-  addFolders: boolean;
-  /** Upload documents: anyone on the floor. */
-  addDocuments: boolean;
-  /** Make new tags for the library: its leads, or anyone when it takes free tags. */
-  addTags: boolean;
-  /** Let people and teams in, or take them out: whoever manages it. */
-  share: boolean;
-}
+/** What the caller may do with a library, so the app only offers what will work (see `api-types.ts`). */
+export type { LibraryRights };
 
 /**
  * A library as the caller reaches it. `level` is how far they're let in: the

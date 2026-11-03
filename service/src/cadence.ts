@@ -1,5 +1,8 @@
-/** How often a series comes out. An ad hoc one has issues but no periods, so none is ever late. */
-export type Cadence = 'weekly' | 'monthly' | 'quarterly' | 'adhoc';
+import type { Cadence, IssuePlace } from './api-types.ts';
+
+/** A series' cadence and an issue's place in it are written once, in api-types.ts. */
+export type { Cadence, IssuePlace };
+
 export const CADENCES: readonly Cadence[] = ['weekly', 'monthly', 'quarterly', 'adhoc'];
 
 /** How long after its period ends an issue may still come before it's overdue, in days. */
@@ -55,15 +58,6 @@ export const periodLabel = (cadence: Cadence, start: string, number: number) => 
   if (cadence === 'quarterly') return `Q${Math.floor(at.getUTCMonth() / 3) + 1} ${at.getUTCFullYear()}`;
   return `Issue ${number}`;
 };
-
-/** One issue's place in its series. */
-export interface IssuePlace {
-  number: number;
-  /** The first day of its period (`YYYY-MM-DD`); for an ad hoc series, the day it was added. */
-  periodStart: string;
-  /** "Week 43, 2026". */
-  period: string;
-}
 
 /** The issue a series expects next, and, once it has had one, when that one is overdue. */
 export interface NextIssue extends IssuePlace {
