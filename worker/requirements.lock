@@ -241,18 +241,19 @@ dill==0.4.1 \
     --hash=sha256:1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d \
     --hash=sha256:423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa
     # via multiprocess
-doclang==0.9.0 \
-    --hash=sha256:732c1d8b9e14945836df6bf8ae16e8d4603d77fc160363ce2c5e2aeb3ec4d9cf \
-    --hash=sha256:86e8fafa09946389e16218d9b4fb40e161fa02dc965d72be1b9785e2eeea1f4a
+doclang==0.8.1 \
+    --hash=sha256:35e97454d238dbb40923fa04f15e0c648f27e2138c1602ce927b5a7c197b7c96 \
+    --hash=sha256:737f94b6b8dff6290005bcb753a735653cb7a741efc15c4d37429e2f750fdef5
     # via docling-core
 docling==2.142.1 \
     --hash=sha256:72e52caeb95e36fcc3b2d90a6e77a8229432d20b22efdf17527b9ed5a08bd1b2 \
     --hash=sha256:da56c51989045b3109d0b4fde7ab4cd57b9db67d80a780cf5d5da5e1be33810f
     # via folio-worker (pyproject.toml)
-docling-core==2.106.0 \
-    --hash=sha256:6d7615f7e8e50593239f5dc87a769badc4e3ef5d9753b0a08585e185ba0d7b7f \
-    --hash=sha256:bad9feb0c33184ad53951ae74c3d3f01e18291f9bdc60beecfb61f2e4e3d790a
+docling-core==2.105.0 \
+    --hash=sha256:01db20cf35100b776f348602729c45516487536e60ffa4c81a6979aee91f7bb2 \
+    --hash=sha256:f5b270e23a9ae4b2cc028e43ad6ece31c3d6a9bebca382e41418ecf7e5f6e7ef
     # via
+    #   folio-worker (pyproject.toml)
     #   docling-parse
     #   docling-slim
 docling-ibm-models==4.0.4 \
