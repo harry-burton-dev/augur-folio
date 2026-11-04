@@ -7,8 +7,8 @@ requires-python = ">=3.12,<3.14"
 # Torch comes from its CPU-only index (see the Dockerfile and CI), not PyPI's CUDA build.
 dependencies = [
   "docling==2.142.1",
-  # Docling's own core floats under it; 2.106.0 drops the space after bold text in Markdown (test_render).
-  # Held here until the worker's whole dependency tree is locked (PER-219).
+  # 2.106.0 drops the space after bold text in Markdown (test_render). worker/requirements.lock now holds the
+  # whole tree; this pin stays so a lock refresh can't move it until that is fixed upstream.
   "docling-core==2.105.0",
   "psycopg[binary]==3.3.6",
   "boto3==1.43.118",
