@@ -11,7 +11,8 @@ on:
         description: The pull request's branch
         required: true
 permissions:
-  contents: read
+  # Pushes the lockfiles to the branch it was given (never main or release/**, below).
+  contents: write
   packages: read
 jobs:
   lock:
