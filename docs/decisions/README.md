@@ -5,3 +5,4 @@ docs/decisions/template.md). Anything that touches the platform or other apps is
 
 | Record | Decision | Status | Date |
 | --- | --- | --- | --- |
+| [0001](0001-worker-python-lock-with-uv.md) | The rendition worker installs from a hashed lock that uv writes | Proposed | 2026-11-04 |

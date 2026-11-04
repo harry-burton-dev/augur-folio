@@ -8,6 +8,7 @@ Makes each version's renditions after it is uploaded: a reader copy in Markdown 
 | `folio_worker/queue.py` | Leasing, finishing and failing rows of `folio.renditions` |
 | `folio_worker/worker.py` | The loop: everything waiting, then wait for word of more |
 | `Dockerfile` | Its image, with Docling's models inside so it fetches nothing at run time |
+| `requirements.lock` | Every package it installs, Torch and Transformers included, at an exact version with hashes: the image and CI install from it, and OSV-Scanner reads it. After changing `pyproject.toml`, run `worker/lock.sh` (needs download.pytorch.org) or Actions → Lockfile |
 
 ## How it works
 
@@ -31,7 +32,7 @@ The same as Folio's service, so both read one set of storage settings ([App stor
 
 ```sh
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[test]"
+pip install --require-hashes -r requirements.lock && pip install --no-deps -e ".[test]" && pip install pytest
 pytest                                    # without Postgres, the queue's tests skip
 DATABASE_URL=postgres://… pnpm --filter @apps/folio migrate && DATABASE_URL=postgres://… pytest
 RUN_PDF_TESTS=1 pytest                    # PDFs need Docling's models, fetched the first time

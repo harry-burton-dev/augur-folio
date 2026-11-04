@@ -1,5 +1,6 @@
 name: Lockfile
-# Brings pnpm-lock.yaml up to date on a pull request's branch and pushes it. For a change that adds or bumps
+# Brings pnpm-lock.yaml, and the rendition worker's worker/requirements.lock when it no longer holds
+# worker/pyproject.toml's pins, up to date on a pull request's branch and pushes them. For a change that adds or bumps
 # a package from GitHub Packages (AUGUR's @augur/* packages) made where no read token is set, such as a
 # cloud session: Actions → Lockfile → Run workflow, with the branch. It pushes with RELEASE_TOKEN when set (else
 # this run's own token, and then CI doesn't run on the new commit: push any commit after it). Never on main.
@@ -34,16 +35,20 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: pnpm install --no-frozen-lockfile --ignore-scripts
-      - name: Push it, if it changed
+      # The worker's lock is only resolved again when it no longer holds pyproject.toml's pins, so a run
+      # for a pnpm change doesn't move Torch.
+      - name: The worker's Python lock
+        run: worker/lock.sh check || worker/lock.sh
+      - name: Push them, if they changed
         run: |
-          if [ -z "$(git status --porcelain pnpm-lock.yaml)" ]; then
-            echo "pnpm-lock.yaml is already up to date" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$(git status --porcelain pnpm-lock.yaml worker/requirements.lock)" ]; then
+            echo "pnpm-lock.yaml and worker/requirements.lock are already up to date" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pnpm-lock.yaml
-          git commit -m "Update pnpm-lock.yaml"
+          git add pnpm-lock.yaml worker/requirements.lock
+          git commit -m "Update the lockfiles"
           git push origin "HEAD:$BRANCH"
         env:
           BRANCH: ${{ inputs.branch }}
