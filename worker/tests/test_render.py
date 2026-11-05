@@ -1,12 +1,13 @@
 import io
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from folio_worker.render import RenderError, render
+from folio_worker.render import Rendered, RenderError, apart, render
 from tests import files
 
 WORD = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -71,3 +72,47 @@ def test_pdf_has_pages_and_a_thumbnail(tmp_path):
     assert "Travel policy" in made.markdown and "Claim within 30 days" in made.markdown
     thumbnail = Image.open(io.BytesIO(made.thumbnail))
     assert thumbnail.width <= 480 and thumbnail.height > thumbnail.width
+
+
+# Word, HTML and Markdown are read in a process of their own, stopped past the timeout (Docling times only
+# PDFs). These stand in for Docling there: the process imports them from this module by name.
+
+
+def _quick(path: Path, media_type: str, timeout: int) -> Rendered:
+    return Rendered(markdown=f"# {media_type}\n", text=path.name, engine=("test", "1"))
+
+
+def _slow(path: Path, media_type: str, timeout: int) -> Rendered:
+    time.sleep(60)
+    return _quick(path, media_type, timeout)
+
+
+def _refuses(path: Path, media_type: str, timeout: int) -> Rendered:
+    raise RenderError("Not this one.")
+
+
+def _dies(path: Path, media_type: str, timeout: int) -> Rendered:
+    os._exit(9)
+
+
+def test_a_file_read_apart_comes_back_whole(tmp_path):
+    made = apart(_quick, tmp_path / "original", "text/html", 30)
+    assert (made.markdown, made.text, made.engine) == ("# text/html\n", "original", ("test", "1"))
+
+
+def test_a_file_that_takes_too_long_is_given_up_and_its_process_stopped(tmp_path):
+    started = time.monotonic()
+    with pytest.raises(RenderError, match="gave up reading this file after 2 seconds"):
+        apart(_slow, tmp_path / "original", "text/html", 2)
+    assert time.monotonic() - started < 20
+
+
+def test_a_refusal_apart_is_still_a_refusal(tmp_path):
+    with pytest.raises(RenderError, match="Not this one."):
+        apart(_refuses, tmp_path / "original", "text/html", 30)
+
+
+def test_a_process_that_stops_without_a_word_is_tried_again(tmp_path):
+    # Not a RenderError, so DBOS tries again: it may have run out of memory with something else running.
+    with pytest.raises(RuntimeError, match="exit code"):
+        apart(_dies, tmp_path / "original", "text/html", 30)

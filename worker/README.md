@@ -22,6 +22,12 @@ A run has three steps, each safe to run twice:
 
 A file Docling can't read, or reads only part of, fails at once with why. Anything else (the bucket down, say) puts the row back to `queued`, saying it will try again, and DBOS tries the render again after a minute, then four; after the third try it fails. Every try counts in `attempts`, a try cut short by a crash too.
 
+Docling keeps a PDF to `RENDER_TIMEOUT_SECONDS` itself. Word, HTML and Markdown have no timeout there, so the worker reads each of them in a process of its own and stops it past the timeout; that file then fails, saying it took too long. A process that stops without a word (out of memory, say) counts as a try that may pass next time.
+
+While it runs, the worker asks its database every 30 seconds and notes each answer in `/tmp/folio-worker.alive` (`WORKER_HEARTBEAT_FILE`). The image's healthcheck, `python -m folio_worker.health`, says it's unhealthy when no answer has come for 90 seconds.
+
+It sends OpenTelemetry, a span for each run and step and its log lines, once the deployment names a collector, by the same rules as AUGUR's services (decision 0002, AUGUR's ADR 0034): `OTEL_EXPORTER_OTLP_ENDPOINT` set, `OTEL_SDK_DISABLED` not `true`. It's `folio-worker` unless `OTEL_SERVICE_NAME` says otherwise.
+
 The worker's DBOS application version is `augur-jobs-1` (`JOBS_VERSION` in `worker.py`). It must equal the service kit's, or the worker won't take the runs the service queues.
 
 ## Settings
@@ -35,6 +41,8 @@ The same as Folio's service, so both read one set of storage settings ([App stor
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | Folio's bucket |
 | `S3_REGION` | Default `garage` |
 | `RENDER_TIMEOUT_SECONDS` | The longest one file may take. Default 1200 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` and the other standard `OTEL_*` settings | Where telemetry goes. Off when unset |
+| `WORKER_HEARTBEAT_FILE` | Default `/tmp/folio-worker.alive` |
 
 ## Develop
 

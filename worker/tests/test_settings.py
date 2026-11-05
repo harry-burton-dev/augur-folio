@@ -25,7 +25,7 @@ def test_is_folio_unless_told_otherwise():
 def test_runs_its_jobs_as_the_platform_set_them_up():
     from folio_worker.worker import dbos_config
 
-    assert dbos_config("folio", STORAGE["DATABASE_URL"]) == {
+    assert dbos_config("folio", STORAGE["DATABASE_URL"], {}) == {
         "name": "folio",
         "system_database_url": STORAGE["DATABASE_URL"],
         # The storage service makes `<schema>_jobs` for the app's login.
