@@ -506,9 +506,13 @@ describe('Artifacts, new layout (PDR-010)', () => {
 
   it('opens on the front page its config describes: what needs you, then what’s new', async () => {
     await open('/');
-    expect(document.querySelector('.quill-title-name')!.textContent).toBe('Artifacts');
+    // PDR-010's amendments: the plain look, and Actions showing everything that needs you at once.
+    expect(document.querySelector('.quill-front')!.getAttribute('data-look')).toBe('plain');
+    expect(document.querySelector('.quill-front [role="heading"][aria-level="1"]')!.textContent).toContain('Artifacts');
     expect(document.querySelector('#front-actions')!.textContent).toContain('Actions');
-    expect([...document.querySelectorAll('.quill-reel-light')].map((l) => l.getAttribute('aria-label'))).toContain('Bring in the next action. 1 waiting.');
+    const actions = document.querySelector('#front-actions')!.closest('section')!;
+    expect(actions.querySelector('.quill-reel-light')).toBeNull();
+    expect(actions.querySelectorAll('.quill-reel-card')).toHaveLength(1);
     expect(document.querySelector('.quill-frame')!.textContent).toContain('Collections on Finance');
   });
 
