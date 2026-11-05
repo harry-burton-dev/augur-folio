@@ -133,7 +133,20 @@ export const TOPICS = {
   withdrawn: 'folio.document.withdrawn',
   deleted: 'folio.document.deleted',
   readersChanged: 'folio.document.readers.changed',
+  entityBound: 'folio.record.entity-bound',
+  entityUnbound: 'folio.record.entity-unbound',
 } as const;
+
+/** The app whose things are entities: a link to one of them is an entity binding, told to other apps (ADR 0025). */
+const ENTITY_APP = 'atlas';
+
+/**
+ * What an entity binding tells, in Mandate's shape (`entity`, `role`) with
+ * Artifacts' own record named as links name it, `<library>/<record>`, and its
+ * level, so a follower can open it (a UnitRef: the library is the collection,
+ * a document is a file).
+ */
+const binding = (l: RecordLink, level: UnitLevel) => ({ record: `${l.library}/${l.from}`, library: l.library, level, entity: l.to.id, role: l.relation, link: l.id });
 
 /** An event waiting in the outbox. */
 export interface OutboxEvent {
@@ -698,6 +711,8 @@ export class MemoryFolioStore implements FolioStore {
     if (this.linkList.some((l) => l.from === input.from && l.relation === input.relation && l.to.app === input.to.app && l.to.id === input.to.id)) throw new LinkedError('They’re already linked that way.');
     const made: RecordLink = { ...structuredClone(input), id: randomUUID(), at: new Date().toISOString() };
     this.linkList.push(made);
+    const shelf = this.shelves.get(made.library);
+    if (shelf && made.to.app === ENTITY_APP) this.tell(TOPICS.entityBound, shelf.workspace, binding(made, this.levelOf(made)));
     return structuredClone(made);
   }
 
@@ -711,7 +726,10 @@ export class MemoryFolioStore implements FolioStore {
   async unlink(from: string, id: string) {
     const at = this.linkList.findIndex((l) => l.id === id && l.from === from);
     if (at < 0) return undefined;
-    return this.linkList.splice(at, 1)[0];
+    const [gone] = this.linkList.splice(at, 1);
+    const shelf = this.shelves.get(gone.library);
+    if (shelf && gone.to.app === ENTITY_APP) this.tell(TOPICS.entityUnbound, shelf.workspace, binding(gone, this.levelOf(gone)));
+    return gone;
   }
 
   async place(input: NewPlacement) {
@@ -807,6 +825,12 @@ export class MemoryFolioStore implements FolioStore {
 
   private tell(topic: string, workspace: string, payload: Record<string, unknown>) {
     this.outbox.push({ topic, workspace, payload });
+  }
+
+  /** Which level of the shape a link starts at. */
+  private levelOf(l: RecordLink): UnitLevel {
+    if (l.from === l.library) return 'collection';
+    return this.folderList.find((f) => f.id === l.from && f.library === l.library)?.level ?? 'file';
   }
 
   private withReader(version: Omit<StoredVersion, 'reader'>): StoredVersion {
@@ -2321,11 +2345,15 @@ export class PgFolioStore implements FolioStore {
 
   async link(input: Omit<RecordLink, 'id' | 'at'>) {
     try {
-      const { rows } = await this.pool.query<LinkRow>(
-        `insert into folio.links (id, library_id, from_id, relation, to_app, to_kind, to_id, to_label, linked_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning ${LINK_COLUMNS}`,
-        [randomUUID(), input.library, input.from, input.relation, input.to.app, input.to.kind, input.to.id, input.to.label ?? null, input.by],
-      );
-      return fromLinkRow(rows[0]);
+      return await this.inTransaction(async (client) => {
+        const { rows } = await client.query<LinkRow>(
+          `insert into folio.links (id, library_id, from_id, relation, to_app, to_kind, to_id, to_label, linked_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning ${LINK_COLUMNS}`,
+          [randomUUID(), input.library, input.from, input.relation, input.to.app, input.to.kind, input.to.id, input.to.label ?? null, input.by],
+        );
+        const made = fromLinkRow(rows[0]);
+        if (made.to.app === ENTITY_APP) await this.tellBinding(client, TOPICS.entityBound, made);
+        return made;
+      });
     } catch (err) {
       if ((err as { code?: string }).code === '23505') throw new LinkedError('They’re already linked that way.');
       throw err;
@@ -2341,8 +2369,21 @@ export class PgFolioStore implements FolioStore {
   }
 
   async unlink(from: string, id: string) {
-    const { rows } = await this.pool.query<LinkRow>(`delete from folio.links where id = $1 and from_id = $2 returning ${LINK_COLUMNS}`, [id, from]);
-    return rows[0] && fromLinkRow(rows[0]);
+    return this.inTransaction(async (client) => {
+      const { rows } = await client.query<LinkRow>(`delete from folio.links where id = $1 and from_id = $2 returning ${LINK_COLUMNS}`, [id, from]);
+      const gone = rows[0] && fromLinkRow(rows[0]);
+      if (gone && gone.to.app === ENTITY_APP) await this.tellBinding(client, TOPICS.entityUnbound, gone);
+      return gone;
+    });
+  }
+
+  /** Tells of an entity binding made or taken away, on its library's floor, inside `client`'s transaction. */
+  private async tellBinding(client: pg.PoolClient, topic: string, l: RecordLink) {
+    const { rows } = await client.query<{ workspace_id: string; level: UnitLevel | null }>(
+      'select l.workspace_id, f.level from folio.libraries l left join folio.folders f on f.library_id = l.id and f.id = $2 where l.id = $1',
+      [l.library, l.from],
+    );
+    if (rows[0]) await tell(client, topic, rows[0].workspace_id, binding(l, l.from === l.library ? 'collection' : (rows[0].level ?? 'file')));
   }
 
   async setLevelName(level: UnitLevel, name: LevelName | null, by: string) {
