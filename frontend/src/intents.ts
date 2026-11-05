@@ -1,10 +1,9 @@
-import { DOCUMENT_OPEN, DOCUMENT_PICK, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, defineMicroFrontend, isDocumentRef, isIntentCancelled, isLibraryRef, isUnitRef, UNIT_OPEN, openDocument, openEntity, pickEntities, proposeEntity, type DocumentPick, type Intent, type MountContext } from '@augur/mfe-sdk';
-import manifest from '../../manifest.json' with { type: 'json' };
-import { FolioApi, pathFor, placeFor, type Brief, type Place } from './api.js';
-import type { OpenRef, PickRef } from './links.js';
-import type { ExplainPayload } from './access.js';
 import type { MarkedPassage } from '@augur/app-kit';
-import { mountArtifacts, mountGlance, mountPicker, unmountArtifacts } from './quill/mount.js';
+import { DOCUMENT_OPEN, ENTITY_PICK, ENTITY_PROPOSE, LIBRARY_OPEN, UNIT_OPEN, isDocumentRef, isIntentCancelled, isLibraryRef, isUnitRef, openEntity, pickEntities, proposeEntity, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { pathFor, placeFor, type Place } from './api.js';
+import type { OpenRef, PickRef } from './links.js';
+
+/** The intents Artifacts raises and answers, and the places they open it at. */
 
 /**
  * Offers words marked in a document to whichever app keeps entities (Data
@@ -64,16 +63,6 @@ export const openFrom =
       ? openEntity(ctx, { kind: 'entity', id: ref.id, type: 'entity', ...(ref.label ? { label: ref.label } : {}) })
       : ctx.raise({ type: AIM_OPEN, payload: { id: ref.id } });
 
-/**
- * Where Folio is in the address bar, so a place in it can be shared, and Back
- * goes to the last one: the shell mounts Folio again with that path.
- */
-export const addressFor = (pathname: string, mountedAt: string, place: Omit<Place, 'adding'>) => {
-  const inner = mountedAt === '/' ? '' : mountedAt;
-  if (!pathname.endsWith(inner)) return undefined;
-  return `${pathname.slice(0, pathname.length - inner.length)}${pathFor(place)}`;
-};
-
 /** Opens Folio at a place in it, `{ path }` as its address has it: how its card on Home goes in. */
 export const FOLIO_OPEN = 'folio.open';
 
@@ -101,85 +90,22 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   return { document: intent.payload.id, ...(version ? { version } : {}), adding: false };
 };
 
-/** What Artifacts is called, as its manifest names it (manifest.json). */
-export const APP_NAME = manifest.name;
-
 /** Asks whichever app explains access (Explorer) to say who can open a library or document, over Artifacts. */
 export const ACCESS_EXPLAIN = 'access.explain';
 
-/** Where each mount's layout lives inside the element the shell gave it. */
-const hosts = new WeakMap<HTMLElement, HTMLElement>();
 
-/** Folio: libraries of documents on each floor. What the shell mounts at /folio. */
-export default defineMicroFrontend({
-  mount(el: HTMLElement, ctx: MountContext) {
-    // Another app asked for a document: Folio opens over it as a picker, and answers with the one chosen.
-    if (ctx.intent?.type === DOCUMENT_PICK && ctx.reply) {
-      const reply = ctx.reply;
-      const pick = (ctx.intent.payload ?? {}) as DocumentPick;
-      const host = document.createElement('div');
-      el.replaceChildren(host);
-      hosts.set(el, host);
-      mountPicker(host, {
-        api: new FolioApi((path, init) => ctx.fetch(path, init)),
-        purpose: typeof pick.purpose === 'string' ? pick.purpose : '',
-        accept: Array.isArray(pick.accept) ? pick.accept.filter((a): a is string => typeof a === 'string') : [],
-        onPicked: (document) => reply.respond(document),
-        onCancel: () => reply.cancel(),
-      });
-      return;
-    }
-    let mountedAt = ctx.path;
-    const api = new FolioApi((path, init) => ctx.fetch(path, init));
-    const floorKey = ctx.workspace.kind === 'org' ? 'org' : ctx.workspace.id;
-    const explain = (payload: ExplainPayload) => ctx.request({ type: ACCESS_EXPLAIN, payload });
-    const follow = (place: Omit<Place, 'adding'>) => {
-      const to = addressFor(window.location.pathname, mountedAt, place);
-      if (!to || to === window.location.pathname) return;
-      window.history.pushState(window.history.state, '', to);
-      mountedAt = pathFor(place);
-    };
-    const host = document.createElement('div');
-    host.className = 'folio-host';
-    el.replaceChildren(host);
-    hosts.set(el, host);
-    mountArtifacts(host, {
-      api,
-      userId: ctx.user.id,
-      floorKey,
-      floorName: ctx.workspace.name,
-      floorKind: ctx.workspace.kind,
-      // The org's name, from the floors the shell gives: where it says whose library something shared is.
-      orgName: ctx.workspace.path.find((f) => f.kind === 'org')?.name,
-      app: { name: APP_NAME, icon: 'library' },
-      place: placeForIntent(ctx.intent) ?? placeFor(ctx.path),
-      onPlace: follow,
-      propose: proposeFrom(ctx),
-      pickRef: pickFrom(ctx),
-      openRef: openFrom(ctx),
-      explain,
-      publisher: ctx.user.roles.includes('publisher'),
-    });
-  },
-  unmount(el: HTMLElement) {
-    const host = hosts.get(el);
-    if (host) unmountArtifacts(host);
-    hosts.delete(el);
-    el.replaceChildren();
-  },
-  surfaces: {
-    /** The card on Home: what's new to the person, and the floor's drafts for its leads. */
-    './Glance': {
-      mount(el: HTMLElement, ctx: MountContext) {
-        mountGlance(el, {
-          api: new FolioApi((path, init) => ctx.fetch(path, init)),
-          onOpenDocument: (document: Brief) => void openDocument(ctx, { app: 'folio', id: document.id, title: document.title }),
-          onOpenPublished: () => void ctx.raise({ type: FOLIO_OPEN, payload: { path: '/published' } }),
-        });
-      },
-      unmount(el: HTMLElement) {
-        unmountArtifacts(el);
-      },
-    },
-  },
-});
+/** The intents that open Artifacts at a place (manifest `handles`), by type. */
+export const OPENING = [FOLIO_OPEN, LIBRARY_OPEN, UNIT_OPEN, DOCUMENT_OPEN] as const;
+
+/**
+ * The address inside Artifacts an intent opens it at, or nothing to start
+ * where the shell says. `folio.open` names its path as it is.
+ */
+export const startFor = (intent: Intent): string | undefined => {
+  if (intent.type === FOLIO_OPEN) {
+    const path = (intent.payload as { path?: unknown } | undefined)?.path;
+    return typeof path === 'string' && path.startsWith('/') ? path : undefined;
+  }
+  const place = placeForIntent(intent);
+  return place ? pathFor(place) : undefined;
+};
