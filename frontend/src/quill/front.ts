@@ -1,7 +1,7 @@
 import type { FrontPageConfig } from '@augur/app-kit';
 
 /**
- * Artifacts' front page, as config (PDR-010, docs/app-patterns.md): the same
+ * Artifacts' front page, as config (PDR-010, App patterns, in the AUGUR handbook): the same
  * FrontPage any app builds from its own. Section ids are what the app fills:
  * `actions` (what needs the person), `new` (put out to them since they last
  * looked) and `upcoming` (the next issue each series expects).

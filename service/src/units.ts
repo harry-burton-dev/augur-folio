@@ -7,7 +7,7 @@ export type { FolderLevel, UnitLevel };
  * The form a floor's library takes: collection › subcollection › series ›
  * subseries › file. A collection is what Folio's store calls a library; the
  * three levels between it and the files are what it calls folders. Each level
- * can be skipped but never turned round (docs/app-patterns.md).
+ * can be skipped but never turned round (App patterns, in the AUGUR handbook).
  */
 export const UNIT_LEVELS = defineLevels<UnitLevel>(
   [

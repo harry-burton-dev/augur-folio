@@ -6,9 +6,11 @@ GitHub Packages). AUGUR itself, its ADRs and its guides are in the `augur` repos
 AGENTS.md and the ADRs there before changing how this app reaches the platform.
 
 ## Where to look
-- AUGUR's ADRs (`augur` docs/decisions), especially 0012 (apps in their own repositories), 0015
+- AUGUR's decisions (ADRs and PDRs) in the Decision register, in the AUGUR handbook on Google Drive
+  (`04 Decisions`, https://drive.google.com/drive/folders/16wXmUMRNP2_vXAlf4kBMF9hCDNUXg7yO), especially 0012 (apps in their own repositories), 0015
   (React, Quill, Tailwind) and 0047 (how this repository releases).
-- This app's own decisions: `docs/decisions/` here.
+- This repository's own decisions are in the same register, under its name. Records are never written into
+  a repository: ask for a number and send what was decided and why.
 - The task: its Linear issue (team PER, initiative AUGUR).
 
 ## Rules

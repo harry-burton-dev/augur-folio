@@ -23,7 +23,7 @@ const ID = { type: 'string', maxLength: 64 } as const;
 const PARAMS = { type: 'object', properties: { id: ID }, required: ['id'] } as const;
 
 /**
- * Relationships (docs/app-patterns.md, `@augur/records`): typed links from a
+ * Relationships (App patterns, in the AUGUR handbook, `@augur/records`): typed links from a
  * library, folder or document to another record, here (`unit`) or in another
  * app (an entity in Data Atlas, an intent in Mandate). Anyone who can see the
  * record sees its links, both ways; whoever may change it links and unlinks.
