@@ -628,16 +628,51 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(rowsOf(side).map(([t]) => t).filter((t) => t?.startsWith('Version'))).toEqual(['Version 2, reading', 'Version 1']);
   });
 
-  it('moves the newest version on through its lifecycle from the drawer', async () => {
+  it('moves the newest version on from its actions, and shows where it is in About', async () => {
     const { el, calls } = await open('/libraries/l-1/documents/d-1');
     await ready();
-    const moves = () => [...el.querySelectorAll('.quill-lifecycle-moves button')].map((b) => b.textContent);
-    expect(el.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('In progress');
-    expect(moves()).toEqual(['Make it In review', 'Make it Complete']);
-    reactButton(el, 'Make it Complete')!.click();
+    // About shows where it is in its life, without buttons.
+    const side = el.querySelector<HTMLElement>('.folio-reading-side')!;
+    expect(side.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('In progress');
+    expect(side.querySelector('.quill-lifecycle-moves')).toBeNull();
+    el.querySelector<HTMLElement>('.folio-reading-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    await pressRing('Move to…');
+    const dialog = () => document.querySelector<HTMLElement>('.augur-dialog')!;
+    const moves = [...dialog().querySelectorAll<HTMLButtonElement>('.folio-move-list button')];
+    expect(moves.map((b) => b.textContent)).toEqual(['Make it In review', 'Make it Complete', 'Make it Issued', 'Make it Retired']);
+    // The ones it can't go to now stay, and say why.
+    expect(moves.filter((b) => b.getAttribute('aria-disabled') === 'true' || b.disabled).map((b) => b.textContent)).toEqual(['Make it Issued', 'Make it Retired']);
+    reactButton(dialog(), 'Make it Complete')!.click();
     await ready();
     expect(calls).toContainEqual(['PUT', '/api/folio/v1/libraries/l-1/documents/d-1/versions/2/state', { state: 'complete' }]);
-    expect(el.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('Complete');
+    expect(el.querySelector('.folio-reading-side .quill-lifecycle [aria-current="step"]')!.textContent).toBe('Complete');
+  });
+
+  it('offers what selected words can do beside them: Data Atlas, and a link to their paragraph', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const { el } = await open('/libraries/l-1/documents/d-1');
+    await ready();
+    expect(el.querySelector('.folio-selection')).toBeNull();
+    const words = [...el.querySelectorAll<HTMLElement>('.quill-reader p')].find((p) => p.textContent?.includes('travel desk'))!;
+    const range = document.createRange();
+    range.selectNodeContents(words);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    await ready();
+    const bar = el.querySelector<HTMLElement>('.folio-selection[role="toolbar"]')!;
+    expect(bar.getAttribute('aria-label')).toContain('travel desk');
+    expect(reactButton(bar, 'Add to Data Atlas')).toBeDefined();
+    // About no longer carries it.
+    expect(reactButton(el.querySelector<HTMLElement>('.folio-reading-side')!, 'Add to Data Atlas')).toBeUndefined();
+    reactButton(bar, 'Copy a link')!.click();
+    await ready();
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/@finance\/folio\/libraries\/l-1\/documents\/d-1#.+/));
+    expect(bar.textContent).toContain('Link copied.');
+    selection.removeAllRanges();
   });
 
   it('keeps how it reads in a bar over the text, and what can be done to it on its head', async () => {

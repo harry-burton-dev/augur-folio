@@ -29,6 +29,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag, type FloorNamed } from '../api.js';
 import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../places.js';
 import { DEFAULT_LEVELS } from '../words.js';
+import { MoveDialog } from './move.js';
 import { Levels } from './levels.js';
 import type { OpenRef, PickRef } from '../links.js';
 import type { ExplainPayload } from '../access.js';
@@ -131,6 +132,7 @@ type Ask =
   | { kind: 'share'; library: string; document?: string; folder?: string; name: string; eyebrow: string }
   | { kind: 'publish-up'; library: string; record: { kind: 'library' | 'folder' | 'document'; id: string; name: string } }
   | { kind: 'publish'; doc: OpenDocument }
+  | { kind: 'move'; doc: OpenDocument; version: number; run: (version: number, state: ContentState) => Promise<unknown> }
   | { kind: 'series'; library: OpenLibrary; series?: LoadedSeries }
   | { kind: 'levels' }
   | { kind: 'document'; doc: OpenDocument }
@@ -727,6 +729,7 @@ export function Artifacts(props: ArtifactsProps) {
   };
   const retry = (d: OpenDocument, version: number) => void api.retryReader(d.library, d.id, version).then(() => rereadDoc(d));
   const readingLib = doc && open?.id === doc.library ? open : undefined;
+  const moveVersion = (d: OpenDocument) => (version: number, state: ContentState) => api.setVersionState(d.library, d.id, version, state).then(() => rereadDoc(d));
   const readerBack = doc ? (readingLib ? [readingLib.name, ...folderTrail(readingLib.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName) : '';
 
   /**
@@ -775,6 +778,13 @@ export function Artifacts(props: ArtifactsProps) {
               },
             ]
           : []),
+        {
+          id: 'move',
+          label: 'Move to…',
+          icon: 'arrow',
+          ...only(!d.only && v.number === d.latest.number && Boolean(d.can.moves?.length), d.only ? 'It was published to you. Whoever keeps it moves it on.' : v.number !== d.latest.number ? 'Only the newest version moves on.' : d.can.change ? 'Only whoever manages it can move it on from here.' : 'Only whoever may change it can move it on.'),
+          run: () => setAsk({ kind: 'move', doc: d, version: v.number, run: moveVersion(d) }),
+        },
         { id: 'change', label: 'Change it', icon: 'rename', ...only(d.can.change, 'You can read it, not change it.'), run: () => setAsk({ kind: 'document', doc: d }) },
       ],
       d.title,
@@ -787,6 +797,7 @@ export function Artifacts(props: ArtifactsProps) {
       <ReadingMain
         reading={reading}
         ring={() => readerRing(doc)}
+        propose={props.propose}
         backLabel={readerBack}
         actions={{
           onBack: () => go(doc.folder ? { library: doc.library, folder: doc.folder } : { library: doc.library }),
@@ -804,11 +815,9 @@ export function Artifacts(props: ArtifactsProps) {
         reading={reading}
         api={api}
         tags={readingLib?.tags ?? []}
-        propose={props.propose}
         pickRef={props.pickRef}
         agoWords={agoWords}
         onRead={(version) => go({ library: doc.library, document: doc.id, ...(version ? { version } : {}) })}
-        onMove={(version, state: ContentState) => api.setVersionState(doc.library, doc.id, version, state).then(() => rereadDoc(doc), fail)}
         onSeries={(series) => go({ library: doc.library, series })}
         onOpenLink={openLink}
       />
@@ -1101,6 +1110,8 @@ function Asking({
       return <TagsDialog api={api} library={open?.id === ask.library.id ? open : ask.library} onClose={close} onChanged={onChanged} />;
     case 'series':
       return <SeriesDialog api={api} library={ask.library} series={ask.series} org={publisher} onClose={close} onSaved={onSeries} />;
+    case 'move':
+      return <MoveDialog doc={ask.doc} version={ask.version} onClose={close} onMove={ask.run} />;
     case 'publish':
       return (
         <Dialog open light size="read" onClose={() => (close(), after())} eyebrow="Publish" heading={ask.doc.title} summary="Put a version out to teams or the whole org, or take it back." cancelLabel="Done">
