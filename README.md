@@ -84,7 +84,7 @@ Opening a document opens its reader page: the reader copy as a page of text, set
 
 Folio's card on Home (on every kind of floor) says how much has been published to you since you last opened "Published to you", names the newest of it, and opens it in one press; the floor's leads also see how many drafts are waiting to be published in its libraries. The card counts drafts on the floor it's on and not the teams below, as a lead manages only their own floor's libraries.
 
-Find (`search: true`) asks `GET /v1/search?q=` as you type. It answers with up to ten documents you may read, or that have been published to you, that have every word you typed as the start of a word in their title, their tags or their text, best first: a word in the title counts most, then in a tag, then in the text. Its readers search a document's newest version; its audience searches only the version published to them. The text is the version's own (the rendition worker's), up to its first 400,000 characters. A document in a library on another team's floor you're on opens there; anything else opens where you are.
+Find (`search: true`) asks `GET /v1/search?q=` as you type. It answers with up to ten documents you may read, or that have been published to you, that have every word you typed as the start of a word in their title, their tags or their text, best first: a word in the title counts most, then in a tag, then in the text. Its readers search a document's newest version; its audience searches only the version published to them, and a floor something was published up to searches only the newest version that passes what was published up (its states). The text is the version's own (the rendition worker's), up to its first 400,000 characters. A document in a library on another team's floor you're on opens there; anything else opens where you are.
 
 ## Other apps
 
@@ -159,7 +159,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `DELETE /libraries/:id/links/:link?record=` | Unlink it |
 | `GET /received` | What's been published up to the caller's floor, with where it's landed |
 | `GET /received/:id?folder=` | The documents a received step shows, each at the newest version its filter lets through |
-| `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them, matching every word by title, tag or text |
+| `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them (or up to their floor), matching every word by title, tag or text |
 | `GET /find?q=` | The same search for the picker, as whole documents with their `libraryName` and `audienceOnly` (only the version published to them is theirs) |
 | `GET /home` | Home's card: what's been published to the caller since they last looked (`published.new`, the newest three), and for the floor's leads its `drafts` |
 | `PUT /published/looked` | The caller has looked at what's published to them: Home stops counting it as new. The app sends it when "Published to you" opens |

@@ -478,6 +478,31 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect(await store.search(['team:w-legal'], 'trains')).toMatchObject([{ document: { id: 'd-1' }, audienceOnly: true }]);
   });
 
+  it('finds what was published up to a floor for exactly that floor, through its filter', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-ops', floor: 'tree:w-ops', name: 'Ops work', createdBy: 'u-1' });
+    const ready = (version: string, text: string) =>
+      store.finishRendition(version, { state: 'ready', engine: 'docling', engineVersion: '2.14.0', readerKey: `renditions/${version}/reader.md`, images: [], text });
+    await store.createDocument({ id: 'd-1', library: lib.id, title: 'Patrol report', createdBy: 'u-1' }, file('d-1', 'v-1'));
+    await ready('v-1', 'Quiet week on the coast.');
+    await store.setVersionState('d-1', 1, 'complete', 'u-1');
+    await store.addVersion('d-1', file('d-1', 'v-2'));
+    await ready('v-2', 'Draft: storms coming.');
+    await store.createDocument({ id: 'd-2', library: lib.id, title: 'Patrol plan', createdBy: 'u-1' }, file('d-2', 'v-3'));
+    const found = async (principals: string[], q: string) => (await store.search(principals, q)).map((h) => h.document.id);
+    expect(await found(['tree:w-dept'], 'patrol')).toEqual([]);
+
+    // The whole library goes up to Dept, showing only what's complete.
+    await store.place({ library: lib.id, record: { kind: 'library', id: lib.id }, from: 'w-ops', to: 'w-dept', toPrincipal: 'tree:w-dept', filter: ['complete'], by: 'u-1' });
+    // Dept finds the complete version and nothing newer; the draft-only document isn't found; another floor finds nothing.
+    expect(await found(['tree:w-dept'], 'patrol')).toEqual(['d-1']);
+    expect(await found(['tree:w-dept'], 'quiet')).toEqual(['d-1']);
+    expect(await found(['tree:w-dept'], 'storms')).toEqual([]);
+    expect(await store.search(['tree:w-dept'], 'patrol')).toMatchObject([{ document: { id: 'd-1' }, audienceOnly: true }]);
+    expect(await found(['tree:w-hr', 'org'], 'patrol')).toEqual([]);
+    // Its own floor still searches its newest version.
+    expect(await found(['tree:w-ops'], 'storms')).toEqual(['d-1']);
+  });
+
   it('remembers when someone last looked at what’s published to them, and lists a floor’s drafts', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
