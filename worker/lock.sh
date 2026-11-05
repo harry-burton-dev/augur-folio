@@ -29,6 +29,11 @@ for pin in pins:
     name = re.sub(r"[-_.]+", "-", m.group(1)).lower()
     if locked.get(name) != m.group(2):
         bad.append(f"{pin}: the lock has {locked.get(name, 'nothing')}")
+# The whole dependency list too, extras and all: a new extra brings packages the lock doesn't hold yet.
+import hashlib
+made = hashlib.sha256("\n".join(pins).encode()).hexdigest()
+if f"# made from pyproject.toml's dependencies {made}\n" not in open(sys.argv[2]).read():
+    bad.append("pyproject.toml's dependencies changed since the lock was written (an extra, say)")
 for b in bad:
     print(f"✗ {b}. Run worker/lock.sh (or Actions → Lockfile).", file=sys.stderr)
 sys.exit(1 if bad else 0)
@@ -48,4 +53,6 @@ cd "$here"
   --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
   --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match \
   -o requirements.lock
+# What it was made from, so `check` can tell when pyproject.toml's list has changed in a way pins don't show.
+python3 -c 'import hashlib, sys, tomllib; pins = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]; print("# made from pyproject.toml\x27s dependencies " + hashlib.sha256("\n".join(pins).encode()).hexdigest())' >> requirements.lock
 echo "Wrote worker/requirements.lock"

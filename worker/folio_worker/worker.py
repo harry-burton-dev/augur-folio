@@ -17,8 +17,9 @@ carries on from the step it was in when it, or another worker, starts again.
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,7 +27,7 @@ from typing import Any, Protocol
 import psycopg
 from dbos import DBOS, DBOSConfig
 
-from . import rows
+from . import rows, telemetry
 from .bucket import prefix
 from .render import Rendered, RenderError, render
 
@@ -78,13 +79,15 @@ def _connect() -> psycopg.Connection:
     return psycopg.connect(_now().database_url, autocommit=True)
 
 
-def dbos_config(app_id: str, database_url: str) -> DBOSConfig:
-    """DBOS's settings: Folio's own login and database, its jobs in the schema the platform made for them."""
+def dbos_config(app_id: str, database_url: str, env: Mapping[str, str] = os.environ) -> DBOSConfig:
+    """DBOS's settings: Folio's own login and database, its jobs in the schema the platform made for them,
+    and telemetry when the deployment names a collector (telemetry.py)."""
     return {
         "name": app_id,
         "system_database_url": database_url,
         "dbos_system_schema": f"{app_id}_jobs",
         "application_version": JOBS_VERSION,
+        **telemetry.dbos_settings(env),
     }
 
 
@@ -194,12 +197,14 @@ def launch(app_id: str, deps: Deps, log_format: logging.Formatter | None = None)
     """Starts DBOS, taking renditions off Folio's queue in the background until destroy() or exit.
     DBOS writes its own lines too: `log_format`, when given, puts them in the worker's form."""
     use(deps)
+    telemetry.name_service()
     DBOS(config=dbos_config(app_id, deps.database_url))
     if log_format:
         for handler in logging.getLogger("dbos").handlers:
             handler.setFormatter(log_format)
     DBOS.listen_queues([QUEUE])
     DBOS.launch()
+    telemetry.send_logs(log)
     log.info("waiting for renditions", extra={"queue": QUEUE})
 
 

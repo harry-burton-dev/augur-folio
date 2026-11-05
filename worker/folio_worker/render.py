@@ -7,7 +7,9 @@ structure to find and becomes Markdown as it is.
 from __future__ import annotations
 
 import io
+import multiprocessing
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from importlib.metadata import version
@@ -94,8 +96,70 @@ def _text_to_markdown(text: str) -> str:
     return "\n\n".join(out) + "\n"
 
 
+#: Docling formats that have no timeout of their own: Docling's `document_timeout` holds only for PDFs.
+_UNTIMED = {media for media, ending in _FORMATS.items() if ending != "pdf"}
+
+
 def render(path: Path, media_type: str, timeout: int = 1200) -> Rendered:
-    """Renders the file at `path`, which was uploaded as `media_type`, taking `timeout` seconds at most."""
+    """Renders the file at `path`, which was uploaded as `media_type`, taking `timeout` seconds at most.
+
+    Docling keeps a PDF to the timeout itself. Word, HTML and Markdown have none there, so they are
+    read in a process of their own, which is stopped if it runs past the timeout.
+    """
+    if media_type in _UNTIMED:
+        return apart(_render_here, path, media_type, timeout)
+    return _render_here(path, media_type, timeout)
+
+
+def _too_long(timeout: int) -> str:
+    return f"Artifacts gave up reading this file after {timeout} seconds, so it made no reader copy. It may be very long, or built in a way that takes too long to read."
+
+
+def _child(target: Callable[[Path, str, int], Rendered], conn, path: str, media_type: str, timeout: int) -> None:
+    """Runs in the process `apart` starts: renders, and sends back what came of it."""
+    try:
+        conn.send(("ok", target(Path(path), media_type, timeout)))
+    except RenderError as err:
+        conn.send(("refused", str(err)))
+    except BaseException as err:  # noqa: BLE001 - whatever it was goes back, for DBOS to try again
+        conn.send(("failed", f"{type(err).__name__}: {err}"))
+    finally:
+        conn.close()
+
+
+def apart(target: Callable[[Path, str, int], Rendered], path: Path, media_type: str, timeout: int) -> Rendered:
+    """Runs `target` in a fresh process and waits `timeout` seconds at most, then stops it.
+
+    A fresh process (spawn, not fork) because the worker's threads and Torch don't survive a fork. A
+    file that takes too long is a RenderError: the same file would take as long next time.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    receive, send = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_child, args=(target, send, str(path), media_type, timeout), daemon=True)
+    process.start()
+    send.close()
+    try:
+        if not receive.poll(timeout):
+            raise RenderError(_too_long(timeout))
+        try:
+            kind, value = receive.recv()
+        except EOFError:
+            # It stopped without a word, such as when it ran out of memory: DBOS tries again.
+            raise RuntimeError(f"The process reading the file stopped (exit code {process.exitcode}).") from None
+    finally:
+        receive.close()
+        if process.is_alive():
+            process.kill()
+        process.join(10)
+    if kind == "ok":
+        return value
+    if kind == "refused":
+        raise RenderError(value)
+    raise RuntimeError(value)
+
+
+def _render_here(path: Path, media_type: str, timeout: int) -> Rendered:
+    """Renders in this process: plain text, PDFs (Docling times those itself), or inside `apart`."""
     if media_type == TEXT:
         try:
             text = path.read_bytes().decode("utf-8")

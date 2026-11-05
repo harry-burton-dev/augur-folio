@@ -5,7 +5,7 @@ import signal
 import sys
 import threading
 
-from . import worker
+from . import health, worker
 from .bucket import ObjectStore
 from .settings import from_env
 
@@ -32,6 +32,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     worker.launch(settings.app_id, worker.Deps(settings.database_url, ObjectStore(settings.bucket), settings.render_timeout), log_format=_Json())
+    # Beats while it can reach its database, for the container's healthcheck (health.py).
+    health.start(settings.database_url, stop)
     stop.wait()
     # A rendition cut short here carries on from its step when a worker starts again.
     worker.destroy()
