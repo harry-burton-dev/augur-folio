@@ -1,5 +1,27 @@
 # @apps/folio
 
+## 0.9.0
+
+### Minor Changes
+
+- 070903a: The manifest says what kind of app this is (ADR 0032): a pillar app: part of the foundation of what AUGUR produces. Needs SDK 1.11 or later, the first that knows the kind, so an older AUGUR refuses it with a reason instead of failing to register it.
+- 745f0f7: Artifacts starts with the service kit's app-service starter: errors are problem details, the floor check and the audit, notification and people adapters come from the kit, named from the manifest. Its late-issue reminders, publication moves and clear-out of deleted documents run as scheduled jobs (once per tick across instances, recorded in the audit log), and renditions are handed to the worker as jobs on DBOS.
+- 9bfa2e1: A feature preview, `lit-path` (PER-283): with it on, the path in the side rail draws itself down to the library or folder you open. Off until someone turns it on in Previews. Artifacts now builds on Quill 0.9 and Common 0.8.
+- bbaedae: Artifacts' front page takes PDR-010's amendments: a plain heading instead of the big centred title, ambient cards dimmed but never blurred, and Actions showing everything that needs you at once (New still pulls its cards in behind the light). Each of Harry's first choices is one change away in `quill/front.ts`.
+- d3b3ca2: The reader's side panel is About only. How the text is read (smaller, larger, wide page) is in a reading bar over it, and what can be done to the document (download, share, publish, publish up, follow its series, change it) is in its actions: right-click or long-press its title, or press Actions beside it. Each action it can't do stays, dimmed, saying why. Shared libraries now name whose floor each thing comes from (`floorKind`, `floorName`, `within` on `GET /v1/shared`), from identity's directory; when it can't be asked, the page says so.
+- cf47d6a: The reader's actions gain Move to…, which lists every state with why the unavailable ones can't be picked and asks before issuing or retiring. Selected words get a small bar beside them with Add to Data Atlas and Copy a link (the link opens the document at that paragraph). About shows the lifecycle without buttons.
+- 745f0f7: The rendition worker runs each reader copy as a durable DBOS workflow, taken from the `folio.renditions` queue the service puts it on, instead of leasing rows of the `renditions` table itself. The table stays the record of how each copy is coming along. The worker keeps its jobs in the `folio_jobs` schema and no longer reads `POLL_SECONDS`. DBOS's Python SDK (`dbos` 3.4.0) is pinned in `worker/requirements.lock` with the worker's other packages. Rows the old worker was still holding go back on the queue the first time the new worker starts.
+- 569ec08: Artifacts needs SDK 2.0: its manifest takes `^2.0.0` and it builds against mfe-sdk 2.0.0 and Quill 0.8.0, the kit an SDK 2.0 shell serves. Quill 0.8's `AppError` says a service's refusal in its sentence (`detail`), so Artifacts' own stopgap for that is gone.
+
+### Patch Changes
+
+- c424536: Only whoever published something, or the leads of the floor it went to, can see what would go with it if it were taken back. An upload's limit is the manifest's `maxUpload`, the one the gateway holds Artifacts to. The one-off move onto publishing up stops looking once nothing is left to move.
+- 817a938: Artifacts keeps its own entry in the Backstage catalog, `catalog-info.yaml`, written by `augur-app catalog` from the manifest and the package.json files. CI checks it is current, and Version packages rewrites it.
+- 4714cc2: Artifacts' manifest says it binds records to entities (`links.entities`, `bindings: ["record"]`, SDK 2.1), so Data Atlas finds its binding events through the registry rather than a list in its own code. It needs AUGUR 0.22.0 or later, whose registry reads these fields.
+- 604343a: Find and the picker now find what was published up to a floor, for the people on that floor, searching only the newest version that passes what was published up.
+- 88dc7b7: Folio keeps its libraries only in Postgres: its in-memory store is gone, and its tests run on real Postgres. Under `pnpm dev:app` it needs `DATABASE_URL` (the dev stack's Postgres); without a bucket, a stand-in still makes reader copies of Markdown and text.
+- bd1bc12: The rendition worker stops reading a Word, HTML or Markdown file that runs past its timeout, as Docling already did for PDFs. Its image has a healthcheck, and it sends OpenTelemetry once a collector is named (decision 0002).
+
 ## 0.8.0
 
 ### Minor Changes
