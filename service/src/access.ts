@@ -3,7 +3,8 @@ import type { DirectorySearch } from '@augur/service-kit';
 import type { Audit } from './audit.ts';
 import { rightsOn, type HeldLibrary, type OnFloor } from './app.ts';
 import { documentFinder, documentRights, type HeldDocument } from './documents.ts';
-import { describePrincipals, type CallerPrincipals } from './people.ts';
+import { describePrincipals, floorKindOf, floorNamed, type CallerPrincipals } from './people.ts';
+import type { FloorNamed } from './api-types.ts';
 import { LEVELS } from '@augur/records';
 import { floorsFrom } from './placements.ts';
 import { PRINCIPAL, reaches, type Folder, type FolioStore, type Grant, type Level, type Placement } from './store.ts';
@@ -148,10 +149,23 @@ export const accessRoutes = async (app: FastifyInstance, { store, audit, onFloor
     const caller = onFloor(req, reply);
     if (!caller) return reply;
     const { libraries, documents } = await store.shared(await principalsOf(caller), caller.workspace.id);
-    const names = new Map((await Promise.all([...new Set(documents.map((d) => d.library))].map((id) => store.library(id)))).flatMap((l) => (l ? [[l.id, l.name]] : [])));
+    const held = new Map((await Promise.all([...new Set(documents.map((d) => d.library))].map((id) => store.library(id)))).flatMap((l) => (l ? [[l.id, l] as const] : [])));
+    // Whose floor each comes from, named by the directory; without it, by kind only, and the page says why.
+    const floors = [...new Set([...libraries.map((l) => l.floor), ...[...held.values()].map((l) => l.floor)])];
+    let named: Map<string, FloorNamed>;
+    let namesUnavailable = false;
+    try {
+      named = new Map((await describe(floors)).map((d) => [d.principal, floorNamed(d)]));
+    } catch (err) {
+      req.log.error({ err: (err as Error).message }, 'could not name the floors things are shared from');
+      named = new Map(floors.map((f) => [f, { floorKind: floorKindOf(f) }]));
+      namesUnavailable = true;
+    }
+    const of = (floor: string | undefined): FloorNamed => (floor && named.get(floor)) || { floorKind: floor ? floorKindOf(floor) : 'team' };
     return {
-      libraries: libraries.map((l) => ({ ...l, can: rightsOn(caller, { ...l, onFloor: false }) })),
-      documents: documents.map((d) => ({ ...d, libraryName: names.get(d.library) ?? '' })),
+      libraries: libraries.map((l) => ({ ...l, ...of(l.floor), can: rightsOn(caller, { ...l, onFloor: false }) })),
+      documents: documents.map((d) => ({ ...d, ...of(held.get(d.library)?.floor), libraryName: held.get(d.library)?.name ?? '' })),
+      ...(namesUnavailable ? { namesUnavailable: true as const } : {}),
     };
   });
 

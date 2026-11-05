@@ -21,10 +21,23 @@
 .folio-levels-form { gap: var(--space-3); }
 
 /* Reading a document: the title over the reader copy, the drawer beside it. */
-.folio-reading { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.folio-reading { position: relative; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+/* What selected words can do, just above them; until it knows where they are, at the top of the column. */
+.folio-selection {
+  position: absolute; z-index: 2; top: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-2); max-width: var(--measure-read);
+  padding: var(--space-2); border-radius: var(--radius-key); background: var(--surface-overlay); backdrop-filter: blur(var(--surface-blur)); border: 1px solid var(--hairline-strong); box-shadow: var(--shadow-overlay);
+}
+.folio-selection[data-placed] { right: auto; transform: translate(-50%, calc(-100% - var(--space-2))); }
+.folio-selection-actions { display: flex; align-items: center; gap: var(--space-2); }
+.folio-move { display: flex; flex-direction: column; gap: var(--space-4); }
+.folio-move-list { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.folio-move-ask { display: flex; flex-direction: column; gap: var(--space-3); }
 .folio-reading-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); width: 100%; max-width: var(--measure-read); margin: 0 auto; }
 .folio-reading[data-wide] .folio-reading-head { max-width: var(--measure-wide); }
 .folio-reading-head h1, .folio-reading-head p { margin: 0; }
+.folio-reading-title { display: flex; align-items: center; gap: var(--space-2); }
+.folio-reading-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; max-width: var(--measure-read); margin: 0 auto; }
+.folio-reading[data-wide] .folio-reading-bar { max-width: var(--measure-wide); }
 .folio-reading-turns { display: flex; justify-content: space-between; gap: var(--space-3); align-self: stretch; }
 .folio-reading-side { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .folio-reading-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }

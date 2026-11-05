@@ -1,5 +1,21 @@
 # @apps/folio
 
+## 0.8.0
+
+### Minor Changes
+
+- 6322b40: Artifacts tells other apps when a library, folder or document is linked to an entity in Data Atlas, or unlinked from it: `folio.record.entity-bound` and `folio.record.entity-unbound`, from the outbox in the same transaction as the link. Data Atlas uses them for an entity's "Used by".
+
+## 0.7.2
+
+### Patch Changes
+
+- 85d6ad8: The wire types between the frontend and the service are written once, in the service's src/api-types.ts, and both sides use them. Types only: the frontend bundle and the service build don't change.
+- 6f990dd: The manifest's SDK range also accepts SDK 2. SDK 2 only stops serving Lit, which this app never used, so the
+  app keeps opening when a deployment moves to an AUGUR shell built on SDK 2.
+- 26d54cc: The service stays up when Postgres restarts or drops an idle connection: its database pools log the lost connection (the service kit's `steadyPool`) instead of ending the process (PER-207).
+- f240173: The rendition worker installs every Python package from `worker/requirements.lock`, at exact versions checked against their hashes, Torch and Transformers included, so each build of a release installs the same code. CI checks the lock holds `pyproject.toml`'s pins and scans it with OSV-Scanner (PER-219, ADR 0001 here).
+
 ## 0.7.1
 
 ### Patch Changes

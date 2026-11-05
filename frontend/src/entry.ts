@@ -149,6 +149,8 @@ export default defineMicroFrontend({
       floorKey,
       floorName: ctx.workspace.name,
       floorKind: ctx.workspace.kind,
+      // The org's name, from the floors the shell gives: where it says whose library something shared is.
+      orgName: ctx.workspace.path.find((f) => f.kind === 'org')?.name,
       app: { name: APP_NAME, icon: 'library' },
       place: placeForIntent(ctx.intent) ?? placeFor(ctx.path),
       onPlace: follow,

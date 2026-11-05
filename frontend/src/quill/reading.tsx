@@ -14,9 +14,11 @@ import {
   type OutlineItem,
   type ReaderHandle,
   type ReaderSize,
+  type RingSubject,
+  useRingTarget,
 } from '@augur/app-kit';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CONTENT_STATES, fileTypeOf, sizeWords, stateName, type ContentState, type FolioApi, type OpenDocument, type RecordLink, type Tag as FolioTag } from '../api.js';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { CONTENT_STATES, fileTypeOf, sizeWords, stateName, type FolioApi, type OpenDocument, type RecordLink, type Tag as FolioTag } from '../api.js';
 import type { PickRef } from '../links.js';
 import { Links } from './links.js';
 
@@ -66,6 +68,18 @@ const PICTURE = /^images\/(\d{1,5}\.png)$/;
 export type Propose = (doc: { id: string; title: string }, passage: MarkedPassage, version: number) => Promise<string>;
 
 const shortWords = (text: string) => (text.length > 80 ? `${text.slice(0, 79)}…` : text);
+
+/** The paragraph a copied link names: the block's anchor after the #. */
+const linkedAnchor = () => {
+  try {
+    return decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    return '';
+  }
+};
+
+/** A link to this page at one block, to paste anywhere. */
+export const paragraphLink = (anchor: string) => `${window.location.href.split('#')[0]}#${encodeURIComponent(anchor)}`;
 
 /** "3 h ago", or "just now". */
 const ago = (time: string) => relativeTime(time);
@@ -135,9 +149,15 @@ export function useReading(api: FolioApi, doc: OpenDocument | undefined, version
 
   const onOutline = (headings: OutlineItem[]) => {
     setOutline(headings);
+    const linked = linkedAnchor();
     const saved = shown && stored.get(placeKey(shown.id));
-    // Back where they were, without taking focus from wherever it is.
-    if (saved && !restored.current && reader.current?.goTo(saved, { smooth: false, focus: false })) setCurrent(reader.current.headingFor(saved));
+    // At the paragraph a link names, or else back where they were, without taking focus from wherever it is.
+    for (const at of [linked, saved]) {
+      if (at && !restored.current && reader.current?.goTo(at, { smooth: false, focus: false })) {
+        setCurrent(reader.current.headingFor(at));
+        break;
+      }
+    }
     restored.current = true;
   };
   const onPosition = (anchor: string) => {
@@ -166,8 +186,17 @@ export interface ReadingActions {
 }
 
 /** The middle: the title, where it is, and the reader copy or why there isn't one yet. */
-export function ReadingMain({ reading, backLabel, actions }: { reading: Reading; backLabel: string; actions: ReadingActions }) {
+export function ReadingMain({ reading, backLabel, actions, ring, propose }: { reading: Reading; backLabel: string; actions: ReadingActions; ring: () => RingSubject | undefined; propose?: Propose }) {
   const { doc, shown: v } = reading;
+  // The document's actions open on its head (right-click, a long press, or the mark by the title); the text keeps the browser's own menu.
+  const head = useRingTarget(ring);
+  const headEl = useRef<HTMLElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  /** The Actions button opens the same ring the head does, centred on the button, for the keyboard and touch. */
+  const openActions = (button: Element | null) => {
+    const r = button?.getBoundingClientRect();
+    headEl.current?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, ...(r && r.width ? { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 } : {}) }));
+  };
   if (!doc) return null;
   if (!v) return <State kind="empty" heading="There’s no such version of this document" />;
   const old = v.number !== doc.latest.number;
@@ -197,12 +226,17 @@ export function ReadingMain({ reading, backLabel, actions }: { reading: Reading;
     }
   };
   return (
-    <div className="folio-reading" data-wide={reading.prefs.wide || undefined}>
-      <header className="folio-reading-head">
+    <div className="folio-reading" data-wide={reading.prefs.wide || undefined} ref={root}>
+      <header className="folio-reading-head" ref={headEl} {...head}>
         <Button kind="ghost" size="sm" onPress={actions.onBack}>
           {backLabel}
         </Button>
-        <h1 className="text-title-s">{doc.title}</h1>
+        <div className="folio-reading-title">
+          <h1 className="text-title-s">{doc.title}</h1>
+          <Button kind="ghost" size="sm" aria-haspopup="menu" onPress={(e) => openActions(e.target as Element)}>
+            Actions
+          </Button>
+        </div>
         <p className="text-meta text-ink-muted">
           {[`Version ${v.number}`, fileTypeOf(v.filename)?.word, `added ${ago(v.createdAt)}`, v.reader.pages ? `${v.reader.pages} ${v.reader.pages === 1 ? 'page' : 'pages'}` : ''].filter(Boolean).join(' · ')}
         </p>
@@ -231,7 +265,99 @@ export function ReadingMain({ reading, backLabel, actions }: { reading: Reading;
           </nav>
         ) : null}
       </header>
+      <ReadingBar reading={reading} />
+      {v.reader.state === 'ready' ? <SelectionBar reading={reading} root={root} propose={propose} /> : null}
       {body()}
+    </div>
+  );
+}
+
+/** Where the selected words are, inside the reading column, so the bar can sit just above them. */
+const selectionAt = (root: HTMLElement | null) => {
+  const selection = window.getSelection();
+  if (!root || !selection?.rangeCount) return undefined;
+  const r = selection.getRangeAt(0).getBoundingClientRect();
+  if (!r.width && !r.height) return undefined;
+  const box = root.getBoundingClientRect();
+  return { top: r.top - box.top, left: r.left - box.left + r.width / 2 };
+};
+
+/**
+ * What can be done with selected words, beside them: offer them to Data
+ * Atlas, or copy a link that opens the document at their paragraph. The
+ * browser's own menu stays on right-click.
+ */
+function SelectionBar({ reading, root, propose }: { reading: Reading; root: RefObject<HTMLDivElement | null>; propose?: Propose }) {
+  const { doc, shown: v, passage } = reading;
+  const [at, setAt] = useState<{ top: number; left: number }>();
+  const [proposing, setProposing] = useState(false);
+  const [said, setSaid] = useState<{ ok: boolean; words: string }>();
+  useEffect(() => {
+    setSaid(undefined);
+    setAt(passage ? selectionAt(root.current) : undefined);
+  }, [passage, root]);
+  if (!doc || !v || !passage) return null;
+  const offer = async () => {
+    if (!propose) return;
+    setProposing(true);
+    setSaid(undefined);
+    try {
+      setSaid({ ok: true, words: await propose({ id: doc.id, title: doc.title }, passage, v.number) });
+    } catch (err) {
+      setSaid({ ok: false, words: (err as Error).message });
+    } finally {
+      setProposing(false);
+    }
+  };
+  const copy = () => {
+    const link = paragraphLink(passage.anchor);
+    const copied = navigator.clipboard?.writeText(link) ?? Promise.reject(new Error('no clipboard'));
+    copied.then(
+      () => setSaid({ ok: true, words: 'Link copied. It opens this document at that paragraph.' }),
+      () => setSaid({ ok: false, words: `Your browser didn’t let Artifacts copy it. The link is ${link}` }),
+    );
+  };
+  return (
+    <div
+      className="folio-selection"
+      role="toolbar"
+      aria-label={`Marked: “${shortWords(passage.text)}”`}
+      data-placed={at ? true : undefined}
+      style={at ? { top: at.top, left: at.left } : undefined}
+      ref={(el) => void (reading.keep.current = el)}
+    >
+      <span className="folio-selection-actions">
+        {propose ? (
+          <Button kind="secondary" size="sm" busy={proposing} busyLabel="Offering…" onPress={() => void offer()}>
+            Add to Data Atlas
+          </Button>
+        ) : null}
+        <Button kind="ghost" size="sm" onPress={copy}>
+          Copy a link
+        </Button>
+      </span>
+      {said ? (
+        <p className="folio-reading-note" data-refused={!said.ok || undefined} role={said.ok ? 'status' : 'alert'}>
+          {said.words}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Above the text: how it's read, not what it is. Remembered in the browser for every document. */
+function ReadingBar({ reading }: { reading: Reading }) {
+  const { prefs, setPrefs } = reading;
+  const size = SIZES.indexOf(prefs.size);
+  return (
+    <div className="folio-reading-bar" role="toolbar" aria-label="Reading">
+      <Button kind="ghost" size="sm" disabled={size === 0} reason="It’s at the smallest size." onPress={() => setPrefs({ size: SIZES[size - 1] })}>
+        Smaller
+      </Button>
+      <Button kind="ghost" size="sm" disabled={size === SIZES.length - 1} reason="It’s at the largest size." onPress={() => setPrefs({ size: SIZES[size + 1] })}>
+        Larger
+      </Button>
+      <Toggle label="Wide page" checked={prefs.wide} onChange={(wide) => setPrefs({ wide })} />
     </div>
   );
 }
@@ -246,33 +372,24 @@ export interface ReadingSideProps {
   api: FolioApi;
   /** The library's tags, to name the document's. */
   tags: FolioTag[];
-  propose?: Propose;
   pickRef?: PickRef;
   /** "When it was published", in words: "3 h ago". */
   agoWords: (time: string) => string;
   onRead: (version?: number) => void;
-  onDownload: (version: number) => void;
-  onManage: () => void;
-  onShare: () => void;
-  onPublish: () => void;
-  onPublishUp: () => void;
-  onMove: (version: number, state: ContentState) => Promise<unknown>;
   onSeries: (series: string) => void;
-  onFollow: (following: boolean) => Promise<unknown>;
   onOpenLink: (link: RecordLink) => void;
 }
 
-/** The drawer while reading: how to read it, what it is, where it is in its life, its links, and its versions. */
+/**
+ * The drawer while reading is About: what it is, where it is in its life, its
+ * links and its versions. What can be done to it is in its actions (on its
+ * head), and how it's read is in the reading bar over the text.
+ */
 export function ReadingSide(props: ReadingSideProps) {
-  const { reading, api, tags, propose, pickRef, agoWords } = props;
-  const { doc, shown: v, prefs, setPrefs, passage } = reading;
-  const [moving, setMoving] = useState(false);
-  const [proposing, setProposing] = useState(false);
-  const [proposed, setProposed] = useState<{ ok: boolean; words: string }>();
-  useEffect(() => setProposed(undefined), [passage?.text, passage?.anchor]);
+  const { reading, api, tags, pickRef, agoWords } = props;
+  const { doc, shown: v } = reading;
   if (!doc || !v) return null;
   const newest = doc.latest.number;
-  const size = SIZES.indexOf(prefs.size);
   const versions: ListItem[] = doc.versions.map((x) => ({
     id: String(x.number),
     title: x.number === v.number ? `Version ${x.number}, reading` : `Version ${x.number}`,
@@ -280,18 +397,6 @@ export function ReadingSide(props: ReadingSideProps) {
     detail: [stateName(x.state), sizeWords(x.size), x.number === newest ? 'newest' : '', x.number === doc.published?.version ? 'published' : ''].filter(Boolean).join(' · '),
     meta: ago(x.createdAt),
   }));
-  const offer = async () => {
-    if (!propose || !passage) return;
-    setProposing(true);
-    setProposed(undefined);
-    try {
-      setProposed({ ok: true, words: await propose({ id: doc.id, title: doc.title }, passage, v.number) });
-    } catch (err) {
-      setProposed({ ok: false, words: (err as Error).message });
-    } finally {
-      setProposing(false);
-    }
-  };
   const publishing = doc.issue || doc.only || doc.state === 'published';
   const publishedWords = doc.only
     ? `Version ${doc.only} was published to you${doc.published ? ` ${agoWords(doc.published.publishedAt)}` : ''}.`
@@ -305,54 +410,11 @@ export function ReadingSide(props: ReadingSideProps) {
 
   return (
     <div className="folio-reading-side">
-      <section className="folio-reading-section" aria-label="Text size">
-        <span className="quill-label">Text size</span>
-        <div className="folio-reading-row" role="group" aria-label="Text size">
-          <Button kind="secondary" size="sm" disabled={size === 0} reason="It’s at the smallest size." onPress={() => setPrefs({ size: SIZES[size - 1] })}>
-            Smaller
-          </Button>
-          <Button kind="secondary" size="sm" disabled={size === SIZES.length - 1} reason="It’s at the largest size." onPress={() => setPrefs({ size: SIZES[size + 1] })}>
-            Larger
-          </Button>
-        </div>
-        <Toggle label="Wide page" checked={prefs.wide} onChange={(wide) => setPrefs({ wide })} />
-      </section>
-      <div className="folio-reading-row">
-        <Button kind="secondary" size="sm" onPress={() => props.onDownload(v.number)}>
-          Download the original
-        </Button>
-        {doc.can.change ? (
-          <Button kind="ghost" size="sm" onPress={props.onManage}>
-            Change it
-          </Button>
-        ) : null}
-        {doc.only ? null : (
-          <Button kind="ghost" size="sm" onPress={props.onShare}>
-            {doc.can.share ? 'Share' : 'Who can see it'}
-          </Button>
-        )}
-      </div>
       {doc.only ? null : (
         <section className="folio-reading-section" aria-label="Lifecycle">
           <span className="quill-label">Version {v.number}</span>
-          <Lifecycle
-            label={`Version ${v.number}`}
-            states={CONTENT_STATES}
-            offLine={['retired']}
-            state={v.state}
-            moves={isNewest ? (doc.can.moves ?? []) : []}
-            why={isNewest ? (doc.can.change ? 'Only whoever manages it can issue or retire it.' : 'Only whoever may change it can move it on.') : 'Only the newest version moves on.'}
-            busy={moving}
-            onMove={(state) => {
-              setMoving(true);
-              void props.onMove(v.number, state as ContentState).finally(() => setMoving(false));
-            }}
-          />
-          <div>
-            <Button kind="ghost" size="sm" onPress={props.onPublishUp}>
-              Publish up the floors
-            </Button>
-          </div>
+          <Lifecycle label={`Version ${v.number}`} states={CONTENT_STATES} offLine={['retired']} state={v.state} />
+          {isNewest && doc.can.moves?.length ? <p className="folio-reading-note">Move it on from Actions, by its title.</p> : null}
         </section>
       )}
       {publishing ? (
@@ -362,13 +424,6 @@ export function ReadingSide(props: ReadingSideProps) {
             {publishedWords}
           </p>
           {doc.published?.note && doc.only ? <p className="folio-reading-note">“{doc.published.note}”</p> : null}
-          {doc.can.publish ? (
-            <div>
-              <Button kind="secondary" size="sm" onPress={props.onPublish}>
-                {doc.state === 'published' ? 'Publishing' : 'Publish'}
-              </Button>
-            </div>
-          ) : null}
         </section>
       ) : null}
       {run && issue ? (
@@ -382,29 +437,13 @@ export function ReadingSide(props: ReadingSideProps) {
               </button>
             </span>
           </p>
-          <Toggle label="Tell me of each new issue" checked={run.following} onChange={(on) => props.onFollow(on)} />
+          {run.following ? <p className="folio-reading-note">You’re told of each new issue.</p> : null}
         </section>
       ) : null}
       <section className="folio-reading-section" aria-label="Links">
         <span className="quill-label">Links</span>
         <Links api={api} library={doc.library} record={{ kind: 'document', id: doc.id, name: doc.title }} pickRef={pickRef} onOpen={props.onOpenLink} />
       </section>
-      {propose && v.reader.state === 'ready' ? (
-        <section className="folio-reading-section" aria-label="Add to Data Atlas" ref={(el) => void (reading.keep.current = el)}>
-          <span className="quill-label">Data Atlas</span>
-          <p className="folio-reading-note">{passage ? `Marked: “${shortWords(passage.text)}”` : 'Select the words that name a ship, port, person or organisation, then add them to Data Atlas. Its leads decide what they are.'}</p>
-          <div>
-            <Button kind="secondary" size="sm" disabled={!passage} reason="Select some words in the document first." busy={proposing} busyLabel="Offering…" onPress={() => void offer()}>
-              Add to Data Atlas
-            </Button>
-          </div>
-          {proposed ? (
-            <p className="folio-reading-note" data-refused={!proposed.ok || undefined} role={proposed.ok ? 'status' : 'alert'}>
-              {proposed.words}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
       {doc.tags.length ? (
         <div className="folio-tags" aria-label="Tags">
           {doc.tags.map((t) => {

@@ -92,6 +92,8 @@ describe('folio access', () => {
     const kim1 = on(kim, 'w-legal');
     expect((await call(kim1, 'GET', `/v1/libraries/${library}/documents`)).json().documents.map((d: { title: string }) => d.title)).toEqual(['Travel']);
     expect((await call(kim1, 'GET', '/v1/shared')).json().libraries.map((l: { name: string; level: string }) => [l.name, l.level])).toEqual([['Policies', 'read']]);
+    // Named by whose floor it's on, as the directory names it.
+    expect((await call(kim1, 'GET', '/v1/shared')).json().libraries[0]).toMatchObject({ floor: 'tree:w-fin', floorKind: 'team', floorName: 'Finance' });
     // Read means read: nothing added.
     expect((await call(kim1, 'POST', `/v1/libraries/${library}/folders`, { name: 'Ours' })).statusCode).toBe(403);
     // Anyone who can see it can see who else can, but only its managers change that.
@@ -124,7 +126,8 @@ describe('folio access', () => {
     expect((await call(kim1, 'GET', `/v1/libraries/${library}`)).statusCode).toBe(404);
     const shared = (await call(kim1, 'GET', '/v1/shared')).json();
     expect(shared.libraries).toEqual([]);
-    expect(shared.documents.map((d: { title: string; libraryName: string }) => [d.title, d.libraryName])).toEqual([['Travel', 'Policies']]);
+    expect(shared.documents.map((d: { title: string; libraryName: string; floorName?: string }) => [d.title, d.libraryName, d.floorName])).toEqual([['Travel', 'Policies', 'Finance']]);
+    expect(shared.namesUnavailable).toBeUndefined();
     // Managing it, Kim may share it on, but with no one already in by the floor.
     expect((await call(kim1, 'PUT', `/v1/libraries/${library}/documents/${travel.id}/access/team:w-legal`, { level: 'read' })).statusCode).toBe(200);
     expect((await call(kim1, 'PUT', `/v1/libraries/${library}/documents/${travel.id}/access/tree:w-fin`, { level: 'read' })).json().error).toBe('already-in');

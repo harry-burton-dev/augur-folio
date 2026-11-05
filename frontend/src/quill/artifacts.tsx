@@ -26,9 +26,10 @@ import {
   type RingSubject,
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag } from '../api.js';
+import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag, type FloorNamed } from '../api.js';
 import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../places.js';
 import { DEFAULT_LEVELS } from '../words.js';
+import { MoveDialog } from './move.js';
 import { Levels } from './levels.js';
 import type { OpenRef, PickRef } from '../links.js';
 import type { ExplainPayload } from '../access.js';
@@ -53,6 +54,8 @@ export interface ArtifactsProps {
   floorKey: string;
   floorName: string;
   floorKind: 'personal' | 'team' | 'org';
+  /** The org's name, as the shell gives it; absent on a person's own floor. */
+  orgName?: string;
   /** The app's name and icon, from its manifest. */
   app: { name: string; icon: 'library' };
   place: Place;
@@ -129,6 +132,7 @@ type Ask =
   | { kind: 'share'; library: string; document?: string; folder?: string; name: string; eyebrow: string }
   | { kind: 'publish-up'; library: string; record: { kind: 'library' | 'folder' | 'document'; id: string; name: string } }
   | { kind: 'publish'; doc: OpenDocument }
+  | { kind: 'move'; doc: OpenDocument; version: number; run: (version: number, state: ContentState) => Promise<unknown> }
   | { kind: 'series'; library: OpenLibrary; series?: LoadedSeries }
   | { kind: 'levels' }
   | { kind: 'document'; doc: OpenDocument }
@@ -142,7 +146,7 @@ type Ask =
  * find on `/`, and depth instead of scrims.
  */
 export function Artifacts(props: ArtifactsProps) {
-  const { api, userId, floorKey, floorName, floorKind, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape } = props;
+  const { api, userId, floorKey, floorName, floorKind, orgName, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape } = props;
   const [place, setPlace] = useState<Place>(props.place);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [canCreate, setCanCreate] = useState(false);
@@ -725,13 +729,75 @@ export function Artifacts(props: ArtifactsProps) {
   };
   const retry = (d: OpenDocument, version: number) => void api.retryReader(d.library, d.id, version).then(() => rereadDoc(d));
   const readingLib = doc && open?.id === doc.library ? open : undefined;
+  const moveVersion = (d: OpenDocument) => (version: number, state: ContentState) => api.setVersionState(d.library, d.id, version, state).then(() => rereadDoc(d));
   const readerBack = doc ? (readingLib ? [readingLib.name, ...folderTrail(readingLib.folders, doc.folder).map((f) => f.name)].join(' / ') : doc.libraryName) : '';
+
+  /**
+   * The open document's actions, on its head and behind the mark by its title:
+   * everything that does something to it, most used first. Each one it can't
+   * do now stays, dimmed, saying why.
+   */
+  const readerRing = (d: OpenDocument): RingSubject => {
+    const v = reading.shown ?? d.latest;
+    const issue = d.run && d.issue ? d.run : undefined;
+    return run(
+      [
+        { id: 'download', label: 'Download the original', icon: 'download', run: () => download(d, v.number) },
+        {
+          id: 'share',
+          label: d.can.share ? 'Share' : 'Who can see it',
+          icon: 'people',
+          ...only(!d.only, 'It was published to you. Its collection’s leads decide who else sees it.'),
+          run: () => setAsk({ kind: 'share', library: d.library, document: d.id, name: d.title, eyebrow: 'Document' }),
+        },
+        ...(d.issue || d.state === 'published' || d.can.publish
+          ? [
+              {
+                id: 'publish',
+                label: d.state === 'published' ? 'Change what’s published' : 'Publish',
+                icon: 'publish' as const,
+                ...only(d.can.publish, 'Only its collection’s leads can put it out.'),
+                run: () => setAsk({ kind: 'publish', doc: d }),
+              },
+            ]
+          : []),
+        {
+          id: 'publish-up',
+          label: 'Publish up',
+          icon: 'inbox',
+          ...only(!d.only, 'It was published to you, so it goes up from where it’s kept, not from here.'),
+          run: () => setAsk({ kind: 'publish-up', library: d.library, record: { kind: 'document', id: d.id, name: d.title } }),
+        },
+        ...(issue
+          ? [
+              {
+                id: 'follow',
+                label: issue.following ? 'Stop telling me of new issues' : 'Tell me of each new issue',
+                icon: 'bell' as const,
+                run: () => void api.follow(issue.id, !issue.following).then(() => rereadDoc(d), fail),
+              },
+            ]
+          : []),
+        {
+          id: 'move',
+          label: 'Move to…',
+          icon: 'arrow',
+          ...only(!d.only && v.number === d.latest.number && Boolean(d.can.moves?.length), d.only ? 'It was published to you. Whoever keeps it moves it on.' : v.number !== d.latest.number ? 'Only the newest version moves on.' : d.can.change ? 'Only whoever manages it can move it on from here.' : 'Only whoever may change it can move it on.'),
+          run: () => setAsk({ kind: 'move', doc: d, version: v.number, run: moveVersion(d) }),
+        },
+        { id: 'change', label: 'Change it', icon: 'rename', ...only(d.can.change, 'You can read it, not change it.'), run: () => setAsk({ kind: 'document', doc: d }) },
+      ],
+      d.title,
+    );
+  };
 
   const readerPage = () => {
     if (!doc || doc.id !== place.document) return null;
     return (
       <ReadingMain
         reading={reading}
+        ring={() => readerRing(doc)}
+        propose={props.propose}
         backLabel={readerBack}
         actions={{
           onBack: () => go(doc.folder ? { library: doc.library, folder: doc.folder } : { library: doc.library }),
@@ -749,18 +815,10 @@ export function Artifacts(props: ArtifactsProps) {
         reading={reading}
         api={api}
         tags={readingLib?.tags ?? []}
-        propose={props.propose}
         pickRef={props.pickRef}
         agoWords={agoWords}
         onRead={(version) => go({ library: doc.library, document: doc.id, ...(version ? { version } : {}) })}
-        onDownload={(version) => download(doc, version)}
-        onManage={() => setAsk({ kind: 'document', doc })}
-        onShare={() => setAsk({ kind: 'share', library: doc.library, document: doc.id, name: doc.title, eyebrow: 'Document' })}
-        onPublish={() => setAsk({ kind: 'publish', doc })}
-        onPublishUp={() => setAsk({ kind: 'publish-up', library: doc.library, record: { kind: 'document', id: doc.id, name: doc.title } })}
-        onMove={(version, state: ContentState) => api.setVersionState(doc.library, doc.id, version, state).then(() => rereadDoc(doc), fail)}
         onSeries={(series) => go({ library: doc.library, series })}
-        onFollow={(following) => (doc.run ? api.follow(doc.run.id, following).then(() => rereadDoc(doc)) : Promise.resolve())}
         onOpenLink={openLink}
       />
     ) : null;
@@ -797,20 +855,31 @@ export function Artifacts(props: ArtifactsProps) {
     );
   };
 
-  const sharedPage = () => (
-    <>
-      <h1 className="text-title-s">Shared libraries</h1>
-      {shared && !shared.libraries.length && !shared.documents.length ? <p className="quill-empty">Nothing has been shared with you from other floors.</p> : null}
-      <Tiles label="Shared with you">
-        {(shared?.libraries ?? []).map((l) => (
-          <KindTile key={l.id} kind="library" eyebrow={levelName('collection')} name={l.name} note={l.level === 'read' ? 'You can read it' : l.level === 'edit' ? 'You can add to it' : 'You manage it'} onOpen={() => go({ library: l.id })} ring={() => libraryRing(l)} />
-        ))}
-        {(shared?.documents ?? []).map((d) => (
-          <KindTile key={d.id} kind="document" eyebrow="Document" name={d.title} owner={d.libraryName} count={`v${d.latest.number}`} onOpen={() => go({ library: d.library, document: d.id })} ring={() => documentRing(d)} />
-        ))}
-      </Tiles>
-    </>
-  );
+  const sharedPage = () => {
+    // Whose floor each comes from, by the name the directory gives it; where two share a name, where it sits tells them apart.
+    const all = [...(shared?.libraries ?? []), ...(shared?.documents ?? [])];
+    const twice = new Set(all.map((x) => x.floorName).filter((n, i, ns) => n && ns.indexOf(n) !== i));
+    const whose = (x: FloorNamed) => {
+      if (x.floorKind === 'org') return orgName ?? 'The org';
+      if (!x.floorName) return x.floorKind === 'person' ? 'Someone’s own floor' : shared?.namesUnavailable ? 'A team' : 'A team no longer in the directory';
+      return twice.has(x.floorName) && x.within?.length ? `${x.floorName} · ${x.within[x.within.length - 1]}` : x.floorName;
+    };
+    return (
+      <>
+        <h1 className="text-title-s">Shared libraries</h1>
+        {shared && !shared.libraries.length && !shared.documents.length ? <p className="quill-empty">Nothing has been shared with you from other floors.</p> : null}
+        {shared?.namesUnavailable ? <p className="folio-note">Names can’t be looked up right now, so floors are shown by kind.</p> : null}
+        <Tiles label="Shared with you">
+          {(shared?.libraries ?? []).map((l) => (
+            <KindTile key={l.id} kind="library" eyebrow={levelName('collection')} name={l.name} owner={whose(l)} note={l.level === 'read' ? 'You can read it' : l.level === 'edit' ? 'You can add to it' : 'You manage it'} onOpen={() => go({ library: l.id })} ring={() => libraryRing(l)} />
+          ))}
+          {(shared?.documents ?? []).map((d) => (
+            <KindTile key={d.id} kind="document" eyebrow="Document" name={d.title} owner={`${d.libraryName}, ${whose(d)}`} count={`v${d.latest.number}`} onOpen={() => go({ library: d.library, document: d.id })} ring={() => documentRing(d)} />
+          ))}
+        </Tiles>
+      </>
+    );
+  };
 
   const publishedPage = () => (
     <>
@@ -1041,6 +1110,8 @@ function Asking({
       return <TagsDialog api={api} library={open?.id === ask.library.id ? open : ask.library} onClose={close} onChanged={onChanged} />;
     case 'series':
       return <SeriesDialog api={api} library={ask.library} series={ask.series} org={publisher} onClose={close} onSaved={onSeries} />;
+    case 'move':
+      return <MoveDialog doc={ask.doc} version={ask.version} onClose={close} onMove={ask.run} />;
     case 'publish':
       return (
         <Dialog open light size="read" onClose={() => (close(), after())} eyebrow="Publish" heading={ask.doc.title} summary="Put a version out to teams or the whole org, or take it back." cancelLabel="Done">
