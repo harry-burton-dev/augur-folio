@@ -6,7 +6,9 @@ import type { FolioAuditEntry } from './audit.ts';
 import { titleFrom, uploadLimitOf } from './documents.ts';
 import { manifest } from './manifest.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -21,7 +23,7 @@ const setup = async ({ auditFails = false, maxUploadBytes = undefined as number 
   const objects = new MemoryObjectStore();
   const audited: FolioAuditEntry[] = [];
   const app = await buildApp({
-    store: new MemoryFolioStore(),
+    store: db.store,
     objects,
     maxUploadBytes,
     audit: async (entry) => {
@@ -37,7 +39,7 @@ const setup = async ({ auditFails = false, maxUploadBytes = undefined as number 
   return { app, objects, audited, json, send, library };
 };
 
-describe('folio documents', () => {
+describe.runIf(DATABASE_URL)('folio documents', () => {
   it('takes a title from a file’s name', () => {
     expect(titleFrom('Travel policy v3.pdf')).toBe('Travel policy v3');
     expect(titleFrom('.pdf')).toBe('.pdf');

@@ -4,7 +4,9 @@ import { buildApp } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import type { FolioNotice } from './notices.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 // Dept is a team at the top; Ops sits in it. Sam and Lena are on Ops (Lena leads it); Alex is on Dept; Kim only the org.
 const TEAMS: DirectoryTeam[] = [
@@ -33,7 +35,7 @@ const setup = async () => {
   const audited: FolioAuditEntry[] = [];
   const told: FolioNotice[] = [];
   const app = await buildApp({
-    store: new MemoryFolioStore(),
+    store: db.store,
     objects: new MemoryObjectStore(),
     audit: async (entry) => void audited.push(entry),
     notify: async (notice) => void told.push(notice),
@@ -56,7 +58,7 @@ const setup = async () => {
 
 const WORKING = ['in-progress', 'in-review', 'complete'];
 
-describe('folio publishing up the floors', () => {
+describe.runIf(DATABASE_URL)('folio publishing up the floors', () => {
   it('offers the floors above, saying why one can’t be chosen', async () => {
     const { call, library, reports } = await setup();
     const targets = async (who: Caller) => (await call(who, 'GET', `/v1/placements?library=${library}&record=${reports.id}`)).json().targets;

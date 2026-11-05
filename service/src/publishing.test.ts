@@ -4,7 +4,9 @@ import { buildApp, type OnFloor } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import type { FolioNotice } from './notices.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -26,7 +28,7 @@ const TEAMS = [
 const setup = async () => {
   const audited: FolioAuditEntry[] = [];
   const told: FolioNotice[] = [];
-  const store = new MemoryFolioStore();
+  const store = db.store;
   const app = await buildApp({
     store,
     objects: new MemoryObjectStore(),
@@ -53,7 +55,7 @@ const setup = async () => {
   return { app, call, store, library, lead, upload, issue, addVersion, audited, told };
 };
 
-describe('folio publishing', () => {
+describe.runIf(DATABASE_URL)('folio publishing', () => {
   it('reads a version published the old way, to a team who see that version alone, and withdraws it', async () => {
     const { call, store, library, lead, upload, addVersion, audited } = await setup();
     const doc = await upload('Travel');
@@ -66,7 +68,7 @@ describe('folio publishing', () => {
     await store.publish({ document: doc.id, version: 1, audience: ['team:w-legal'], note: 'Approved on Monday', by: 'u-sam' });
     const history = (await call(lead, 'GET', `${base}/publications`)).json();
     expect(history.publications[0]).toMatchObject({ version: 1, audience: [{ principal: 'team:w-legal', kind: 'team', name: 'Legal' }], note: 'Approved on Monday', publishedBy: 'u-sam' });
-    expect(store.outbox.map((e) => e.topic)).toContain('folio.document.published');
+    expect((await db.pool.query('select topic from folio.outbox')).rows.map((e) => e.topic)).toContain('folio.document.published');
 
     // Kim reads the version that's out, and nothing else of it or its library.
     const kim1 = on(kim, 'w-legal');

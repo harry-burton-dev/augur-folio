@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -13,7 +15,7 @@ const member = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: {
 
 const setup = async () => {
   const audited: FolioAuditEntry[] = [];
-  const app = await buildApp({ store: new MemoryFolioStore(), objects: new MemoryObjectStore(), audit: async (entry) => void audited.push(entry) });
+  const app = await buildApp({ store: db.store, objects: new MemoryObjectStore(), audit: async (entry) => void audited.push(entry) });
   const call = (caller: Caller, method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: object) =>
     app.inject({ method, url, headers: callerHeaders(caller), ...(payload ? { payload } : {}) });
   const send = (caller: Caller, url: string, body: string) => app.inject({ method: 'POST', url, headers: { ...callerHeaders(caller), 'content-type': 'text/markdown' }, payload: body });
@@ -21,7 +23,7 @@ const setup = async () => {
   return { call, send, audited, library };
 };
 
-describe('folio units', () => {
+describe.runIf(DATABASE_URL)('folio units', () => {
   it('builds a library from its levels, in the org’s own words', async () => {
     const { call, library } = await setup();
     const levels = (await call(member(alex), 'GET', '/v1/levels')).json();

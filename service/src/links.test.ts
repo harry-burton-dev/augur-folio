@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const person = (id: string, name: string): Caller => ({ id, name, departments: [], roles: [] });
 const sam = person('u-sam', 'Sam Okafor');
@@ -13,7 +15,7 @@ const own = (who: Caller): Caller => ({ ...who, workspace: { id: `p-${who.id}`, 
 const setup = async () => {
   const audited: FolioAuditEntry[] = [];
   const app = await buildApp({
-    store: new MemoryFolioStore(),
+    store: db.store,
     objects: new MemoryObjectStore(),
     audit: async (entry) => void audited.push(entry),
     principals: async (caller) => [`person:${caller.id}`, 'org'],
@@ -31,7 +33,7 @@ const setup = async () => {
 
 const unit = (library: string, record: string) => ({ app: 'folio', kind: 'unit', id: `${library}/${record}` });
 
-describe('folio relationships', () => {
+describe.runIf(DATABASE_URL)('folio relationships', () => {
   it('links a record to another, both ways, and unlinks it', async () => {
     const { call, audited, library, plan, notes } = await setup();
     const linked = await call(own(sam), 'POST', `/v1/libraries/${library}/links`, { record: notes.id, relation: 'responds-to', to: unit(library, plan.id) });

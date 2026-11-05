@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { buildApp, type OnFloor } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -32,7 +34,7 @@ const DIRECTORY = {
 const setup = async ({ identityDown = false } = {}) => {
   const audited: FolioAuditEntry[] = [];
   const app = await buildApp({
-    store: new MemoryFolioStore(),
+    store: db.store,
     objects: new MemoryObjectStore(),
     audit: async (entry) => void audited.push(entry),
     principals: async (caller: OnFloor) => {
@@ -52,7 +54,7 @@ const setup = async ({ identityDown = false } = {}) => {
   return { app, call, library, upload, audited };
 };
 
-describe('folio access', () => {
+describe.runIf(DATABASE_URL)('folio access', () => {
   it('lets in anyone who can stand on the library’s floor, from wherever they are', async () => {
     const { call, library, upload } = await setup();
     const doc = await upload(on(sam, 'w-fin', 'lead'), 'Travel');

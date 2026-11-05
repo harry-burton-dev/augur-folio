@@ -2,7 +2,9 @@ import { callerHeaders, type Caller } from '@augur/service-kit';
 import { describe, expect, it } from 'vitest';
 import { buildApp, type OnFloor } from './app.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const kim: Caller = { id: 'u-kim', name: 'Kim Lee', departments: [], roles: [] };
@@ -15,7 +17,7 @@ const STANDS_FOR: Record<string, string[]> = {
 };
 
 const setup = async () => {
-  const store = new MemoryFolioStore();
+  const store = db.store;
   const app = await buildApp({
     store,
     objects: new MemoryObjectStore(),
@@ -31,7 +33,7 @@ const setup = async () => {
   return { store, call, upload };
 };
 
-describe('folio in the shell', () => {
+describe.runIf(DATABASE_URL)('folio in the shell', () => {
   it('answers Find with what the person may read, by title, tags and text', async () => {
     const { store, call, upload } = await setup();
     const lead = { ...on(sam, 'w-fin', 'lead'), roles: ['publisher'] };

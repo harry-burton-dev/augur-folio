@@ -2,7 +2,9 @@ import { callerHeaders, type Caller } from '@augur/service-kit';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -12,7 +14,7 @@ const member = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: {
 const orgLead = (who: Caller): Caller => ({ ...who, workspace: { id: 'w-org', kind: 'org', role: 'lead' } });
 
 const setup = async () => {
-  const app = await buildApp({ store: new MemoryFolioStore(), objects: new MemoryObjectStore(), audit: async () => {} });
+  const app = await buildApp({ store: db.store, objects: new MemoryObjectStore(), audit: async () => {} });
   const json = (caller: Caller, method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: object) =>
     app.inject({ method, url, headers: callerHeaders(caller), ...(payload ? { payload } : {}) });
   const upload = (caller: Caller, url: string, body = '%PDF-1.7', type = 'application/pdf') =>
@@ -21,7 +23,7 @@ const setup = async () => {
   return { app, json, upload, library };
 };
 
-describe('folio tags', () => {
+describe.runIf(DATABASE_URL)('folio tags', () => {
   it('lets only the org’s leads, on the org’s floor, keep the org’s tags; anyone can read them', async () => {
     const { json } = await setup();
     expect((await json(lead(sam), 'POST', '/v1/tags', { name: 'Policy' })).statusCode).toBe(403);

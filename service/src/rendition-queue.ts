@@ -16,7 +16,7 @@ const CHANNEL = 'folio_renditions';
 
 export const runIdFor = (version: string, queuedAt: string) => `${RENDITIONS_JOB}-${version}-${Date.parse(queuedAt)}`;
 
-export const renditionQueue = (store: FolioStore, jobs: Jobs, log: JobLogger) => {
+export const renditionQueue = (store: FolioStore, jobs: Jobs, log: JobLogger, standIn?: (version: string) => Promise<void>) => {
   // Docling is heavy: each worker makes one at a time.
   const job = jobs.elsewhere<{ version: string }>(RENDITIONS_JOB, { workerConcurrency: 1 });
   let running: Promise<number> | undefined;
@@ -26,7 +26,9 @@ export const renditionQueue = (store: FolioStore, jobs: Jobs, log: JobLogger) =>
   const handOver = async (): Promise<number> => {
     let n = 0;
     for (const { version, queuedAt } of await store.queuedRenditions()) {
-      await jobs.start(job, { version }, { id: runIdFor(version, queuedAt) });
+      // Under pnpm dev:app there is no worker: the stand-in makes the copy here.
+      if (standIn) await standIn(version);
+      else await jobs.start(job, { version }, { id: runIdFor(version, queuedAt) });
       n++;
     }
     return n;
