@@ -1,6 +1,6 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pathFor, placeFor, type ReaderState } from './api.js';
+import { FolioApi, pathFor, placeFor, type ReaderState } from './api.js';
 import app, { placeForIntent, proposeFrom, startFor } from './entry.js';
 import { places, routeOf } from './app.js';
 import { explainPayload } from './access.js';
@@ -790,4 +790,18 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/moves']);
   });
 
+});
+
+describe('folio’s calls', () => {
+  it('says a refusal in the service’s own sentence, not its code', async () => {
+    const refusing = vi.fn(async () =>
+      Response.json(
+        { type: 'about:blank', title: 'Forbidden', status: 403, reason: 'forbidden', error: 'forbidden', detail: 'Only this library’s leads can archive it.', message: 'Only this library’s leads can archive it.' },
+        { status: 403, headers: { 'content-type': 'application/problem+json' } },
+      ),
+    );
+    const api = new FolioApi({ fetch: refusing });
+    await expect(api.archiveLibrary('l-1')).rejects.toThrow('Only this library’s leads can archive it.');
+    await expect(api.reader('l-1', 'd-1', 1)).rejects.toThrow('Only this library’s leads can archive it.');
+  });
 });

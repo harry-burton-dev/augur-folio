@@ -189,6 +189,18 @@ export const API = `/api/${manifest.id}/v1`;
 export const APP_NAME = manifest.name;
 
 type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
+
+/**
+ * An AppError in the service's own words. AUGUR's services put a code in a
+ * problem's `reason` (`forbidden`) and the sentence in `detail`; Quill 0.7
+ * shows `reason`, so a refusal is said with `detail` until a kit that reads it
+ * is served.
+ */
+export const inWords = (err: unknown): unknown => {
+  if (!(err instanceof AppError) || err.status < 400 || err.status >= 500) return err;
+  const said = typeof err.problem.detail === 'string' && err.problem.detail.trim() ? err.problem.detail.trim() : typeof err.problem.message === 'string' && err.problem.message.trim() ? err.problem.message.trim() : undefined;
+  return said && said !== err.message ? new AppError(said, err.status, err.problem, { cause: err }) : err;
+};
 /** The app client, called by path alone: the methods below name the path, its query and the answer's type. */
 type Call = (path: string, options?: { body?: unknown }) => Promise<unknown>;
 
@@ -205,7 +217,11 @@ export class FolioApi {
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const send = this.client[method.toLowerCase() as Method] as unknown as Call;
-    return (await send(path, body === undefined ? {} : { body })) as T;
+    try {
+      return (await send(path, body === undefined ? {} : { body })) as T;
+    } catch (err) {
+      throw inWords(err);
+    }
   }
 
   /** Asks by the whole address, for what isn't JSON: a file, a reader copy, a picture. */
@@ -217,7 +233,7 @@ export class FolioApi {
       throw AppError.from(err, { appName: APP_NAME });
     }
     if (!res.ok) {
-      const err = await AppError.fromResponse(res, { appName: APP_NAME });
+      const err = inWords(await AppError.fromResponse(res, { appName: APP_NAME })) as AppError;
       // The gateway stops a file past the app's limit before Folio sees it; say the limit when it gave no words.
       if (res.status === 413 && err.code !== 'too-large') throw new AppError(`A file can be ${MAX_UPLOAD_MB} MB at most.`, 413, { ...err.problem, code: 'too-large' });
       throw err;
