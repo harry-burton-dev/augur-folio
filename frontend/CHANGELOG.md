@@ -1,5 +1,12 @@
 # @apps/folio-frontend
 
+## 0.9.0
+
+### Minor Changes
+
+- 30ad1c5: Artifacts' frontend starts with the app-frontend starter and builds for SDK 2.0: `defineReactApp` mounts the app, its picker (`document.pick`) and its card on Home; its places are on the router (`placeRoutes`), so Back and Forward move inside it without the shell mounting it again; and its calls go through the app client (`createAppClient`), so every failure is an `AppError` in words people can act on. A document another app opens by its id alone now has an address of its own, `/documents/<id>`. Quill 0.7 and Common 0.7.
+- 569ec08: Artifacts needs SDK 2.0: its manifest takes `^2.0.0` and it builds against mfe-sdk 2.0.0 and Quill 0.8.0, the kit an SDK 2.0 shell serves. Quill 0.8's `AppError` says a service's refusal in its sentence (`detail`), so Artifacts' own stopgap for that is gone.
+
 ## 0.8.0
 
 ## 0.7.2
