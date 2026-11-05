@@ -13,7 +13,7 @@
       "augur.dev/version": "0.8.0",
       "augur.dev/app-id": "folio",
       "augur.dev/route": "/folio",
-      "augur.dev/sdk-range": "^2.0.0",
+      "augur.dev/sdk-range": "^2.1.0",
       "augur.dev/category": "pillar",
       "augur.dev/floors": "personal,team,org",
       "augur.dev/scopes": "audit:write,people:read,notifications:send,events:publish"
