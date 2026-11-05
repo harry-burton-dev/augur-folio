@@ -21,7 +21,7 @@ export interface RecordRefIn {
 }
 
 /**
- * One step of publishing up the floors (docs/app-patterns.md): a record put on
+ * One step of publishing up the floors (App patterns, in the AUGUR handbook): a record put on
  * a floor above, through a filter of lifecycle states. A live window, never a
  * copy. `from` and `to` are floors: a team's id, someone's own floor's id, or
  * `org`. Steps are kept for good; taking one back ends it.

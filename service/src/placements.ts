@@ -61,7 +61,7 @@ export const floorsFrom = (directory: DirectorySearch) => async (keys: readonly 
 };
 
 /**
- * Publishing up the floors (docs/app-patterns.md, `@augur/records`): a record
+ * Publishing up the floors (App patterns, in the AUGUR handbook, `@augur/records`): a record
  * (a whole collection, a folder in one, or a document) put on a floor above
  * its own through a filter of lifecycle states, as a live window. The floor
  * that received it may publish it further up, never showing more. One owner:
