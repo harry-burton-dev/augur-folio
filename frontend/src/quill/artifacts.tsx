@@ -589,7 +589,7 @@ export function Artifacts(props: ArtifactsProps) {
       <FrontPage
         eyebrow={floorName}
         heading={app.name}
-        look={front.look ?? 'title'}
+        look={front.look}
         ambience={front.ambience}
         summary={needs ? `${needs} ${needs === 1 ? 'thing needs' : 'things need'} you.` : undefined}
         search={
