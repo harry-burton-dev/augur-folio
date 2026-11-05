@@ -72,9 +72,9 @@ The list can be narrowed by tags (all of those chosen), file type, who added it,
 
 ## Reader copies
 
-Every version gets a reader copy: the rendition worker turns its file into Markdown with [Docling](https://github.com/docling-project/docling), with the pictures it shows, a thumbnail of a PDF's first page, and its words as plain text for search. The original stays as it was; the reader copy is what Folio shows people to read. Each version says how its copy is coming along (`reader.state`: queued, running, ready or failed). A file Docling can't read fails at once with why; anything else (the bucket down, say) is tried again after a minute, then four, then sixteen, and then fails. Whoever may change the document can ask for a failed copy again.
+Every version gets a reader copy: the rendition worker turns its file into Markdown with [Docling](https://github.com/docling-project/docling), with the pictures it shows, a thumbnail of a PDF's first page, and its words as plain text for search. The original stays as it was; the reader copy is what Folio shows people to read. Each version says how its copy is coming along (`reader.state`: queued, running, ready or failed). A file Docling can't read fails at once with why; anything else (the bucket down, say) is tried again after a minute, then four, and fails after the third try. Whoever may change the document can ask for a failed copy again.
 
-The worker leases one version at a time from Folio's `renditions` table, so any number can run side by side, and hears of new versions straight away (Postgres `LISTEN`). Under `pnpm dev:app` there's no worker: Markdown and plain text are their own reader copies, and other files say the worker isn't running.
+Folio's service queues each version's rendition as a durable job (a [DBOS](https://docs.dbos.dev) workflow, as AUGUR's service kit runs jobs) and the worker runs it, one version at a time, so any number can run side by side; one that stops mid-file carries on where it was. The `renditions` table stays the record of how each copy is coming along ([worker/README.md](worker/README.md)). Under `pnpm dev:app` there's no worker: Markdown and plain text are their own reader copies, and other files say the worker isn't running.
 
 ## Reading
 

@@ -88,8 +88,8 @@ importers:
         specifier: npm:@harry-burton-dev/augur-records@^0.1.0
         version: '@harry-burton-dev/augur-records@0.1.0'
       '@augur/service-kit':
-        specifier: npm:@harry-burton-dev/augur-service-kit@^0.11.0
-        version: '@harry-burton-dev/augur-service-kit@0.11.0'
+        specifier: npm:@harry-burton-dev/augur-service-kit@^0.13.0
+        version: '@harry-burton-dev/augur-service-kit@0.13.0(fastify@5.12.8)'
       '@aws-sdk/client-s3':
         specifier: ^3.1156.0
         version: 3.1161.0
@@ -344,6 +344,16 @@ packages:
   '@changesets/write@0.4.0':
     resolution: {integrity: sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q==}
 
+  '@dbos-inc/dbos-sdk@5.4.0':
+    resolution: {integrity: sha512-Iyk/ifg0coIki3ExtwKAU/At89CZXEKyI3XqFjWDJrx6xn2KEClwaD7cgnniCMsOSOfSXH94B8coPcWgIxG19A==}
+    engines: {node: '>=20'}
+    hasBin: true
+    peerDependencies:
+      '@dbos-inc/dbos-enterprise': ~5.4.0
+    peerDependenciesMeta:
+      '@dbos-inc/dbos-enterprise':
+        optional: true
+
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
     engines: {node: '>=18'}
@@ -593,6 +603,11 @@ packages:
 
   '@harry-burton-dev/augur-service-kit@0.11.0':
     resolution: {integrity: sha512-0vZHVGhlz9pNgzjc6ZrifwoMbNYhLl8U2fF5bgBf9Ez2ZmUZ80Afei1uJdY6DwRhA2U8qyAqeeG75bA5wU4D9g==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-service-kit/0.11.0/ca84c1bd04f8303b7b8e14f496d619a7f742ae53}
+
+  '@harry-burton-dev/augur-service-kit@0.13.0':
+    resolution: {integrity: sha512-KooZWDCUu7SmV1Of3VqqLmVyvPs4hN1ZddLLFc6HF9ikm1/rS09KFwVv2GtZgIcnXnZvssUlL+Bu04mDGlj+jg==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-service-kit/0.13.0/32f116609391b9edea69d03bd63115d13fe1d94d}
+    peerDependencies:
+      fastify: ^5.6.0
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -1446,12 +1461,20 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
+  commander@12.1.0:
+    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
+    engines: {node: '>=18'}
+
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
   cookie@2.0.1:
     resolution: {integrity: sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w==}
     engines: {node: '>=22'}
+
+  copy-anything@3.0.5:
+    resolution: {integrity: sha512-yCEafptTtb4bk7GLEQoM8KVJpxAfdBJYaXyzQEgQQQgYrZiDp8SJmGKlYza6CYjEDNstAdNdKA3UuoULlEbS6w==}
+    engines: {node: '>=12.13'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -1784,6 +1807,10 @@ packages:
   is-subdir@1.2.0:
     resolution: {integrity: sha512-2AT6j+gXe/1ueqbW6fLZJiIw3F8iXGJtt0yDrZaBhAZEG1raiTxKWU+IPqMCzQAXOUCKdA4UDMgacKH25XG2Cw==}
     engines: {node: '>=4'}
+
+  is-what@4.1.16:
+    resolution: {integrity: sha512-ZhMwEosbFJkA0YhFnNDgTM4ZxDRsS6HqTo7qsZM08fehyRYIYa0yHu5R6mgo1n/8MgaPBXiPimPD77baVFYg+A==}
+    engines: {node: '>=12.13'}
 
   is-windows@1.0.2:
     resolution: {integrity: sha512-eXK1UInq2bPmjyX6e3VHIzMLobc4J94i4AWn+Hpq3OU5KkrRC96OAcR3PRJ/pGu6m8TRnBHP9dkXQVsT/COVIA==}
@@ -2279,6 +2306,10 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  serialize-error@8.1.0:
+    resolution: {integrity: sha512-3NnuWfM6vBYoy5gZFvHiYsVbafvI9vZv/+jlIigFn4oP4zjNPK3LhcY0xSCgeb1a5L8jO71Mit9LlNoi2UfDDQ==}
+    engines: {node: '>=10'}
+
   set-cookie-parser@3.2.2:
     resolution: {integrity: sha512-df017qMeYuXo4emL09nlyMpi2i2MtEIKS/6jtXH3vmjFgIRsOi852/5RmhJ4EkvN3ZF8jXadM/EkTPXgc8yPIw==}
 
@@ -2345,6 +2376,10 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
+  superjson@1.13.3:
+    resolution: {integrity: sha512-mJiVjfd2vokfDxsQPOwJ/PtanO87LhpYY88ubI5dUB1Ab58Txbyje3+jpm+/83R/fevaq/107NNhtYBLuoTrFg==}
+    engines: {node: '>=10'}
+
   tailwindcss@4.3.3:
     resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
 
@@ -2402,6 +2437,10 @@ packages:
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
     engines: {node: '>= 0.8.0'}
+
+  type-fest@0.20.2:
+    resolution: {integrity: sha512-Ne+eE4r0/iWnpAxD852z3A+N0Bt5RN//NjJwRd2VFHEmrywxf5vsZlh4R6lixl6B+wz/8d+maTSAkN1FIkI3LQ==}
+    engines: {node: '>=10'}
 
   typescript-eslint@8.72.1:
     resolution: {integrity: sha512-3Li9FfPmQp45nxEtFD1ZCrYFI3cYK5kpyNtmm1H7lMagm8u9sy6PTjy3ytwQZs7KNukOyKFHAZ6z6GjYFeaeXw==}
@@ -3032,6 +3071,16 @@ snapshots:
       human-id: 4.2.2
       prettier: 2.8.8
 
+  '@dbos-inc/dbos-sdk@5.4.0':
+    dependencies:
+      commander: 12.1.0
+      pg: 8.23.1
+      serialize-error: 8.1.0
+      superjson: 1.13.3
+      yaml: 2.9.1
+    transitivePeerDependencies:
+      - pg-native
+
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
 
@@ -3222,6 +3271,23 @@ snapshots:
       '@opentelemetry/sdk-node': 0.300.0(@opentelemetry/api@1.10.0)
       jose: 6.2.15
     transitivePeerDependencies:
+      - supports-color
+
+  '@harry-burton-dev/augur-service-kit@0.13.0(fastify@5.12.8)':
+    dependencies:
+      '@dbos-inc/dbos-sdk': 5.4.0
+      '@opentelemetry/api': 1.10.0
+      '@opentelemetry/instrumentation': 0.300.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/instrumentation-http': 0.300.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/instrumentation-pg': 0.77.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/instrumentation-pino': 0.70.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/instrumentation-undici': 0.34.0(@opentelemetry/api@1.10.0)
+      '@opentelemetry/sdk-node': 0.300.0(@opentelemetry/api@1.10.0)
+      fastify: 5.12.8
+      jose: 6.2.15
+    transitivePeerDependencies:
+      - '@dbos-inc/dbos-enterprise'
+      - pg-native
       - supports-color
 
   '@humanfs/core@0.19.2':
@@ -4115,9 +4181,15 @@ snapshots:
 
   color-name@1.1.4: {}
 
+  commander@12.1.0: {}
+
   convert-source-map@2.0.0: {}
 
   cookie@2.0.1: {}
+
+  copy-anything@3.0.5:
+    dependencies:
+      is-what: 4.1.16
 
   cross-spawn@7.0.6:
     dependencies:
@@ -4486,6 +4558,8 @@ snapshots:
   is-subdir@1.2.0:
     dependencies:
       better-path-resolve: 1.0.0
+
+  is-what@4.1.16: {}
 
   is-windows@1.0.2: {}
 
@@ -4958,6 +5032,10 @@ snapshots:
 
   semver@7.8.6: {}
 
+  serialize-error@8.1.0:
+    dependencies:
+      type-fest: 0.20.2
+
   set-cookie-parser@3.2.2: {}
 
   shebang-command@2.0.0:
@@ -5016,6 +5094,10 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
+  superjson@1.13.3:
+    dependencies:
+      copy-anything: 3.0.5
+
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
@@ -5056,6 +5138,8 @@ snapshots:
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
+
+  type-fest@0.20.2: {}
 
   typescript-eslint@8.72.1(eslint@10.14.0(jiti@2.7.0))(typescript@5.9.3):
     dependencies:

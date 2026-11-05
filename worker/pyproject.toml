@@ -12,6 +12,8 @@ dependencies = [
   "docling-core==2.105.0",
   "psycopg[binary]==3.3.6",
   "boto3==1.43.118",
+  # Runs renditions as durable workflows, as AUGUR's service kit runs jobs (ADR 0014).
+  "dbos==3.4.0",
 ]
 
 [project.optional-dependencies]

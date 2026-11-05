@@ -39,7 +39,7 @@ describe('folio units', () => {
     expect(renamed.json().levels.find((l: { id: string }) => l.id === 'series')).toMatchObject({ name: 'Run', plural: 'Runs' });
     const wrong = await call(member(alex), 'POST', `/v1/libraries/${library}/folders`, { name: 'Upside down', parent: series.id, level: 'subcollection' });
     expect(wrong.statusCode).toBe(400);
-    expect(wrong.json()).toEqual({ error: 'bad-parent', message: 'A subcollection can’t go in a run: only subseries, files can.' });
+    expect(wrong.json()).toMatchObject({ error: 'bad-parent', message: 'A subcollection can’t go in a run: only subseries, files can.' });
     expect((await call(lead(sam, 'org', 'org'), 'DELETE', '/v1/levels/series')).json().levels.find((l: { id: string }) => l.id === 'series').name).toBe('Series');
   });
 
@@ -69,7 +69,7 @@ describe('folio units', () => {
     expect((await call(member(kim), 'PUT', `${at}/versions/1/state`, { state: 'in-review' })).json().error).toBe('bad-move');
     expect((await call(member(alex), 'PUT', `${at}/versions/1/state`, { state: 'complete' })).json()).toMatchObject({ number: 1, state: 'complete' });
     const refused = await call(member(alex), 'PUT', `${at}/versions/1/state`, { state: 'issued' });
-    expect(refused.json()).toEqual({ error: 'bad-move', message: 'Only whoever manages it can make it Issued.' });
+    expect(refused.json()).toMatchObject({ error: 'bad-move', message: 'Only whoever manages it can make it Issued.' });
     expect((await call(lead(sam), 'PUT', `${at}/versions/1/state`, { state: 'issued', note: 'Signed off' })).json().state).toBe('issued');
     expect((await call(lead(sam), 'PUT', `${at}/versions/1/state`, { state: 'issued' })).json().error).toBe('bad-move');
     expect((await call(lead(sam), 'PUT', `${at}/versions/7/state`, { state: 'issued' })).statusCode).toBe(404);

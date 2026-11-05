@@ -368,6 +368,8 @@ export interface FolioStore {
   rendition(version: string): Promise<Rendition | undefined>;
   /** Queues a failed rendition again, from its first attempt; false unless it had failed. */
   retryRendition(version: string): Promise<boolean>;
+  /** Renditions waiting for the worker, oldest first, with when each was queued. */
+  queuedRenditions(): Promise<{ version: string; queuedAt: string }[]>;
   /** Records what a rendition came to. The worker does this itself; here for tests and `pnpm dev:app`. */
   finishRendition(version: string, result: RenditionResult): Promise<void>;
   /** Who has been let into a library (no document), or into one of its documents. */
@@ -1100,6 +1102,13 @@ export class MemoryFolioStore implements FolioStore {
     return found && { ...found, images: [...found.images] };
   }
 
+  async queuedRenditions() {
+    return [...this.renditions.values()]
+      .filter((r) => r.state === 'queued')
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .map((r) => ({ version: r.version, queuedAt: r.updatedAt }));
+  }
+
   async retryRendition(version: string) {
     const found = this.renditions.get(version);
     if (found?.state !== 'failed') return false;
@@ -1797,6 +1806,13 @@ export const migrations: { id: string; sql: string }[] = [
         primary key (folder_id, principal)
       );
       create index folder_grants_principal on folio.folder_grants (principal);`,
+  },
+  {
+    id: '015_renditions_on_jobs',
+    sql: `
+      -- The worker now takes renditions as jobs (DBOS), not by leasing rows. Any the old worker held
+      -- when it stopped are queued again, so the service hands them to the new one.
+      update folio.renditions set state = 'queued', locked_until = null, updated_at = now() where state = 'running';`,
   },
 ];
 
@@ -2949,6 +2965,13 @@ export class PgFolioStore implements FolioStore {
   async rendition(version: string) {
     const { rows } = await this.pool.query<RenditionRow>(`select ${RENDITION_COLUMNS} from folio.renditions where version_id = $1`, [version]);
     return rows[0] && fromRenditionRow(rows[0]);
+  }
+
+  async queuedRenditions() {
+    const { rows } = await this.pool.query<{ version_id: string; updated_at: Date }>(
+      "select version_id, updated_at from folio.renditions where state = 'queued' order by updated_at, version_id limit 1000",
+    );
+    return rows.map((r) => ({ version: r.version_id, queuedAt: r.updated_at.toISOString() }));
   }
 
   async retryRendition(version: string) {

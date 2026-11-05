@@ -1,11 +1,14 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import {
-  callerCheckFromEnv,
-  callerFromHeaders,
-  health,
+  appServer,
+  floorCaller,
   packageVersion,
   PeopleUnavailable,
-  signedCallers,
+  Problem,
+  readManifest,
+  sendProblem,
+  serviceFastifyOptions,
+  type AppManifest,
   type AudienceLookup,
   type Caller,
   type CallerCheck,
@@ -34,6 +37,8 @@ export const API_VERSION = 'v1';
 const version = packageVersion(import.meta.url);
 
 export interface Options {
+  /** Folio's manifest; read from manifest.json by default. Its id and name are what Folio calls itself. */
+  manifest?: AppManifest;
   /** Checks the caller the gateway signed for Folio. In production it is on by default; in dev `x-user-*` headers are believed. */
   callers?: CallerCheck;
   store?: FolioStore;
@@ -79,8 +84,8 @@ export const rightsOn = (caller: OnFloor, library?: Pick<HeldLibrary, 'freeTags'
   return { manage, addFolders: add, addDocuments: add, addTags: manage || (add && Boolean(library?.freeTags)), share: manage };
 };
 
-export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, notify, ...people }: Options = {}) => {
-  const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, notify, ...people }: Options = {}) => {
+  const app = Fastify(serviceFastifyOptions());
   const fromEnv = peopleFromEnv(store);
   const principalsOf = people.principals ?? fromEnv.principals;
   const directory = people.directory ?? fromEnv.directory;
@@ -89,22 +94,19 @@ export const buildApp = async ({ callers = callerCheckFromEnv('folio'), store = 
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const recorded = (entry: Parameters<Audit>[0]) =>
     record(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
-  // Only the gateway's signed word says who is calling: headers anyone could send are dropped.
-  app.addHook('onRequest', signedCallers(callers));
-  app.get('/healthz', async () => health('folio', version, API_VERSION));
+  // Only the gateway's signed word says who is calling; every error is a problem details body; /healthz.
+  await appServer(app, { manifest, version, api: API_VERSION, ...(callers ? { callers } : {}) });
+  const floorOf = floorCaller(manifest);
 
   /** The caller and the floor they're on, or a refusal already sent. Folio's libraries all live on a floor. */
   const onFloor = (req: FastifyRequest, reply: FastifyReply): OnFloor | undefined => {
-    const caller = callerFromHeaders(req.headers);
-    if (!caller) {
-      reply.code(401).send({ error: 'unauthenticated', message: 'Sign in to use Artifacts.' });
+    try {
+      return floorOf(req);
+    } catch (err) {
+      if (!(err instanceof Problem)) throw err;
+      void sendProblem(reply, err);
       return undefined;
     }
-    if (!caller.workspace) {
-      reply.code(400).send({ error: 'floor-needed', message: 'Say which floor the libraries are on (X-Workspace-Id).' });
-      return undefined;
-    }
-    return caller as OnFloor;
   };
 
   /** A library and how far the caller is let in, which may be not at all. Archived ones only when asked. */

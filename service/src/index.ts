@@ -1,7 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { appCredentialsFromEnv, appSettings, appStorageFromEnv, commonSettings, loadConfigOrExit, outboxRelay, publishFrontend, registerApp } from '@augur/service-kit';
+import { appCredentialsFromEnv, appSettings, appStorageFromEnv, commonSettings, loadConfigOrExit, outboxRelay, startAppService } from '@augur/service-kit';
 import { buildApp } from './app.ts';
 import { auditFromEnv } from './audit.ts';
 import { notifyFromEnv } from './notices.ts';
@@ -12,9 +9,11 @@ import { peopleFromEnv } from './people.ts';
 import { devRenderer } from './renditions.ts';
 import { MemoryObjectStore, S3ObjectStore } from './objects.ts';
 import { MemoryFolioStore, PgFolioStore } from './store.ts';
+import { manifest } from './manifest.ts';
+import { renditionQueue } from './rendition-queue.ts';
 
 // Every setting Folio reads, checked before it starts (in production, a missing one stops it).
-loadConfigOrExit('folio', [
+loadConfigOrExit(manifest.id, [
   commonSettings.database,
   commonSettings.registry,
   commonSettings.events,
@@ -27,7 +26,6 @@ loadConfigOrExit('folio', [
   { name: 'S3_SECRET_ACCESS_KEY', about: 'the secret of Folio’s bucket key.', required: true, secret: true },
 ]);
 
-const port = Number(process.env.PORT ?? 8083);
 // Folio keeps its libraries in its own schema and its files in its own bucket (docs/app-storage.md).
 // Without them it forgets everything on restart, which is fine under pnpm dev:app and never in production.
 const { databaseUrl, bucket } = appStorageFromEnv();
@@ -36,67 +34,56 @@ const store = databaseUrl ? await PgFolioStore.connect(databaseUrl) : new Memory
 const objects = bucket ? new S3ObjectStore(bucket) : new MemoryObjectStore();
 // With Postgres the rendition worker (worker/) makes reader copies; without it, a stand-in does.
 if (store instanceof MemoryFolioStore) store.onQueued = devRenderer(store, objects);
-const notify = notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
-const app = await buildApp({ store, objects, notify });
-await app.listen({ port, host: '0.0.0.0' });
-
-// Remind each series' owner when an issue is late. Every instance checks; the store lets one tell them.
-const remind = () => remindLate({ store, notify, log: app.log }).catch((err: Error) => app.log.error({ err: err.message }, 'could not check for late issues'));
-setInterval(remind, 15 * 60 * 1000).unref();
-void remind();
-
-// Move what was published the old way onto publishing up the floors. Until it's moved, it still reads
-// as before; when the directory can't be reached, it's tried again next round.
-const moving = auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
 const { directory } = peopleFromEnv(store);
-const move = () =>
-  movePublications({ store, directory, audit: moving, log: app.log })
-    .then((moved) => moved && app.log.info({ moved }, 'moved publications onto publishing up'))
-    .catch((err: Error) => app.log.error({ err: err.message }, 'could not move publications onto publishing up'));
-setInterval(move, 15 * 60 * 1000).unref();
-void move();
+const { REGISTRY_URL } = process.env;
+const credentials = appCredentialsFromEnv(manifest.id);
 
-// Put Folio in the platform's catalogue on every start, so the shell can offer it, with no admin step.
-// It signs in as itself with SERVICE_CLIENT_SECRET: in a deployment, FOLIO_CLIENT_SECRET, which identity
-// makes its sign-in from. The build puts the manifest beside the code; from source it's in the repository root.
-// The image carries Folio's built frontend too (APP_FRONTEND, or /app/frontend), which it gives the
-// registry first, so the shell loads this version's own copy of it.
-const { REGISTRY_URL, APP_MANIFEST, APP_FRONTEND } = process.env;
-const credentials = appCredentialsFromEnv('folio');
-if (REGISTRY_URL && credentials) {
-  const built = new URL('./manifest.json', import.meta.url);
-  const manifest = JSON.parse(readFileSync(APP_MANIFEST ?? (existsSync(built) ? built : new URL('../../manifest.json', import.meta.url)), 'utf8'));
-  const frontend = APP_FRONTEND ?? fileURLToPath(new URL('../frontend/', import.meta.url));
-  const giveFrontend = existsSync(join(frontend, 'entry.js'))
-    ? publishFrontend({ registryUrl: REGISTRY_URL, credentials, app: manifest.id, version: manifest.version, dir: frontend })
-        .then((kept) => app.log.info({ version: manifest.version, kept }, kept ? 'frontend kept by version' : 'this deployment doesn’t keep frontends by version'))
-        // Registering anyway: the manifest's own entry still serves the frontend from the web image.
-        .catch((err: Error) => app.log.error(err.message))
-    : Promise.resolve();
-  void giveFrontend
-    .then(() => registerApp({ registryUrl: REGISTRY_URL, credentials, manifest }))
-    .then(() => app.log.info({ app: manifest.id, version: manifest.version }, 'registered with the platform'))
-    .catch((err: Error) => app.log.error(err.message));
-} else {
-  app.log.info('REGISTRY_URL or the app’s sign-in (SERVICE_CLIENT_SECRET) is not set, so Folio is not in the catalogue (fine under pnpm dev:app).');
-}
+// Builds Folio, listens, runs its jobs, gives the registry its frontend and puts it in the catalogue.
+const app = await startAppService({
+  manifest,
+  port: Number(process.env.PORT ?? 8083),
+  buildApp: ({ notify, audit }) => buildApp({ manifest, store, objects, notify, audit }),
+  jobs: (jobs, app) => {
+    const notify = notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
+    const audit = auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
 
-// Clear away deleted documents once they're past the retention period an admin set in Admin, Apps
-// (Folio's retentionDays setting). When the registry can't say what it is, nothing is cleared that
-// round: an admin may have asked for longer than the default.
-const retentionDays = async () => {
-  if (!REGISTRY_URL || !credentials) return DEFAULT_RETENTION_DAYS;
-  const settings = await appSettings({ registryUrl: REGISTRY_URL, credentials, app: 'folio' });
-  return settings[RETENTION_SETTING] ?? DEFAULT_RETENTION_DAYS;
-};
-const audit = auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
-const clear = () =>
-  retentionDays()
-    .then((days) => clearDeleted({ store, objects, days, audit, log: app.log }))
-    .then((cleared) => cleared && app.log.info({ cleared }, 'cleared deleted documents past their retention'))
-    .catch((err: Error) => app.log.error({ err: err.message }, 'could not clear deleted documents'));
-setInterval(clear, 60 * 60 * 1000).unref();
-void clear();
+    // Remind each series' owner when an issue is late. Once per quarter hour, on one instance.
+    jobs.schedule('remind-late', '*/15 * * * *', async () => {
+      await remindLate({ store, notify, log: app.log });
+    });
+
+    // Move what was published the old way onto publishing up the floors. Until it's moved, it still reads
+    // as before; when the directory can't be reached, it's tried again next round.
+    jobs.schedule('move-publications', '*/15 * * * *', async () => {
+      const moved = await movePublications({ store, directory, audit, log: app.log });
+      if (moved) app.log.info({ moved }, 'moved publications onto publishing up');
+    });
+
+    // Clear away deleted documents once they're past the retention period an admin set in Admin, Apps
+    // (Folio's retentionDays setting). When the registry can't say what it is, nothing is cleared that
+    // round: an admin may have asked for longer than the default.
+    const retentionDays = async () => {
+      if (!REGISTRY_URL || !credentials) return DEFAULT_RETENTION_DAYS;
+      const settings = await appSettings({ registryUrl: REGISTRY_URL, credentials, app: manifest.id });
+      return settings[RETENTION_SETTING] ?? DEFAULT_RETENTION_DAYS;
+    };
+    jobs.schedule('clear-deleted', '0 * * * *', async () => {
+      const cleared = await clearDeleted({ store, objects, days: await retentionDays(), audit, log: app.log });
+      if (cleared) app.log.info({ cleared }, 'cleared deleted documents past their retention');
+    });
+
+    // Reader copies: the worker (worker/) makes them, from the renditions the store queues. Each is
+    // handed to the worker as soon as the store says so, and every minute anything missed.
+    if (databaseUrl) {
+      const renditions = renditionQueue(store, jobs, app.log);
+      jobs.schedule('queue-renditions', '* * * * *', async () => {
+        await renditions.sweep();
+      });
+      const stop = renditions.listen(databaseUrl);
+      app.addHook('onClose', stop);
+    }
+  },
+});
 
 // Tell other apps what happened (folio.document.*), from the outbox, once each change has committed.
 const { EVENTS_URL } = process.env;

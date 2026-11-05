@@ -7,6 +7,10 @@ import os
 from dataclasses import dataclass
 
 
+#: The app's id in its manifest (manifest.json), when APP_ID doesn't say otherwise.
+DEFAULT_APP_ID = "folio"
+
+
 @dataclass(frozen=True)
 class Bucket:
     name: str
@@ -18,12 +22,12 @@ class Bucket:
 
 @dataclass(frozen=True)
 class Settings:
+    #: The app's id: DBOS's application name, and with `_jobs` the schema its jobs are kept in.
+    app_id: str
     database_url: str
     bucket: Bucket
     #: The longest one file may take; past it the worker gives up on that try.
     render_timeout: int
-    #: How often to look for work when no word of new versions has come.
-    poll_seconds: int
 
 
 def key_id_for(secret: str) -> str:
@@ -36,6 +40,8 @@ def from_env(env: os._Environ[str] | dict[str, str] = os.environ) -> Settings:
     if missing:
         raise SystemExit(f"The rendition worker needs {', '.join(missing)}: give it Folio's storage (docs/app-storage.md).")
     return Settings(
+        # The platform names the app's login, schema and jobs schema after its id.
+        app_id=env.get("APP_ID") or DEFAULT_APP_ID,
         database_url=env["DATABASE_URL"],
         bucket=Bucket(
             name=env["S3_BUCKET"],
@@ -46,5 +52,4 @@ def from_env(env: os._Environ[str] | dict[str, str] = os.environ) -> Settings:
             secret_access_key=env["S3_SECRET_ACCESS_KEY"],
         ),
         render_timeout=int(env.get("RENDER_TIMEOUT_SECONDS", "1200")),
-        poll_seconds=int(env.get("POLL_SECONDS", "30")),
     )
