@@ -4,11 +4,11 @@ Part of AUGUR, which is proprietary; see `LICENSE`.
 
 People see Folio as **Artifacts**: that's its name in the manifest and in everything it says to them. Folio stays its id, route, schema, bucket, containers and code name.
 
-AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-patterns.md)). It is built only on the public app contract, like any other app.
+AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](https://github.com/harry-burton-dev/augur/blob/main/docs/app-patterns.md)). It is built only on the public app contract, like any other app.
 
 Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to 200 MB each; uploads stream straight through to the bucket.
 
-This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](https://github.com/harry-burton-dev/im-platform/blob/main/docs/folio.md).
+This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](https://github.com/harry-burton-dev/augur/blob/main/docs/folio.md).
 
 | Path | What it is |
 | --- | --- |
@@ -17,7 +17,7 @@ This README is for developers. To use Folio, or run it as an admin, see [the Art
 | `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
 | `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |
 
-Run it in a stand-in shell with `pnpm dev:app folio` from an AUGUR checkout. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-storage.md) to keep it. In production it won't start without both.
+Run it in a stand-in shell with `pnpm dev:app folio` from an AUGUR checkout. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md) to keep it. In production it won't start without both.
 
 ## Shipped with AUGUR
 

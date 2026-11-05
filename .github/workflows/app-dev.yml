@@ -54,6 +54,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TARGET: ${{ github.sha }}
       - name: Tell AUGUR's release feed
-        run: GH_TOKEN="$(printf %s "$APP_TOKEN" | tr -d '\r\n')" gh workflow run feed.yml -R "${{ vars.AUGUR_REPO || 'harry-burton-dev/im-platform' }}"
+        run: GH_TOKEN="$(printf %s "$APP_TOKEN" | tr -d '\r\n')" gh workflow run feed.yml -R "${{ vars.AUGUR_REPO || 'harry-burton-dev/augur' }}"
         env:
           APP_TOKEN: ${{ secrets.APP_RELEASES_TOKEN }}

@@ -18,7 +18,7 @@ Each lease counts as an attempt and lasts the render timeout plus five minutes. 
 
 ## Settings
 
-The same as Folio's service, so both read one set of storage settings ([App storage](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-storage.md)).
+The same as Folio's service, so both read one set of storage settings ([App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md)).
 
 | Variable | What it is |
 | --- | --- |
