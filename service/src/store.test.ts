@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { following, periodStart } from './cadence.ts';
-import { BadParentError, BadTagError, ClosedError, LinkedError, MemoryFolioStore, migrations, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
+import { BadParentError, BadTagError, ClosedError, LinkedError, migrations, NameTakenError, NotEmptyError, PgFolioStore, objectKeyFor, TOPICS, type FolioStore, type NewVersion, type OutboxEvent } from './store.ts';
 
 const file = (doc: string, id: string, size = 10, by = 'u-1', mediaType = 'application/pdf'): NewVersion => ({ id, filename: `${id}.pdf`, mediaType, size, sha256: 'ab'.repeat(32), objectKey: objectKeyFor(doc, id), createdBy: by });
 const titles = async (store: FolioStore, library: string, query = {}) => (await store.documents(library, query)).documents.map((d) => d.title);
@@ -680,7 +680,6 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
   });
 };
 
-describe('MemoryFolioStore', () => behavesLikeAStore(() => new MemoryFolioStore(), undefined, async (store) => (store as MemoryFolioStore).outbox));
 
 // Runs wherever DATABASE_URL points at a Postgres; CI starts one for it.
 describe.runIf(process.env.DATABASE_URL)('PgFolioStore', () => {

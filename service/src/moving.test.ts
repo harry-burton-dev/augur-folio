@@ -4,7 +4,9 @@ import { buildApp } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
 import { MOVED_REASON, moveOf, movePublications } from './moving.ts';
 import { MemoryObjectStore } from './objects.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 // Ops sits in Dept; Pay sits in Ops; HR is beside them.
 const TEAMS = [
@@ -16,7 +18,7 @@ const TEAMS = [
 const teams = new Map(TEAMS.map((t) => [t.id, t]));
 const directory = async ({ ids }: { ids?: string[] }) => ({ people: [], teams: TEAMS.filter((t) => !ids || ids.includes(t.id)) });
 
-describe('moving publications onto publishing up', () => {
+describe.runIf(DATABASE_URL)('moving publications onto publishing up', () => {
   it('publishes up to the floors above, shares with the rest, and leaves out what the floor sees already', () => {
     expect(moveOf('ops', false, ['tree:ops', 'team:pay', 'tree:dept', 'org', 'team:hr', 'team:gone'], teams)).toEqual({ up: ['dept', 'org'], share: ['team:hr', 'team:gone'] });
     expect(moveOf('org', false, ['org', 'tree:hr'], teams)).toEqual({ up: [], share: [] });
@@ -26,7 +28,7 @@ describe('moving publications onto publishing up', () => {
 
   it('moves each document’s publication once, and leaves a series’ issues as they are', async () => {
     const audited: FolioAuditEntry[] = [];
-    const store = new MemoryFolioStore();
+    const store = db.store;
     const app = await buildApp({ store, objects: new MemoryObjectStore(), audit: async (e) => void audited.push(e), directory });
     const lead: Caller = { id: 'u-lena', name: 'Lena Park', departments: [], roles: [], workspace: { id: 'ops', kind: 'team', role: 'lead' } };
     const call = (method: 'GET' | 'POST', url: string, payload?: object) => app.inject({ method, url, headers: callerHeaders(lead), ...(payload ? { payload } : {}) });

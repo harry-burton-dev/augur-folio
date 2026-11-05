@@ -17,7 +17,9 @@ This README is for developers. To use Folio, or run it as an admin, see [the Art
 | `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
 | `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |
 
-Run it in a stand-in shell with `pnpm dev:app folio` from an AUGUR checkout. Without `DATABASE_URL` and the `S3_*` settings the service keeps everything in memory; give it its own schema and bucket as in [App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md) to keep it. In production it won't start without both.
+Run it in a stand-in shell with `pnpm dev:app ../augur-folio` from an AUGUR checkout, with `DATABASE_URL` pointing at a Postgres: the dev stack's (`docker compose -f infra/docker-compose.yml up -d postgres` there) does, and Folio makes its own `folio` schema in it. Without the `S3_*` settings its files live in memory until it restarts, and a stand-in makes reader copies of Markdown and text, as the worker can't reach them; give it a bucket as in [App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md) to keep them. It won't start without `DATABASE_URL`, and in production not without its bucket either.
+
+The service's tests run on real Postgres, never an in-memory copy: CI's check job starts one. Locally, give them a database of their own, because each test file empties the `folio` schema: `DATABASE_URL=postgres://… pnpm test`. Without `DATABASE_URL`, those tests are skipped.
 
 ## Shipped with AUGUR
 

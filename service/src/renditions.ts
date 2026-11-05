@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { OnFloor } from './app.ts';
 import { mayChange, mayRead, type DocumentFor } from './documents.ts';
 import type { ObjectStore } from './objects.ts';
-import { renditionPrefix, type FolioStore, type StoredVersion } from './store.ts';
+import { renditionPrefix, type FolioStore } from './store.ts';
 
 export interface RenditionDeps {
   store: FolioStore;
@@ -109,7 +109,9 @@ export const renditionRoutes = async (app: FastifyInstance, { store, objects, do
  * Postgres for it to watch: Markdown and plain text are their own reader copies,
  * and everything else fails with a word on why.
  */
-export const devRenderer = (store: FolioStore, objects: ObjectStore) => async (version: StoredVersion) => {
+export const devRenderer = (store: FolioStore, objects: ObjectStore) => async (id: string) => {
+  const version = await store.versionById(id);
+  if (!version) return;
   if (version.mediaType !== 'text/markdown' && version.mediaType !== 'text/plain') {
     await store.finishRendition(version.id, { state: 'failed', error: 'Reader copies of PDF, Word and HTML files are made by the rendition worker, which isn’t running here.' });
     return;

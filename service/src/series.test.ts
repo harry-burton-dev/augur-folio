@@ -6,7 +6,9 @@ import type { FolioAuditEntry } from './audit.ts';
 import type { FolioNotice } from './notices.ts';
 import { MemoryObjectStore } from './objects.ts';
 import { remindLate } from './series.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -27,7 +29,7 @@ const TEAMS = [
 const setup = async () => {
   const audited: FolioAuditEntry[] = [];
   const told: FolioNotice[] = [];
-  const store = new MemoryFolioStore();
+  const store = db.store;
   const app = await buildApp({
     store,
     objects: new MemoryObjectStore(),
@@ -46,7 +48,7 @@ const setup = async () => {
   return { app, call, store, library, lead, addIssue, audited, told };
 };
 
-describe('folio series', () => {
+describe.runIf(DATABASE_URL)('folio series', () => {
   it('adds the next issue in one step: numbered, titled, tagged and published to the series’ audience', async () => {
     const { call, library, lead, addIssue, audited, told } = await setup();
     const { id: tag } = (await call(lead, 'POST', `/v1/libraries/${library}/tags`, { name: 'Cash' })).json();

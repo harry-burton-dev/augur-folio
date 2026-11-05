@@ -1,7 +1,9 @@
 import { callerCheckFor, callerHeaders, callerSigner, signedCallerHeaders, type Caller } from '@augur/service-kit';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
-import { MemoryFolioStore } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -9,15 +11,15 @@ const lead = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { i
 const member = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { id: floor, kind: 'team', role: 'member' } });
 
 const setup = async () => {
-  const app = await buildApp({ store: new MemoryFolioStore() });
+  const app = await buildApp({ store: db.store });
   const call = (caller: Caller | undefined, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
     app.inject({ method, url, headers: caller ? callerHeaders(caller) : {}, ...(payload ? { payload } : {}) });
   return { app, call };
 };
 
-describe('folio', () => {
+describe.runIf(DATABASE_URL)('folio', () => {
   it('reports healthy', async () => {
-    const app = await buildApp();
+    const app = await buildApp({ store: db.store });
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'ok', service: 'folio', version: expect.stringMatching(/^\d+\.\d+\.\d+/), api: 'v1' });
@@ -33,7 +35,7 @@ describe('folio', () => {
 
   it('believes only the caller the gateway signed for it', async () => {
     const gateway = callerSigner();
-    const app = await buildApp({ callers: callerCheckFor(gateway, 'folio') });
+    const app = await buildApp({ store: db.store, callers: callerCheckFor(gateway, 'folio') });
     const signed = await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/libraries', headers: await signedCallerHeaders(gateway, lead(sam), 'folio') });
     expect(signed.statusCode).toBe(200);
     const forged = await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/libraries', headers: callerHeaders(lead(sam)) });

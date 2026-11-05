@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { FolioAuditEntry } from './audit.ts';
 import { MemoryObjectStore } from './objects.ts';
 import { clearDeleted } from './retention.ts';
-import { MemoryFolioStore, objectKeyFor } from './store.ts';
+import { objectKeyFor } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const DAY = 24 * 60 * 60 * 1000;
 const log = { error: () => {} };
 
 const withDocuments = async () => {
-  const store = new MemoryFolioStore();
+  const store = db.store;
   const objects = new MemoryObjectStore();
   const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
   for (const id of ['d-gone', 'd-kept']) {
@@ -24,7 +27,7 @@ const withDocuments = async () => {
   return { store, objects, lib };
 };
 
-describe('clearing deleted documents', () => {
+describe.runIf(DATABASE_URL)('clearing deleted documents', () => {
   it('keeps them for the retention period, then removes every file of theirs and says so in the audit log', async () => {
     const { store, objects, lib } = await withDocuments();
     const entries: FolioAuditEntry[] = [];

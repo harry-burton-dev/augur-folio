@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 import { MemoryObjectStore } from './objects.ts';
 import { devRenderer } from './renditions.ts';
-import { MemoryFolioStore, renditionPrefix } from './store.ts';
+import { renditionPrefix } from './store.ts';
+import { DATABASE_URL, folioDb } from './db.testing.ts';
+
+const db = folioDb();
 
 const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
 const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
@@ -13,7 +16,7 @@ const lead = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { i
 const member = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { id: floor, kind: 'team', role: 'member' } });
 
 const setup = async () => {
-  const store = new MemoryFolioStore();
+  const store = db.store;
   const objects = new MemoryObjectStore();
   const app = await buildApp({ store, objects, audit: async () => {} });
   const get = (caller: Caller, url: string) => app.inject({ method: 'GET', url, headers: callerHeaders(caller) });
@@ -35,7 +38,7 @@ const setup = async () => {
   return { app, store, objects, get, post, upload, render };
 };
 
-describe('folio renditions', () => {
+describe.runIf(DATABASE_URL)('folio renditions', () => {
   it('says a reader copy is on its way until the worker has made it', async () => {
     const { get, upload } = await setup();
     const { doc, base } = await upload(member(alex), 'Travel.pdf', '%PDF-1.7', 'application/pdf');
@@ -88,9 +91,11 @@ describe('folio renditions', () => {
 
   it('stands in for the worker under pnpm dev:app: Markdown is its own reader copy', async () => {
     const { store, objects, get, upload } = await setup();
-    store.onQueued = devRenderer(store, objects);
     const md = await upload(member(alex), 'Notes.md', '# Notes\n\nHello', 'text/markdown');
     const pdf = await upload(member(alex), 'Travel.pdf', '%PDF-1.7', 'application/pdf');
+    // What the rendition queue does with each queued version when there is no worker.
+    const render = devRenderer(store, objects);
+    for (const { version } of await store.queuedRenditions()) await render(version);
     await expect.poll(async () => (await get(member(kim), `${md.base}/reader`)).body).toBe('# Notes\n\nHello');
     await expect.poll(async () => (await store.rendition(pdf.doc.latest.id))?.state).toBe('failed');
   });

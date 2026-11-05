@@ -26,7 +26,7 @@ import { publisherFor, publishingRoutes } from './publishing.ts';
 import { homeRoutes } from './home.ts';
 import { seriesRoutes } from './series.ts';
 import { BadMoveError, BadLevelError, checkLevelName, CONTAINER_LIFECYCLE, type ContainerState } from '@augur/records';
-import { BadParentError, BadTagError, checkPlace, ClosedError, furthest, levelFrom, MemoryFolioStore, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
+import { BadParentError, BadTagError, checkPlace, ClosedError, furthest, levelFrom, NameTakenError, NotEmptyError, reaches, type FolioStore, type Level, type Library } from './store.ts';
 import { linkRoutes } from './links.ts';
 import { placementRoutes } from './placements.ts';
 import { tagRoutes } from './tags.ts';
@@ -41,7 +41,7 @@ export interface Options {
   manifest?: AppManifest;
   /** Checks the caller the gateway signed for Folio. In production it is on by default; in dev `x-user-*` headers are believed. */
   callers?: CallerCheck;
-  store?: FolioStore;
+  store: FolioStore;
   /** Where uploaded files go: Folio's bucket. */
   objects?: ObjectStore;
   /** The platform's audit log. */
@@ -84,7 +84,7 @@ export const rightsOn = (caller: OnFloor, library?: Pick<HeldLibrary, 'freeTags'
   return { manage, addFolders: add, addDocuments: add, addTags: manage || (add && Boolean(library?.freeTags)), share: manage };
 };
 
-export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store = new MemoryFolioStore(), objects = new MemoryObjectStore(), audit, maxUploadBytes, notify, ...people }: Options = {}) => {
+export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store, objects = new MemoryObjectStore(), audit, maxUploadBytes, notify, ...people }: Options) => {
   const app = Fastify(serviceFastifyOptions());
   const fromEnv = peopleFromEnv(store);
   const principalsOf = people.principals ?? fromEnv.principals;
