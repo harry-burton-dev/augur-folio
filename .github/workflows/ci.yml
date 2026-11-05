@@ -13,6 +13,21 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # The store's Postgres tests run here too, against the same image deployments use (pgvector, with
+    # pg_trgm); without DATABASE_URL they skip. The service starts with the job, so it costs seconds.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform-ci-only
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
       - name: Package token
@@ -44,6 +59,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          DATABASE_URL: postgres://platform:platform-ci-only@localhost:5432/platform
       - run: pnpm build
 
   # The rendition worker, in Python: its tests against a real Postgres with Artifacts' schema, PDFs
