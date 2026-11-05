@@ -26,7 +26,11 @@ export const ACCEPTED: Record<string, readonly string[]> = {
 const GATEWAY_DEFAULT_MB = 10;
 
 /** The most one upload may be, in bytes: the manifest's `maxUpload`, the limit the gateway holds the app to. */
-export const uploadLimitOf = (manifest: { maxUpload?: number }) => (manifest.maxUpload ?? GATEWAY_DEFAULT_MB) * 1024 * 1024;
+export const uploadLimitOf = (manifest: object) => {
+  // The service kit's manifest type doesn't list maxUpload yet, so it is read as the manifest file has it.
+  const mb = (manifest as { maxUpload?: unknown }).maxUpload;
+  return (typeof mb === 'number' && mb > 0 ? mb : GATEWAY_DEFAULT_MB) * 1024 * 1024;
+};
 
 const ACCEPTED_WORDS = 'Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text files.';
 

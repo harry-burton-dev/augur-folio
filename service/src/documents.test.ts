@@ -107,7 +107,7 @@ describe('folio documents', () => {
   });
 
   it('takes the upload limit from the manifest, as the gateway does', () => {
-    expect(uploadLimitOf(manifest)).toBe(manifest.maxUpload! * 1024 * 1024);
+    expect(uploadLimitOf(manifest)).toBe((manifest as { maxUpload?: number }).maxUpload! * 1024 * 1024);
     expect(uploadLimitOf({ maxUpload: 5 })).toBe(5 * 1024 * 1024);
     // With no maxUpload the gateway lets 10 MB through, so that's all an upload can be.
     expect(uploadLimitOf({})).toBe(10 * 1024 * 1024);
