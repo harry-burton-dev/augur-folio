@@ -20,6 +20,17 @@ describe('the renditions queue', () => {
     expect(runIdFor('v1', queued[0].queuedAt)).toBe(`renditions-v1-${Date.parse(queued[0].queuedAt)}`);
   });
 
+  it('hands them to a stand-in instead when there is one, starting no job', async () => {
+    const jobs = memoryJobs({ app: 'folio', log: quiet });
+    const queued = [{ version: 'v1', queuedAt: '2026-11-03T10:00:00.000Z' }];
+    const store = { queuedRenditions: async () => queued } as unknown as FolioStore;
+    const made: string[] = [];
+    const { sweep } = renditionQueue(store, jobs, quiet, async (version) => void made.push(version));
+    expect(await sweep()).toBe(1);
+    expect(made).toEqual(['v1']);
+    expect(await jobs.status(runIdFor('v1', queued[0].queuedAt))).toBeUndefined();
+  });
+
   it('logs, and hands nothing over, when the store can’t say what is queued', async () => {
     const errors: unknown[] = [];
     const jobs = memoryJobs({ app: 'folio', log: quiet });
