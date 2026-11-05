@@ -1,4 +1,5 @@
 import { appCredentialsFromEnv, identityAudience, identityDirectory, identityPrincipals, type AudienceLookup, type DirectoryResult, type DirectorySearch } from '@augur/service-kit';
+import type { FloorNamed } from './api-types.ts';
 import type { OnFloor } from './app.ts';
 import type { FolioStore } from './store.ts';
 
@@ -75,3 +76,13 @@ export const describePrincipals =
       return { principal, kind, ...(team ? { name: team.name, within: team.within } : {}) };
     });
   };
+
+/** Whose floor a library's principal is: a person's own, a team's (with the teams below it), or the org's. */
+export const floorKindOf = (principal: string): FloorNamed['floorKind'] => (principal === 'org' ? 'org' : principal.startsWith('person:') ? 'person' : 'team');
+
+/** A described floor principal, as a shared thing carries it. */
+export const floorNamed = (d: Described): FloorNamed => ({
+  floorKind: floorKindOf(d.principal),
+  ...(d.name ? { floorName: d.name } : {}),
+  ...(d.within?.length ? { within: d.within } : {}),
+});

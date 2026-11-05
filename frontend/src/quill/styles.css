@@ -25,6 +25,9 @@
 .folio-reading-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); width: 100%; max-width: var(--measure-read); margin: 0 auto; }
 .folio-reading[data-wide] .folio-reading-head { max-width: var(--measure-wide); }
 .folio-reading-head h1, .folio-reading-head p { margin: 0; }
+.folio-reading-title { display: flex; align-items: center; gap: var(--space-2); }
+.folio-reading-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; max-width: var(--measure-read); margin: 0 auto; }
+.folio-reading[data-wide] .folio-reading-bar { max-width: var(--measure-wide); }
 .folio-reading-turns { display: flex; justify-content: space-between; gap: var(--space-3); align-self: stretch; }
 .folio-reading-side { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .folio-reading-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }

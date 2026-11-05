@@ -640,11 +640,25 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(el.querySelector('.quill-lifecycle [aria-current="step"]')!.textContent).toBe('Complete');
   });
 
-  it('changes a document from the drawer: its tags, and renaming it', async () => {
+  it('keeps how it reads in a bar over the text, and what can be done to it on its head', async () => {
+    const { el } = await open('/libraries/l-1/documents/d-1');
+    await ready();
+    const bar = el.querySelector<HTMLElement>('.folio-reading-bar[role="toolbar"]')!;
+    expect([...bar.querySelectorAll('button')].map((b) => b.textContent?.trim()).filter(Boolean)).toEqual(expect.arrayContaining(['Smaller', 'Larger']));
+    // About holds no control that changes the document or how it's read.
+    const side = el.querySelector<HTMLElement>('.folio-reading-side')!;
+    for (const words of ['Smaller', 'Download the original', 'Change it', 'Share', 'Publish up the floors']) expect(reactButton(side, words)).toBeUndefined();
+    el.querySelector<HTMLElement>('.folio-reading-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    await ready();
+    expect(ring()).toEqual(expect.arrayContaining(['Download the original', 'Publish up', 'Change it']));
+  });
+
+  it('changes a document from its actions: its tags, and renaming it', async () => {
     const { el, calls } = await open('/libraries/l-1/documents/d-1');
     await ready();
-    reactButton(el, 'Change it')!.click();
+    el.querySelector<HTMLElement>('.folio-reading-head')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     await ready();
+    await pressRing('Change it');
     const dialog = document.querySelector<HTMLElement>('.augur-dialog')!;
     expect(dialog.querySelector('[role="heading"], h2')!.textContent).toBe('Travel policy');
     expect(rowsOf(dialog).map(([t]) => t)).toEqual(['Version 2', 'Version 1']);

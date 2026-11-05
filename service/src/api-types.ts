@@ -341,10 +341,25 @@ export interface PublishedPage {
   total: number;
 }
 
+/**
+ * Whose floor something shared comes from, as the directory names it: a team's
+ * name and the teams it sits in, or a person's name. The org's floor carries no
+ * name here: the page names it from the floors the shell gives it.
+ */
+export interface FloorNamed {
+  floorKind: 'person' | 'team' | 'org';
+  /** Absent when the directory doesn't know it (gone, or not asked). */
+  floorName?: string;
+  /** For a team: the teams it sits in, from the top down. */
+  within?: string[];
+}
+
 /** Shared with the caller from other floors. */
 export interface Shared {
-  libraries: (Library & { level: Level })[];
-  documents: (DocumentView & { level: Level; libraryName: string })[];
+  libraries: (Library & FloorNamed & { level: Level })[];
+  documents: (DocumentView & FloorNamed & { level: Level; libraryName: string })[];
+  /** The directory couldn't be asked, so no floor is named. */
+  namesUnavailable?: true;
 }
 
 /**
