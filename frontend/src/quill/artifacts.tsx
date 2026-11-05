@@ -20,6 +20,7 @@ import {
   type FrontPageConfig,
   type PaletteItem,
   type PathNode,
+  type PathTrail,
   type ReelItem,
   type RingAction,
   type RingShape,
@@ -73,6 +74,8 @@ export interface ArtifactsProps {
   /** How the app goes out of focus behind a dialog, the ring or the palette. */
   depth?: Depth;
   ringShape?: RingShape;
+  /** How the rail's path shows where the person is: `draw` lights it down to here as they arrive (the `lit-path` preview). */
+  trail?: PathTrail;
 }
 
 type Screen = 'home' | 'collections' | 'library' | 'document' | 'series' | 'shared' | 'published' | 'received' | 'arrived';
@@ -146,7 +149,7 @@ type Ask =
  * find on `/`, and depth instead of scrims.
  */
 export function Artifacts(props: ArtifactsProps) {
-  const { api, userId, floorKey, floorName, floorKind, orgName, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape } = props;
+  const { api, userId, floorKey, floorName, floorKind, orgName, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape, trail: trailLook = 'still' } = props;
   const [place, setPlace] = useState<Place>(props.place);
   // The address moved without Artifacts (Back, Forward, or the shell): go where it says now.
   const addressed = pathFor(props.place) + (props.place.adding ? '#adding' : '');
@@ -536,6 +539,7 @@ export function Artifacts(props: ArtifactsProps) {
           label={shelfName}
           nodes={nodes}
           path={path}
+          trail={trailLook}
           onOpen={(n) => (libraries.some((l) => l.id === n.id) ? go({ library: n.id }) : go({ library: place.library!, folder: n.id }))}
           ringFor={(n) => {
             const l = libraries.find((x) => x.id === n.id);

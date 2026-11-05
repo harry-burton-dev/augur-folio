@@ -105,6 +105,9 @@ const useFollow = () => {
   }, []);
 };
 
+/** The features Artifacts is trying out: the ids of its manifest's `previews`, which the person turns on in Previews. */
+export const PREVIEWS = { litPath: 'lit-path' } as const;
+
 /** One FolioApi for a mount: it calls through the shell's `ctx.fetch`, on the floor the app is on. */
 const useApi = (ctx: MountContext) => useMemo(() => new FolioApi(ctx), [ctx]);
 
@@ -135,6 +138,7 @@ export function App({ ctx, children }: AppProps<MountContext>) {
             {...helpers}
             explain={explain}
             publisher={ctx.user.roles.includes('publisher')}
+            trail={ctx.previewOn(PREVIEWS.litPath) ? 'draw' : 'still'}
           />
         </div>
       )}

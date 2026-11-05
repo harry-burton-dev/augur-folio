@@ -263,7 +263,7 @@ const service = ({
   return { fetch, calls };
 };
 
-const ctx = (fetch: MountContext['fetch'], path = '/libraries/l-1'): MountContext => ({
+const ctx = (fetch: MountContext['fetch'], path = '/libraries/l-1', previews: string[] = []): MountContext => ({
   user: { id: 'u1', name: 'Sam Okafor', departments: ['Finance'], roles: [] },
   getToken: async () => 't',
   bus: createEventBus(),
@@ -273,7 +273,7 @@ const ctx = (fetch: MountContext['fetch'], path = '/libraries/l-1'): MountContex
   path,
   workspace: floor,
   getWorkspace: () => floor,
-  previewOn: () => false,
+  previewOn: (id) => previews.includes(id),
   fetch,
 });
 
@@ -486,12 +486,12 @@ describe('Artifacts, new layout (PDR-010)', () => {
   const ready = async () => {
     for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r));
   };
-  const open = async (path: string, options: Parameters<typeof service>[0] = {}) => {
+  const open = async (path: string, options: Parameters<typeof service>[0] = {}, previews: string[] = []) => {
     const s = service({ documents: [travel], ...options });
     const el = document.createElement('div');
     document.body.append(el);
     window.history.replaceState(null, '', `/@finance/folio${path === '/' ? '' : path}`);
-    await app.mount(el, ctx(s.fetch, path));
+    await app.mount(el, ctx(s.fetch, path, previews));
     await ready();
     return { el, calls: s.calls };
   };
@@ -534,6 +534,14 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(tile('Leave')).toBeDefined();
     const lit = [...document.querySelectorAll('.quill-tree-lit')].map((r) => r.querySelector('.quill-tree-label')!.textContent);
     expect(lit).toEqual(['Policies', 'HR']);
+  });
+
+  it('draws the path down to where the person is only with the lit-path preview on', async () => {
+    await open('/libraries/l-1/f-hr');
+    expect(document.querySelector('.quill-path-tree')!.getAttribute('data-trail')).toBe('still');
+    document.body.innerHTML = '';
+    await open('/libraries/l-1/f-hr', {}, ['lit-path']);
+    expect(document.querySelector('.quill-path-tree')!.getAttribute('data-trail')).toBe('draw');
   });
 
   it('goes back where it was with Back, staying mounted', async () => {
