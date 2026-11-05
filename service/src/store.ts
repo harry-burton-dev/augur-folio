@@ -142,9 +142,11 @@ const ENTITY_APP = 'atlas';
 
 /**
  * What an entity binding tells, in Mandate's shape (`entity`, `role`) with
- * Artifacts' own record named as links name it, `<library>/<record>`.
+ * Artifacts' own record named as links name it, `<library>/<record>`, and its
+ * level, so a follower can open it (a UnitRef: the library is the collection,
+ * a document is a file).
  */
-const binding = (l: RecordLink) => ({ record: `${l.library}/${l.from}`, library: l.library, entity: l.to.id, role: l.relation, link: l.id });
+const binding = (l: RecordLink, level: UnitLevel) => ({ record: `${l.library}/${l.from}`, library: l.library, level, entity: l.to.id, role: l.relation, link: l.id });
 
 /** An event waiting in the outbox. */
 export interface OutboxEvent {
@@ -710,7 +712,7 @@ export class MemoryFolioStore implements FolioStore {
     const made: RecordLink = { ...structuredClone(input), id: randomUUID(), at: new Date().toISOString() };
     this.linkList.push(made);
     const shelf = this.shelves.get(made.library);
-    if (shelf && made.to.app === ENTITY_APP) this.tell(TOPICS.entityBound, shelf.workspace, binding(made));
+    if (shelf && made.to.app === ENTITY_APP) this.tell(TOPICS.entityBound, shelf.workspace, binding(made, this.levelOf(made)));
     return structuredClone(made);
   }
 
@@ -726,7 +728,7 @@ export class MemoryFolioStore implements FolioStore {
     if (at < 0) return undefined;
     const [gone] = this.linkList.splice(at, 1);
     const shelf = this.shelves.get(gone.library);
-    if (shelf && gone.to.app === ENTITY_APP) this.tell(TOPICS.entityUnbound, shelf.workspace, binding(gone));
+    if (shelf && gone.to.app === ENTITY_APP) this.tell(TOPICS.entityUnbound, shelf.workspace, binding(gone, this.levelOf(gone)));
     return gone;
   }
 
@@ -823,6 +825,12 @@ export class MemoryFolioStore implements FolioStore {
 
   private tell(topic: string, workspace: string, payload: Record<string, unknown>) {
     this.outbox.push({ topic, workspace, payload });
+  }
+
+  /** Which level of the shape a link starts at. */
+  private levelOf(l: RecordLink): UnitLevel {
+    if (l.from === l.library) return 'collection';
+    return this.folderList.find((f) => f.id === l.from && f.library === l.library)?.level ?? 'file';
   }
 
   private withReader(version: Omit<StoredVersion, 'reader'>): StoredVersion {
@@ -2371,8 +2379,11 @@ export class PgFolioStore implements FolioStore {
 
   /** Tells of an entity binding made or taken away, on its library's floor, inside `client`'s transaction. */
   private async tellBinding(client: pg.PoolClient, topic: string, l: RecordLink) {
-    const { rows } = await client.query<{ workspace_id: string }>('select workspace_id from folio.libraries where id = $1', [l.library]);
-    if (rows[0]) await tell(client, topic, rows[0].workspace_id, binding(l));
+    const { rows } = await client.query<{ workspace_id: string; level: UnitLevel | null }>(
+      'select l.workspace_id, f.level from folio.libraries l left join folio.folders f on f.library_id = l.id and f.id = $2 where l.id = $1',
+      [l.library, l.from],
+    );
+    if (rows[0]) await tell(client, topic, rows[0].workspace_id, binding(l, l.from === l.library ? 'collection' : (rows[0].level ?? 'file')));
   }
 
   async setLevelName(level: UnitLevel, name: LevelName | null, by: string) {
