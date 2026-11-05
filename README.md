@@ -6,7 +6,7 @@ People see Folio as **Artifacts**: that's its name in the manifest and in everyt
 
 AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](https://github.com/harry-burton-dev/augur/blob/main/docs/app-patterns.md)). It is built only on the public app contract, like any other app.
 
-Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to 200 MB each; uploads stream straight through to the bucket.
+Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to the manifest's `maxUpload` each (200 MB, or less where an admin lowered it in Admin, Apps); uploads stream straight through to the bucket.
 
 This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](https://github.com/harry-burton-dev/augur/blob/main/docs/folio.md).
 
@@ -152,7 +152,7 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `PATCH /placements/:id` `{filter}` | Show more or less through a step. Narrowing it narrows every step above it, and ends any left showing nothing |
 | `PUT /placements/:id/landing` `{library, folder?}`, `DELETE …` | Where it sits on the floor that received it (that floor's leads); with none it sits under "From below" |
 | `POST /placements/:id/withdraw` `{reason?}` | Take it back off that floor, and off every floor it went to from there |
-| `GET /placements/:id/above` | The steps that came up through this one |
+| `GET /placements/:id/above` | The steps that came up through this one, which would go with it if it were taken back: for whoever may take it back |
 | `PUT /libraries/:id/folders/:folder/tags` `{tags}` | A folder's own tags, the org's or the library's: they count for everything inside it when filtering by tag. Whoever may change the folder |
 | `GET /libraries/:id/links?record=` | A library's, folder's or document's links (`record` is its id; the library's own id for the library), the links to it from other records (`back`), the kinds of link, and whether the caller may change them. A linked record the caller can't open stays listed, with `unavailable` saying so |
 | `POST /libraries/:id/links` `{record, relation, to}` | Link a record to another (`to` is a `RecordRef`: `{app, kind, id, label?}`). `relates-to`, `supersedes` and `responds-to` link to Artifacts' own records (`{app: 'folio', kind: 'unit', id: '<library>/<record>'}`), `about` to a thing in Data Atlas, `serves` to an intent in Mandate. Whoever may change the record links it |

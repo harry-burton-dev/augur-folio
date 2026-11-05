@@ -375,6 +375,8 @@ export const placementRoutes = async (app: FastifyInstance, { store, audit, onFl
     if (!caller) return reply;
     const p = await store.placement(req.params.id);
     if (!p || p.ended) return sendRefusal(reply, 404, 'not-found', 'It isn’t on that floor any more.');
+    // Only those who could take it back see what would go with it, as withdrawing does.
+    if (!leadsReceiving(caller, p) && !(await mayManage(caller, p))) return sendRefusal(reply, 403, 'forbidden', 'Only whoever published it, or the leads of the floor it’s on, can take it back.');
     const all = await store.placementsOf(p.record.id);
     const floors = await floorsOf(all.map((q) => q.to), caller);
     return { above: above(all.map((q) => asStep(q, floors)), p.id).map((s) => floors.get(s.to)) };

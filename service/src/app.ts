@@ -17,7 +17,7 @@ import {
 } from '@augur/service-kit';
 import type { LibraryRights } from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
-import { documentRoutes } from './documents.ts';
+import { documentRoutes, uploadLimitOf } from './documents.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
 import { accessRoutes } from './access.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
@@ -46,7 +46,7 @@ export interface Options {
   objects?: ObjectStore;
   /** The platform's audit log. */
   audit?: Audit;
-  /** The most one upload may be, in bytes. */
+  /** The most one upload may be, in bytes. The manifest's `maxUpload` unless a test says less. */
   maxUploadBytes?: number;
   /** Who a caller stands for. From identity by default; without it, their floor (peopleFromEnv). */
   principals?: CallerPrincipals;
@@ -423,7 +423,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       });
 
       const publisher = publisherFor({ store, audit: record, directory, audience, notify: tell, log: app.log });
-      await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, publisher, maxUploadBytes });
+      await documentRoutes(app, { store, objects, audit: record, onFloor, reach, libraryFor, principalsOf, refused, log: app.log, publisher, maxUploadBytes: maxUploadBytes ?? uploadLimitOf(manifest) });
       await accessRoutes(app, { store, audit: record, onFloor, reach, libraryFor, principalsOf, directory, log: app.log });
       await tagRoutes(app, { store, onFloor, libraryFor, refused, rightsOn });
       await publishingRoutes(app, { store, audit: record, onFloor, reach, principalsOf, directory, audience, notify: tell, log: app.log, publisher });
