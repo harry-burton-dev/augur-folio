@@ -50,7 +50,7 @@ A team's leads publish to their team and the teams below it, and the org's leads
 
 Documents are drafts until they're published, and the list can be narrowed to drafts, published or withdrawn ones.
 
-Folio tells other apps what happened through the platform's events (`events:publish`), from an outbox in its own schema, so an event goes out if and only if the change it tells of was saved: `folio.document.version.created`, `folio.document.published`, `folio.document.withdrawn`, `folio.document.deleted` and `folio.document.readers.changed`. They carry ids only, never titles or text. It handles `document.open`: another app opens one of Folio's documents with `openDocument(ctx, ref)`.
+Folio tells other apps what happened through the platform's events (`events:publish`), from an outbox in its own schema, so an event goes out if and only if the change it tells of was saved: `folio.document.version.created`, `folio.document.published`, `folio.document.withdrawn`, `folio.document.deleted`, `folio.document.readers.changed`, and `folio.record.entity-bound` / `folio.record.entity-unbound` when a library, folder or document is linked to an entity in Data Atlas or unlinked from it (ADR 0025; `{ record: "<library>/<record>", library, entity, role, link }`, the shape Mandate uses). They carry ids only, never titles or text. It handles `document.open`: another app opens one of Folio's documents with `openDocument(ctx, ref)`.
 
 A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
 
