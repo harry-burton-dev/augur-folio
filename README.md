@@ -177,6 +177,10 @@ All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` a
 | `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?, series?}` |
 | `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |
 
+## In the run suite
+
+`run/index.ts` holds Artifacts' scenarios for AUGUR's run suite (`augur-run`, AUGUR's ADR 0050), which loads it with `--scenarios ../augur-folio/run/index.ts`. RUN-15 proves that publishing up the floors is counted in who can read (alpha Goal 30): an editor publishes a document up from their own floor, someone on that floor finds it under its library's name and opens it, and someone on another floor can do neither and is told why. Each scenario has a row in augur-run's `traceability.md`, which gives out the ids. The module imports nothing, because the suite runs it from source; `pnpm typecheck` checks it.
+
 ## Releases
 
 It lives in its own repository and ships with AUGUR: CI here builds, tests, signs and releases it, and each AUGUR release takes the version pinned in AUGUR's `release/shipped-apps.json`.
