@@ -14,6 +14,8 @@ import {
   type OutlineItem,
   type ReaderHandle,
   type ReaderSize,
+  type RingSubject,
+  useRingTarget,
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CONTENT_STATES, fileTypeOf, sizeWords, stateName, type ContentState, type FolioApi, type OpenDocument, type RecordLink, type Tag as FolioTag } from '../api.js';
@@ -166,8 +168,16 @@ export interface ReadingActions {
 }
 
 /** The middle: the title, where it is, and the reader copy or why there isn't one yet. */
-export function ReadingMain({ reading, backLabel, actions }: { reading: Reading; backLabel: string; actions: ReadingActions }) {
+export function ReadingMain({ reading, backLabel, actions, ring }: { reading: Reading; backLabel: string; actions: ReadingActions; ring: () => RingSubject | undefined }) {
   const { doc, shown: v } = reading;
+  // The document's actions open on its head (right-click, a long press, or the mark by the title); the text keeps the browser's own menu.
+  const head = useRingTarget(ring);
+  const headEl = useRef<HTMLElement>(null);
+  /** The Actions button opens the same ring the head does, centred on the button, for the keyboard and touch. */
+  const openActions = (button: Element | null) => {
+    const r = button?.getBoundingClientRect();
+    headEl.current?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, ...(r && r.width ? { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 } : {}) }));
+  };
   if (!doc) return null;
   if (!v) return <State kind="empty" heading="There’s no such version of this document" />;
   const old = v.number !== doc.latest.number;
@@ -198,11 +208,16 @@ export function ReadingMain({ reading, backLabel, actions }: { reading: Reading;
   };
   return (
     <div className="folio-reading" data-wide={reading.prefs.wide || undefined}>
-      <header className="folio-reading-head">
+      <header className="folio-reading-head" ref={headEl} {...head}>
         <Button kind="ghost" size="sm" onPress={actions.onBack}>
           {backLabel}
         </Button>
-        <h1 className="text-title-s">{doc.title}</h1>
+        <div className="folio-reading-title">
+          <h1 className="text-title-s">{doc.title}</h1>
+          <Button kind="ghost" size="sm" aria-haspopup="menu" onPress={(e) => openActions(e.target as Element)}>
+            Actions
+          </Button>
+        </div>
         <p className="text-meta text-ink-muted">
           {[`Version ${v.number}`, fileTypeOf(v.filename)?.word, `added ${ago(v.createdAt)}`, v.reader.pages ? `${v.reader.pages} ${v.reader.pages === 1 ? 'page' : 'pages'}` : ''].filter(Boolean).join(' · ')}
         </p>
@@ -231,7 +246,25 @@ export function ReadingMain({ reading, backLabel, actions }: { reading: Reading;
           </nav>
         ) : null}
       </header>
+      <ReadingBar reading={reading} />
       {body()}
+    </div>
+  );
+}
+
+/** Above the text: how it's read, not what it is. Remembered in the browser for every document. */
+function ReadingBar({ reading }: { reading: Reading }) {
+  const { prefs, setPrefs } = reading;
+  const size = SIZES.indexOf(prefs.size);
+  return (
+    <div className="folio-reading-bar" role="toolbar" aria-label="Reading">
+      <Button kind="ghost" size="sm" disabled={size === 0} reason="It’s at the smallest size." onPress={() => setPrefs({ size: SIZES[size - 1] })}>
+        Smaller
+      </Button>
+      <Button kind="ghost" size="sm" disabled={size === SIZES.length - 1} reason="It’s at the largest size." onPress={() => setPrefs({ size: SIZES[size + 1] })}>
+        Larger
+      </Button>
+      <Toggle label="Wide page" checked={prefs.wide} onChange={(wide) => setPrefs({ wide })} />
     </div>
   );
 }
@@ -251,28 +284,25 @@ export interface ReadingSideProps {
   /** "When it was published", in words: "3 h ago". */
   agoWords: (time: string) => string;
   onRead: (version?: number) => void;
-  onDownload: (version: number) => void;
-  onManage: () => void;
-  onShare: () => void;
-  onPublish: () => void;
-  onPublishUp: () => void;
   onMove: (version: number, state: ContentState) => Promise<unknown>;
   onSeries: (series: string) => void;
-  onFollow: (following: boolean) => Promise<unknown>;
   onOpenLink: (link: RecordLink) => void;
 }
 
-/** The drawer while reading: how to read it, what it is, where it is in its life, its links, and its versions. */
+/**
+ * The drawer while reading is About: what it is, where it is in its life, its
+ * links and its versions. What can be done to it is in its actions (on its
+ * head), and how it's read is in the reading bar over the text.
+ */
 export function ReadingSide(props: ReadingSideProps) {
   const { reading, api, tags, propose, pickRef, agoWords } = props;
-  const { doc, shown: v, prefs, setPrefs, passage } = reading;
+  const { doc, shown: v, passage } = reading;
   const [moving, setMoving] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [proposed, setProposed] = useState<{ ok: boolean; words: string }>();
   useEffect(() => setProposed(undefined), [passage?.text, passage?.anchor]);
   if (!doc || !v) return null;
   const newest = doc.latest.number;
-  const size = SIZES.indexOf(prefs.size);
   const versions: ListItem[] = doc.versions.map((x) => ({
     id: String(x.number),
     title: x.number === v.number ? `Version ${x.number}, reading` : `Version ${x.number}`,
@@ -305,33 +335,6 @@ export function ReadingSide(props: ReadingSideProps) {
 
   return (
     <div className="folio-reading-side">
-      <section className="folio-reading-section" aria-label="Text size">
-        <span className="quill-label">Text size</span>
-        <div className="folio-reading-row" role="group" aria-label="Text size">
-          <Button kind="secondary" size="sm" disabled={size === 0} reason="It’s at the smallest size." onPress={() => setPrefs({ size: SIZES[size - 1] })}>
-            Smaller
-          </Button>
-          <Button kind="secondary" size="sm" disabled={size === SIZES.length - 1} reason="It’s at the largest size." onPress={() => setPrefs({ size: SIZES[size + 1] })}>
-            Larger
-          </Button>
-        </div>
-        <Toggle label="Wide page" checked={prefs.wide} onChange={(wide) => setPrefs({ wide })} />
-      </section>
-      <div className="folio-reading-row">
-        <Button kind="secondary" size="sm" onPress={() => props.onDownload(v.number)}>
-          Download the original
-        </Button>
-        {doc.can.change ? (
-          <Button kind="ghost" size="sm" onPress={props.onManage}>
-            Change it
-          </Button>
-        ) : null}
-        {doc.only ? null : (
-          <Button kind="ghost" size="sm" onPress={props.onShare}>
-            {doc.can.share ? 'Share' : 'Who can see it'}
-          </Button>
-        )}
-      </div>
       {doc.only ? null : (
         <section className="folio-reading-section" aria-label="Lifecycle">
           <span className="quill-label">Version {v.number}</span>
@@ -348,11 +351,6 @@ export function ReadingSide(props: ReadingSideProps) {
               void props.onMove(v.number, state as ContentState).finally(() => setMoving(false));
             }}
           />
-          <div>
-            <Button kind="ghost" size="sm" onPress={props.onPublishUp}>
-              Publish up the floors
-            </Button>
-          </div>
         </section>
       )}
       {publishing ? (
@@ -362,13 +360,6 @@ export function ReadingSide(props: ReadingSideProps) {
             {publishedWords}
           </p>
           {doc.published?.note && doc.only ? <p className="folio-reading-note">“{doc.published.note}”</p> : null}
-          {doc.can.publish ? (
-            <div>
-              <Button kind="secondary" size="sm" onPress={props.onPublish}>
-                {doc.state === 'published' ? 'Publishing' : 'Publish'}
-              </Button>
-            </div>
-          ) : null}
         </section>
       ) : null}
       {run && issue ? (
@@ -382,7 +373,7 @@ export function ReadingSide(props: ReadingSideProps) {
               </button>
             </span>
           </p>
-          <Toggle label="Tell me of each new issue" checked={run.following} onChange={(on) => props.onFollow(on)} />
+          {run.following ? <p className="folio-reading-note">You’re told of each new issue.</p> : null}
         </section>
       ) : null}
       <section className="folio-reading-section" aria-label="Links">
