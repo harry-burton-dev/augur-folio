@@ -34,6 +34,19 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # An empty changeset bumps nothing, so when only empty ones wait they mustn't hold back the release
+      # below: they're set aside for this run, and the next Version packages pull request consumes them.
+      - name: Set empty changesets aside
+        run: |
+          node --input-type=module -e "
+            import { readdirSync, readFileSync, rmSync } from 'node:fs';
+            const files = readdirSync('.changeset').filter((f) => f.endsWith('.md') && f !== 'README.md');
+            const empty = (text) => /^\uFEFF?---[ \t]*\r?\n(?:[ \t]*\r?\n)*---/.test(text);
+            if (files.length && files.every((f) => empty(readFileSync('.changeset/' + f, 'utf8')))) {
+              for (const f of files) rmSync('.changeset/' + f);
+              console.log('Only empty changesets wait, so they do not hold back this release: ' + files.join(', '));
+            }
+          "
       - name: Version packages pull request
         id: changesets
         uses: changesets/action@v1
@@ -42,7 +55,10 @@ jobs:
           title: Version packages
           commit: Version packages
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          # RELEASE_TOKEN (Contents and Pull requests write here) opens the Version packages pull request so
+          # that its CI starts by itself; the run's own token needs "Allow GitHub Actions to create and approve
+          # pull requests" on, and its pull request's CI waits.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       - name: Is this version released yet?
         id: pending
         if: steps.changesets.outputs.hasChangesets == 'false'
