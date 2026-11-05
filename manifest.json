@@ -4,7 +4,7 @@
   "route": "/folio",
   "entry": "/apps/folio/entry.js",
   "version": "0.7.1",
-  "sdk": "^1.1.1",
+  "sdk": "^1.1.1 || ^2.0.0",
   "description": "Documents kept for you, your teams and the org",
   "icon": "library",
   "floors": [
