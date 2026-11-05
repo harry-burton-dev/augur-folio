@@ -5,7 +5,6 @@ import {
   Lifecycle,
   List,
   Reader,
-  RingMore,
   State,
   Tag,
   Toggle,
@@ -173,6 +172,12 @@ export function ReadingMain({ reading, backLabel, actions, ring }: { reading: Re
   const { doc, shown: v } = reading;
   // The document's actions open on its head (right-click, a long press, or the mark by the title); the text keeps the browser's own menu.
   const head = useRingTarget(ring);
+  const headEl = useRef<HTMLElement>(null);
+  /** The Actions button opens the same ring the head does, centred on the button, for the keyboard and touch. */
+  const openActions = (button: Element | null) => {
+    const r = button?.getBoundingClientRect();
+    headEl.current?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, ...(r && r.width ? { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 } : {}) }));
+  };
   if (!doc) return null;
   if (!v) return <State kind="empty" heading="There’s no such version of this document" />;
   const old = v.number !== doc.latest.number;
@@ -203,13 +208,15 @@ export function ReadingMain({ reading, backLabel, actions, ring }: { reading: Re
   };
   return (
     <div className="folio-reading" data-wide={reading.prefs.wide || undefined}>
-      <header className="folio-reading-head" {...head}>
+      <header className="folio-reading-head" ref={headEl} {...head}>
         <Button kind="ghost" size="sm" onPress={actions.onBack}>
           {backLabel}
         </Button>
         <div className="folio-reading-title">
           <h1 className="text-title-s">{doc.title}</h1>
-          <RingMore subject={ring} />
+          <Button kind="ghost" size="sm" aria-haspopup="menu" onPress={(e) => openActions(e.target as Element)}>
+            Actions
+          </Button>
         </div>
         <p className="text-meta text-ink-muted">
           {[`Version ${v.number}`, fileTypeOf(v.filename)?.word, `added ${ago(v.createdAt)}`, v.reader.pages ? `${v.reader.pages} ${v.reader.pages === 1 ? 'page' : 'pages'}` : ''].filter(Boolean).join(' · ')}
