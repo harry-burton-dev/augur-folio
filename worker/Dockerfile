@@ -29,4 +29,8 @@ ENV HF_HOME=/home/folio/.cache/huggingface \
   PYTHONUNBUFFERED=1
 RUN HF_HUB_OFFLINE=0 docling-tools models download -o "$DOCLING_ARTIFACTS_PATH"
 
+# Healthy while the worker keeps reaching its database (folio_worker/health.py). Loading Docling's models
+# takes a while, so the first beats get two minutes.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 CMD ["python", "-m", "folio_worker.health"]
+
 CMD ["python", "-m", "folio_worker"]
