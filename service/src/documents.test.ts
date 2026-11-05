@@ -3,7 +3,8 @@ import { callerHeaders, type Caller } from '@augur/service-kit';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 import type { FolioAuditEntry } from './audit.ts';
-import { titleFrom } from './documents.ts';
+import { titleFrom, uploadLimitOf } from './documents.ts';
+import { manifest } from './manifest.ts';
 import { MemoryObjectStore } from './objects.ts';
 import { MemoryFolioStore } from './store.ts';
 
@@ -103,6 +104,13 @@ describe('folio documents', () => {
     expect(res.json().message).toBe('A file can be 1 MB at most.');
     expect(objects.files.size).toBe(0);
     expect((await send(member(alex), `/v1/libraries/${library}/documents?filename=fits.pdf`, Buffer.alloc(1024 * 1024))).statusCode).toBe(201);
+  });
+
+  it('takes the upload limit from the manifest, as the gateway does', () => {
+    expect(uploadLimitOf(manifest)).toBe(manifest.maxUpload! * 1024 * 1024);
+    expect(uploadLimitOf({ maxUpload: 5 })).toBe(5 * 1024 * 1024);
+    // With no maxUpload the gateway lets 10 MB through, so that's all an upload can be.
+    expect(uploadLimitOf({})).toBe(10 * 1024 * 1024);
   });
 
   it('gives no original while the audit log can’t take it', async () => {

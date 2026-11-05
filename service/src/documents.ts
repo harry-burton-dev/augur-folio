@@ -22,8 +22,11 @@ export const ACCEPTED: Record<string, readonly string[]> = {
   'text/plain': ['.txt'],
 };
 
-/** The most one upload may be, as the manifest's `maxUpload` says. The gateway stops larger ones first. */
-export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+/** What the gateway lets through when a manifest gives no `maxUpload`, in MB (AUGUR's build-an-app guide). */
+const GATEWAY_DEFAULT_MB = 10;
+
+/** The most one upload may be, in bytes: the manifest's `maxUpload`, the limit the gateway holds the app to. */
+export const uploadLimitOf = (manifest: { maxUpload?: number }) => (manifest.maxUpload ?? GATEWAY_DEFAULT_MB) * 1024 * 1024;
 
 const ACCEPTED_WORDS = 'Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text files.';
 
@@ -52,8 +55,8 @@ export interface DocumentDeps {
   log: { error(obj: object, msg: string): void };
   /** Publishes a series' new issue to its audience. */
   publisher: Publisher;
-  /** The most one upload may be; MAX_UPLOAD_BYTES unless a test says less. */
-  maxUploadBytes?: number;
+  /** The most one upload may be, in bytes: the manifest's (uploadLimitOf) unless a test says less. */
+  maxUploadBytes: number;
 }
 
 const FILE_QUERY = {
@@ -182,7 +185,7 @@ const VERSION_PARAMS = {
  * Documents: uploading them, new versions, and their original files. Uploads stream
  * straight into Folio's bucket, counted and hashed on the way; nothing is held in memory.
  */
-export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, reach, libraryFor, principalsOf, refused, log, publisher, maxUploadBytes = MAX_UPLOAD_BYTES }: DocumentDeps) => {
+export const documentRoutes = async (app: FastifyInstance, { store, objects, audit, onFloor, reach, libraryFor, principalsOf, refused, log, publisher, maxUploadBytes }: DocumentDeps) => {
   // Every upload reaches its route as a stream, whatever it says it is; the route decides what it takes.
   app.removeContentTypeParser('text/plain');
   app.addContentTypeParser('*', (_req, payload, done) => done(null, payload));

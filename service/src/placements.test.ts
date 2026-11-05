@@ -165,6 +165,10 @@ describe('folio publishing up the floors', () => {
     const first = (await call(own(sam), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'ops', filter: WORKING })).json();
     const second = (await call(on(lena, 'ops', 'lead'), 'POST', '/v1/placements', { library, record: { kind: 'folder', id: reports.id }, to: 'dept', via: first.id, filter: ['complete'] })).json();
     expect((await call(own(sam), 'GET', `/v1/placements/${first.id}/above`)).json().above).toEqual([expect.objectContaining({ id: 'dept' })]);
+    // What would go with it is for those who could take it back: the leads it went to, not a reader there or an outsider.
+    expect((await call(on(lena, 'ops', 'lead'), 'GET', `/v1/placements/${first.id}/above`)).statusCode).toBe(200);
+    expect((await call(on(alex, 'dept'), 'GET', `/v1/placements/${first.id}/above`)).statusCode).toBe(403);
+    expect((await call(on(kim, 'org'), 'GET', `/v1/placements/${first.id}/above`)).statusCode).toBe(403);
     expect((await call(on(alex, 'dept'), 'POST', `/v1/placements/${first.id}/withdraw`, {})).statusCode).toBe(403);
     const back = await call(own(sam), 'POST', `/v1/placements/${first.id}/withdraw`, { reason: 'Wrong numbers' });
     expect(back.json().withdrawn.map((w: { id: string }) => w.id).sort()).toEqual([first.id, second.id].sort());

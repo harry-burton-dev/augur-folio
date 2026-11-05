@@ -52,11 +52,17 @@ const app = await startAppService({
       await remindLate({ store, notify, log: app.log });
     });
 
-    // Move what was published the old way onto publishing up the floors. Until it's moved, it still reads
-    // as before; when the directory can't be reached, it's tried again next round.
+    // Move what was published the old way onto publishing up the floors, once. Until it's moved, it still
+    // reads as before; when the directory can't be reached, it's tried again next round. Once a round finds
+    // nothing left, this instance stops looking, since a lone document can't be published the old way any
+    // more. The job goes in a later release, once every deployment has run it (moving.ts).
+    let settled = false;
     jobs.schedule('move-publications', '*/15 * * * *', async () => {
+      if (settled) return;
       const moved = await movePublications({ store, directory, audit, log: app.log });
       if (moved) app.log.info({ moved }, 'moved publications onto publishing up');
+      settled = !(await store.publicationsToMove(1)).length;
+      if (settled) app.log.info('nothing left published the old way: no more moving');
     });
 
     // Clear away deleted documents once they're past the retention period an admin set in Admin, Apps
