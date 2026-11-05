@@ -21,3 +21,11 @@ def test_dbos_gets_them_with_its_settings():
     config = dbos_config("folio", "postgres://x", {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel:4318"})
     assert config["enable_otlp"] is True and config["name"] == "folio"
     assert "enable_otlp" not in dbos_config("folio", "postgres://x", {})
+
+
+def test_names_the_worker_when_on():
+    # Loads OpenTelemetry as the worker does, so a lock without it fails here rather than at start.
+    from opentelemetry import trace
+
+    telemetry.name_service({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
+    assert trace.get_tracer_provider().resource.attributes["service.name"] == "folio-worker"
