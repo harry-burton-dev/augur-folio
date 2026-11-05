@@ -1,0 +1,136 @@
+# Written by `augur-app catalog` from manifest.json and the package.json files. Don't edit it by hand.
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "System",
+  "metadata": {
+    "name": "folio",
+    "title": "Artifacts",
+    "description": "Documents kept for you, your teams and the org",
+    "annotations": {
+      "github.com/project-slug": "harry-burton-dev/augur-folio",
+      "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/",
+      "augur.dev/release-unit": "app/folio",
+      "augur.dev/version": "0.8.0",
+      "augur.dev/app-id": "folio",
+      "augur.dev/route": "/folio",
+      "augur.dev/sdk-range": "^2.0.0",
+      "augur.dev/category": "pillar",
+      "augur.dev/floors": "personal,team,org",
+      "augur.dev/scopes": "audit:write,people:read,notifications:send,events:publish"
+    }
+  },
+  "spec": {
+    "owner": "group:default/augur-core",
+    "domain": "augur"
+  }
+}
+---
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Component",
+  "metadata": {
+    "name": "apps-folio-frontend",
+    "title": "@apps/folio-frontend",
+    "description": "Folio's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
+    "annotations": {
+      "github.com/project-slug": "harry-burton-dev/augur-folio",
+      "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/frontend/",
+      "augur.dev/package": "@apps/folio-frontend",
+      "augur.dev/version": "0.8.0",
+      "augur.dev/release-unit": "app/folio",
+      "augur.dev/app-id": "folio"
+    }
+  },
+  "spec": {
+    "type": "website",
+    "lifecycle": "experimental",
+    "owner": "group:default/augur-core",
+    "system": "folio",
+    "providesApis": [
+      "api:default/folio-intents"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Component",
+  "metadata": {
+    "name": "apps-folio",
+    "title": "@apps/folio",
+    "description": "Folio's service: its API behind the gateway at /api/folio.",
+    "annotations": {
+      "github.com/project-slug": "harry-burton-dev/augur-folio",
+      "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/service/",
+      "augur.dev/package": "@apps/folio",
+      "augur.dev/version": "0.8.0",
+      "augur.dev/release-unit": "app/folio",
+      "augur.dev/app-id": "folio"
+    }
+  },
+  "spec": {
+    "type": "service",
+    "lifecycle": "experimental",
+    "owner": "group:default/augur-core",
+    "system": "folio",
+    "consumesApis": [
+      "api:default/events-api",
+      "api:default/registry-api"
+    ],
+    "dependsOn": [
+      "resource:default/folio-bucket",
+      "resource:default/folio-db"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "API",
+  "metadata": {
+    "name": "folio-intents",
+    "title": "Artifacts intents",
+    "description": "What other apps can ask Artifacts for, through ctx.raise or ctx.request"
+  },
+  "spec": {
+    "type": "augur-intent",
+    "lifecycle": "experimental",
+    "owner": "group:default/augur-core",
+    "system": "folio",
+    "definition": "{\n  \"intents\": [\n    \"document.open\",\n    \"document.pick\",\n    \"library.open\",\n    \"unit.open\",\n    \"folio.open\"\n  ]\n}"
+  }
+}
+---
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Resource",
+  "metadata": {
+    "name": "folio-db",
+    "description": "Artifacts's schema in Postgres"
+  },
+  "spec": {
+    "type": "database",
+    "owner": "group:default/augur-core",
+    "system": "folio",
+    "dependsOn": [
+      "resource:default/postgres"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Resource",
+  "metadata": {
+    "name": "folio-bucket",
+    "description": "Artifacts's bucket in Garage"
+  },
+  "spec": {
+    "type": "s3-bucket",
+    "owner": "group:default/augur-core",
+    "system": "folio",
+    "dependsOn": [
+      "resource:default/garage"
+    ]
+  }
+}
