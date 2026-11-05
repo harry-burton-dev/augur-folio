@@ -614,6 +614,21 @@ const behavesLikeAStore = (make: () => FolioStore, reset: () => Promise<void> = 
     expect((await store.links('d-1', `${lib.id}/d-1`)).to).toEqual([]);
   });
 
+  it('tells other apps of a link to an entity, made and taken away, and of no other link', async () => {
+    const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
+    const about = await store.link({ library: lib.id, from: 'd-1', relation: 'about', to: { app: 'atlas', kind: 'entity', id: 'ent_1', label: 'HMS Example' }, by: 'u-1' });
+    const serves = await store.link({ library: lib.id, from: 'd-1', relation: 'serves', to: { app: 'mandate', kind: 'intent', id: 'int_1' }, by: 'u-1' });
+    const whole = await store.link({ library: lib.id, from: lib.id, relation: 'about', to: { app: 'atlas', kind: 'entity', id: 'ent_2' }, by: 'u-1' });
+    await store.unlink('d-1', about.id);
+    await store.unlink('d-1', serves.id);
+    const payload = { record: `${lib.id}/d-1`, library: lib.id, level: 'file', entity: 'ent_1', role: 'about', link: about.id };
+    expect((await told(store)).filter((e) => e.topic.startsWith('folio.record.'))).toEqual([
+      { topic: TOPICS.entityBound, workspace: 'w-fin', payload },
+      { topic: TOPICS.entityBound, workspace: 'w-fin', payload: { record: `${lib.id}/${lib.id}`, library: lib.id, level: 'collection', entity: 'ent_2', role: 'about', link: whole.id } },
+      { topic: TOPICS.entityUnbound, workspace: 'w-fin', payload },
+    ]);
+  });
+
   it('tells other apps what happened, with ids and no titles', async () => {
     const lib = await store.createLibrary({ workspace: 'w-fin', floor: 'tree:w-fin', name: 'Policies', createdBy: 'u-1' });
     await store.createDocument({ id: 'd-1', library: lib.id, title: 'Travel', createdBy: 'u-1' }, file('d-1', 'v-1'));
