@@ -2,7 +2,8 @@ import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sd
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FolioApi, pathFor, placeFor, type ReaderState } from './api.js';
 import app, { placeForIntent, proposeFrom, startFor } from './entry.js';
-import { places, routeOf } from './app.js';
+import { PREVIEWS, places, routeOf } from './app.js';
+import manifest from '../../manifest.json' with { type: 'json' };
 import { explainPayload } from './access.js';
 import { folderTrail, folderTree } from './places.js';
 import { DEFAULT_LEVELS } from './words.js';
@@ -534,6 +535,10 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(tile('Leave')).toBeDefined();
     const lit = [...document.querySelectorAll('.quill-tree-lit')].map((r) => r.querySelector('.quill-tree-label')!.textContent);
     expect(lit).toEqual(['Policies', 'HR']);
+  });
+
+  it('asks only for previews its manifest offers', () => {
+    expect(Object.values(PREVIEWS).every((id) => manifest.previews.some((p) => p.id === id))).toBe(true);
   });
 
   it('draws the path down to where the person is only with the lit-path preview on', async () => {
