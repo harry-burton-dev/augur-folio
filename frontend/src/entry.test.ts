@@ -1,7 +1,8 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pathFor, placeFor, type ReaderState } from './api.js';
-import app, { addressFor, placeForIntent, proposeFrom } from './entry.js';
+import { FolioApi, pathFor, placeFor, type ReaderState } from './api.js';
+import app, { placeForIntent, proposeFrom, startFor } from './entry.js';
+import { places, routeOf } from './app.js';
 import { explainPayload } from './access.js';
 import { folderTrail, folderTree } from './places.js';
 import { DEFAULT_LEVELS } from './words.js';
@@ -60,7 +61,8 @@ const service = ({
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     const raw = init?.body;
-    const body = raw instanceof Blob ? raw : raw ? JSON.parse(String(raw)) : undefined;
+    // The app client sends JSON as a Blob of type application/json; a file goes as it is.
+    const body = raw instanceof Blob ? (raw.type.startsWith('application/json') ? JSON.parse(await raw.text()) : raw) : raw ? JSON.parse(String(raw)) : undefined;
     calls.push(body ? [method, path, body] : [method, path]);
     const route = path.replace('/api/folio/v1', '');
     const [where, query = ''] = route.split('?');
@@ -277,7 +279,7 @@ const ctx = (fetch: MountContext['fetch'], path = '/libraries/l-1'): MountContex
 
 /** React renders, the fetches answer, React renders again. */
 const reactSettled = async () => {
-  for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r));
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r));
 };
 /** A Quill list's rows, as title and detail. */
 const rowsOf = (el: Element) => [...el.querySelectorAll('.quill-list-row')].map((r) => [r.querySelector('.quill-list-text b')?.textContent, r.querySelector('.quill-list-text span')?.textContent]);
@@ -287,6 +289,11 @@ const factsOf = (el: Element) => [...el.querySelectorAll('.quill-fact')].map((f)
 const reactButton = (el: Element, text: string) => [...el.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === text);
 
 afterEach(() => {
+  // Take each mount down, so nothing it started (the router, a timer) runs on after the test.
+  for (const el of [...document.body.children] as HTMLElement[]) {
+    app.surfaces['./Glance']!.unmount(el);
+    app.unmount(el);
+  }
   document.body.innerHTML = '';
   localStorage.clear();
   window.history.replaceState(null, '', '/');
@@ -305,13 +312,43 @@ describe('folio paths', () => {
     expect(placeFor('/libraries/l-1/views/vw-1')).toEqual({ library: 'l-1', view: 'vw-1', adding: false });
     expect(pathFor({ library: 'l-1', view: 'vw-1', folder: 'f-hr' })).toBe('/libraries/l-1/views/vw-1');
     expect(pathFor({ library: 'l-1', folder: 'f x' })).toBe('/libraries/l-1/f%20x');
-    expect(addressFor('/@finance/folio/libraries', '/libraries', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
-    expect(addressFor('/@finance/folio', '/', { library: 'l-1' })).toBe('/@finance/folio/libraries/l-1');
-    expect(addressFor('/elsewhere', '/libraries', {})).toBeUndefined();
+    expect(placeFor('/documents/d-9/versions/2')).toEqual({ document: 'd-9', version: 2, adding: false });
+    expect(pathFor({ document: 'd-9' })).toBe('/documents/d-9');
     expect(placeFor('/libraries/l-1/series/s-1')).toEqual({ library: 'l-1', series: 's-1', adding: false });
     expect(pathFor({ library: 'l-1', series: 's-1' })).toBe('/libraries/l-1/series/s-1');
     expect(placeFor('/published')).toEqual({ published: true, adding: false });
     expect(pathFor({ published: true })).toBe('/published');
+  });
+
+  it('has a place on the router for every address it writes', () => {
+    const wheres = [
+      { home: true },
+      {},
+      { shared: true },
+      { published: true },
+      { received: true as const },
+      { received: 'p-1' },
+      { library: 'l-1' },
+      { library: 'l-1', folder: 'f x' },
+      { library: 'l-1', view: 'vw-1' },
+      { library: 'l-1', series: 's-1' },
+      { library: 'l-1', document: 'd-1' },
+      { library: 'l-1', document: 'd-1', version: 3 },
+      { document: 'd-9' },
+      { document: 'd-9', version: 2 },
+    ];
+    for (const where of wheres) {
+      const { name, params } = routeOf(where);
+      expect((places[name].to as (p: Record<string, string>) => string)(params)).toBe(pathFor(where));
+    }
+  });
+
+  it('opens at the address an intent names', () => {
+    expect(startFor({ type: 'folio.open', payload: { path: '/libraries/new' } })).toBe('/libraries/new');
+    expect(startFor({ type: 'folio.open', payload: { path: 'https://elsewhere' } })).toBeUndefined();
+    expect(startFor({ type: 'document.open', payload: { app: 'folio', id: 'd-9', version: '2', title: 'Shared plan' } })).toBe('/documents/d-9/versions/2');
+    expect(startFor({ type: 'library.open', payload: { app: 'folio', id: 'l-2', name: 'Reports' } })).toBe('/libraries/l-2');
+    expect(startFor({ type: 'document.open', payload: { app: 'other', id: 'd-9', title: 'Theirs' } })).toBeUndefined();
   });
 
   it('starts at a document another app asked to open', () => {
@@ -447,7 +484,7 @@ describe('folio as a picker', () => {
 describe('Artifacts, new layout (PDR-010)', () => {
   /** React renders, the fetches answer, React renders again. */
   const ready = async () => {
-    for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r));
   };
   const open = async (path: string, options: Parameters<typeof service>[0] = {}) => {
     const s = service({ documents: [travel], ...options });
@@ -479,10 +516,11 @@ describe('Artifacts, new layout (PDR-010)', () => {
     await open('/libraries/l-1');
     expect(tile('HR')).toBeDefined();
     expect(tile('Travel policy')!.getAttribute('data-kind')).toBe('document');
-    expect(document.querySelector('[role="treeitem"][aria-current="page"]')!.textContent).toContain('Policies');
+    expect(document.querySelector('[role="treeitem"][aria-current="location"]')!.textContent).toContain('Policies');
     tile('Travel policy')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     await ready();
-    expect(ring()).toEqual(['Open', 'Download', 'Share', 'Publish', 'Publish up', 'Rename', 'Delete']);
+    // In the ring's order round the compass: Delete, the one danger, takes the bottom slot.
+    expect(ring()).toEqual(['Open', 'Download', 'Share', 'Publish', 'Delete', 'Publish up', 'Rename']);
     await pressRing('Rename');
     const field = document.querySelector<HTMLInputElement>('.augur-dialog input')!;
     expect(field.value).toBe('Travel policy');
@@ -496,6 +534,29 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(tile('Leave')).toBeDefined();
     const lit = [...document.querySelectorAll('.quill-tree-lit')].map((r) => r.querySelector('.quill-tree-label')!.textContent);
     expect(lit).toEqual(['Policies', 'HR']);
+  });
+
+  it('goes back where it was with Back, staying mounted', async () => {
+    await open('/libraries/l-1');
+    tile('HR')!.click();
+    await ready();
+    expect(tile('Leave')).toBeDefined();
+    window.history.back();
+    await ready();
+    expect(window.location.pathname).toBe('/@finance/folio/libraries/l-1');
+    expect(tile('HR')).toBeDefined();
+    expect(tile('Leave')).toBeUndefined();
+  });
+
+  it('opens a document another app named by its id alone, at an address of its own', async () => {
+    const s = service({ documents: [travel] });
+    const el = document.createElement('div');
+    document.body.append(el);
+    window.history.replaceState(null, '', '/@finance/folio');
+    await app.mount(el, { ...ctx(s.fetch, '/'), intent: { type: 'document.open', payload: { app: 'folio', id: 'd-9', title: 'Shared plan' } } });
+    await ready();
+    expect(window.location.pathname).toBe('/@finance/folio/documents/d-9');
+    expect(el.querySelector('.folio-reading-head h1')!.textContent).toBe('Shared plan');
   });
 
   it('adds the files picked where the person is, and says so', async () => {
@@ -729,4 +790,18 @@ describe('Artifacts, new layout (PDR-010)', () => {
     expect(calls).toContainEqual(['GET', '/api/folio/v1/libraries/l-1/moves']);
   });
 
+});
+
+describe('folio’s calls', () => {
+  it('says a refusal in the service’s own sentence, not its code', async () => {
+    const refusing = vi.fn(async () =>
+      Response.json(
+        { type: 'about:blank', title: 'Forbidden', status: 403, reason: 'forbidden', error: 'forbidden', detail: 'Only this library’s leads can archive it.', message: 'Only this library’s leads can archive it.' },
+        { status: 403, headers: { 'content-type': 'application/problem+json' } },
+      ),
+    );
+    const api = new FolioApi({ fetch: refusing });
+    await expect(api.archiveLibrary('l-1')).rejects.toThrow('Only this library’s leads can archive it.');
+    await expect(api.reader('l-1', 'd-1', 1)).rejects.toThrow('Only this library’s leads can archive it.');
+  });
 });

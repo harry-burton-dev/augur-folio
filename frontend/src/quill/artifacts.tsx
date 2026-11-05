@@ -26,7 +26,7 @@ import {
   type RingSubject,
 } from '@augur/app-kit';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag, type FloorNamed } from '../api.js';
+import { stateName, type ContentState, type Folder, type FolioApi, type FolioDocument, type HomeGlance, type Library, type LevelInfo, type OpenDocument, type OpenLibrary, type Place, pathFor, type DocumentSort, type Received, type SavedView, type ViewQuery, type RecordLink, type SeriesView, type Shared, type Tag, type FloorNamed } from '../api.js';
 import { SORTS, filtering, filtersFor, filtersFrom, folderTrail, levelsInside, queryFrom } from '../places.js';
 import { DEFAULT_LEVELS } from '../words.js';
 import { MoveDialog } from './move.js';
@@ -148,6 +148,12 @@ type Ask =
 export function Artifacts(props: ArtifactsProps) {
   const { api, userId, floorKey, floorName, floorKind, orgName, app, onPlace, front = ARTIFACTS_FRONT, depth, ringShape } = props;
   const [place, setPlace] = useState<Place>(props.place);
+  // The address moved without Artifacts (Back, Forward, or the shell): go where it says now.
+  const addressed = pathFor(props.place) + (props.place.adding ? '#adding' : '');
+  useEffect(() => {
+    setPlace((was) => (pathFor(was) === pathFor(props.place) && was.adding === props.place.adding ? was : props.place));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressed]);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [canCreate, setCanCreate] = useState(false);
   const [levels, setLevels] = useState<LevelInfo[]>(DEFAULT_LEVELS);

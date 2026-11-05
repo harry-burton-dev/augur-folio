@@ -1,4 +1,5 @@
-import type { MountContext } from '@augur/mfe-sdk';
+import { AppError, createAppClient, type AppClient, type AppFetcher } from '@augur/app-kit';
+import manifest from '../../manifest.json' with { type: 'json' };
 
 import type {
   Access,
@@ -181,48 +182,73 @@ export const listParams = (q: ListQuery) => {
   return params;
 };
 
-/** Folio's service said no; `message` is meant for people. */
-export class FolioError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code?: string,
-  ) {
-    super(message);
-  }
-}
+/** Where the gateway sends Artifacts' calls: its own service, at its manifest id. */
+export const API = `/api/${manifest.id}/v1`;
 
-/** Folio's own API, through the gateway, always for the floor the app is on. */
+/** What Artifacts is called, as its manifest names it: it is in "Artifacts isn't answering". */
+export const APP_NAME = manifest.name;
+
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
+
+/**
+ * An AppError in the service's own words. AUGUR's services put a code in a
+ * problem's `reason` (`forbidden`) and the sentence in `detail`; Quill 0.7
+ * shows `reason`, so a refusal is said with `detail` until a kit that reads it
+ * is served.
+ */
+export const inWords = (err: unknown): unknown => {
+  if (!(err instanceof AppError) || err.status < 400 || err.status >= 500) return err;
+  const said = typeof err.problem.detail === 'string' && err.problem.detail.trim() ? err.problem.detail.trim() : typeof err.problem.message === 'string' && err.problem.message.trim() ? err.problem.message.trim() : undefined;
+  return said && said !== err.message ? new AppError(said, err.status, err.problem, { cause: err }) : err;
+};
+/** The app client, called by path alone: the methods below name the path, its query and the answer's type. */
+type Call = (path: string, options?: { body?: unknown }) => Promise<unknown>;
+
+/**
+ * Folio's own API, through the gateway (`ctx.fetch`), always for the floor the
+ * app is on. Every failure is an AppError whose message people can act on.
+ */
 export class FolioApi {
-  constructor(private readonly fetchOnFloor: MountContext['fetch']) {}
+  private readonly client: AppClient;
+
+  constructor(private readonly ctx: AppFetcher) {
+    this.client = createAppClient(ctx, { base: API, appName: APP_NAME });
+  }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    return this.answer<T>(
-      await this.fetchOnFloor(`/api/folio/v1${path}`, {
-        method,
-        ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-      }),
-    );
+    const send = this.client[method.toLowerCase() as Method] as unknown as Call;
+    try {
+      return (await send(path, body === undefined ? {} : { body })) as T;
+    } catch (err) {
+      throw inWords(err);
+    }
   }
 
-  /** The answer's body, or a FolioError in words people can act on. */
-  private async answer<T>(res: Response): Promise<T> {
-    if (!res.ok) {
-      const problem = (await res.json().catch(() => ({}))) as Partial<Problem>;
-      // The gateway stops a file past the app's limit before Folio sees it, in its own words.
-      if (res.status === 413) throw new FolioError(problem.error === 'too-large' && problem.message ? problem.message : `A file can be ${MAX_UPLOAD_MB} MB at most.`, 413, 'too-large');
-      throw new FolioError(res.status >= 500 || !problem.message ? 'Artifacts isn’t answering. Try again in a moment.' : problem.message, res.status, problem.error);
+  /** Asks by the whole address, for what isn't JSON: a file, a reader copy, a picture. */
+  private async raw(path: string, init?: RequestInit): Promise<Response> {
+    let res: Response;
+    try {
+      res = await this.ctx.fetch(`${API}${path}`, init);
+    } catch (err) {
+      throw AppError.from(err, { appName: APP_NAME });
     }
-    return (res.status === 204 ? undefined : await res.json()) as T;
+    if (!res.ok) {
+      const err = inWords(await AppError.fromResponse(res, { appName: APP_NAME })) as AppError;
+      // The gateway stops a file past the app's limit before Folio sees it; say the limit when it gave no words.
+      if (res.status === 413 && err.code !== 'too-large') throw new AppError(`A file can be ${MAX_UPLOAD_MB} MB at most.`, 413, { ...err.problem, code: 'too-large' });
+      throw err;
+    }
+    return res;
   }
 
   /** Sends a file as it is, streamed, typed by its ending. */
   private async sendFile<T>(path: string, file: File, query: Record<string, string | undefined>, tags: readonly string[] = []): Promise<T> {
     const kind = fileTypeOf(file.name);
-    if (!kind) throw new FolioError('Artifacts takes PDF, Word (.docx), HTML, Markdown and plain text files.', 415, 'unsupported-type');
+    if (!kind) throw new AppError(`${APP_NAME} takes PDF, Word (.docx), HTML, Markdown and plain text files.`, 415, { code: 'unsupported-type' });
     const params = new URLSearchParams(Object.entries({ filename: file.name, ...query }).filter((e): e is [string, string] => Boolean(e[1])));
     for (const t of tags) params.append('tag', t);
-    return this.answer<T>(await this.fetchOnFloor(`/api/folio/v1${path}?${params}`, { method: 'POST', headers: { 'content-type': kind.type }, body: file }));
+    const res = await this.raw(`${path}?${params}`, { method: 'POST', headers: { 'content-type': kind.type }, body: file });
+    return (res.status === 204 ? undefined : await res.json()) as T;
   }
 
   libraries() {
@@ -506,32 +532,27 @@ export class FolioApi {
 
   /** A version's reader copy, as Markdown. */
   async reader(library: string, document: string, number: number): Promise<string> {
-    const res = await this.fetchOnFloor(`${this.versionPath(library, document, number)}/reader`);
-    if (!res.ok) await this.answer(res);
-    return res.text();
+    return (await this.raw(`${this.versionPath(library, document, number)}/reader`)).text();
   }
 
   /** A picture a version's reader copy shows, by its name there (`1.png`). */
   async readerImage(library: string, document: string, number: number, name: string): Promise<Blob> {
-    const res = await this.fetchOnFloor(`${this.versionPath(library, document, number)}/reader/images/${encodeURIComponent(name)}`);
-    if (!res.ok) await this.answer(res);
-    return res.blob();
+    return (await this.raw(`${this.versionPath(library, document, number)}/reader/images/${encodeURIComponent(name)}`)).blob();
   }
 
   private versionPath(library: string, document: string, number: number) {
-    return `/api/folio/v1/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}`;
+    return `/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}`;
   }
 
   /** A version's file exactly as it was uploaded. Each download goes in the audit log. */
   async original(library: string, document: string, number: number): Promise<Blob> {
-    const res = await this.fetchOnFloor(`/api/folio/v1/libraries/${encodeURIComponent(library)}/documents/${encodeURIComponent(document)}/versions/${number}/original`);
-    if (!res.ok) await this.answer(res);
-    return res.blob();
+    return (await this.raw(`${this.versionPath(library, document, number)}/original`)).blob();
   }
 }
 
 /**
- * Where a path inside Folio points: `/libraries`, `/libraries/new`, `/libraries/<id>`,
+ * Where a path inside Folio points: `/libraries`, `/libraries/new`, `/libraries/<id>`, a document
+ * by its id alone (`/documents/<id>`, as another app opens one),
  * `/libraries/<id>/<folder>`, a saved view, `/libraries/<id>/views/<view>`, or a
  * series, `/libraries/<id>/series/<series>`.
  */
@@ -562,6 +583,10 @@ export const placeFor = (path: string): Place => {
   if (first === 'published') return { published: true, adding: false };
   if (first === 'shared') return { shared: true, adding: false };
   if (first === 'received') return { received: second || true, adding: false };
+  if (first === 'documents' && second) {
+    const version = third === 'versions' && /^[1-9]\d*$/.test(fourth ?? '') ? Number(fourth) : undefined;
+    return { document: second, ...(version ? { version } : {}), adding: false };
+  }
   if (!first) return { home: true, adding: false };
   if (first === 'libraries' && !second) return { collections: true, adding: false };
   if (first !== 'libraries' || !second) return { adding: false };
@@ -580,6 +605,8 @@ export const pathFor = ({ library, folder, view, series, document, version, publ
   if (published && !document) return '/published';
   if (shared && !document) return '/shared';
   if (received && !document) return received === true ? '/received' : `/received/${encodeURIComponent(received)}`;
+  // A document another app named by its id alone: Artifacts finds its library.
+  if (document && !library) return `/documents/${encodeURIComponent(document)}${version ? `/versions/${version}` : ''}`;
   if (!library) return '/libraries';
   const at = `/libraries/${encodeURIComponent(library)}`;
   if (document) return `${at}/documents/${encodeURIComponent(document)}${version ? `/versions/${version}` : ''}`;

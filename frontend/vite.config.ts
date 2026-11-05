@@ -10,7 +10,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    lib: { entry: 'src/entry.ts', formats: ['es'], fileName: () => 'entry.js' },
+    lib: { entry: 'src/entry.tsx', formats: ['es'], fileName: () => 'entry.js' },
     target: 'es2022',
     rollupOptions: { external: isSharedModule },
   },
