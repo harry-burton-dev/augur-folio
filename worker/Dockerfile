@@ -2,6 +2,7 @@
 #   docker build -f worker/Dockerfile -t folio-worker .
 FROM python:3.12-slim-bookworm
 LABEL org.opencontainers.image.source="https://github.com/harry-burton-dev/augur-folio"
+LABEL org.opencontainers.image.licenses="LicenseRef-AUGUR-Proprietary"
 
 # Docling's PDF pipeline draws pages with these.
 RUN apt-get update \
@@ -11,10 +12,14 @@ RUN apt-get update \
 RUN useradd --create-home --uid 1000 folio
 WORKDIR /app
 
+# Every package from worker/requirements.lock, checked against its hashes, with Torch's CPU-only build from
+# its own index, which the lock names (the CUDA one is gigabytes the worker never uses). Then the worker
+# itself, with nothing more resolved (worker/lock.sh).
+COPY worker/requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY worker/pyproject.toml ./
 COPY worker/folio_worker ./folio_worker
-# Torch's CPU-only build: the CUDA one is gigabytes the worker never uses.
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu .
+RUN pip install --no-cache-dir --no-deps .
 
 USER folio
 # Docling's models go in the image, so the worker never fetches anything from outside at run time.

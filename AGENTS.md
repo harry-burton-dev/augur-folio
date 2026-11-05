@@ -2,11 +2,11 @@
 
 Artifacts is an AUGUR pillar app: the documents kept for you, your teams and the org. It lives in its own repository and is
 built only against AUGUR's published packages (`@augur/*`, aliased from `@harry-burton-dev/augur-*` on
-GitHub Packages). AUGUR itself, its ADRs and its guides are in the `im-platform` repository; read its
+GitHub Packages). AUGUR itself, its ADRs and its guides are in the `augur` repository; read its
 AGENTS.md and the ADRs there before changing how this app reaches the platform.
 
 ## Where to look
-- AUGUR's ADRs (`im-platform` docs/decisions), especially 0012 (apps in their own repositories), 0015
+- AUGUR's ADRs (`augur` docs/decisions), especially 0012 (apps in their own repositories), 0015
   (React, Quill, Tailwind) and 0047 (how this repository releases).
 - This app's own decisions: `docs/decisions/` here.
 - The task: its Linear issue (team PER, initiative AUGUR).

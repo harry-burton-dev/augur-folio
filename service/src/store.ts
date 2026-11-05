@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { steadyPool } from '@augur/service-kit';
 import { CONTAINER_LIFECYCLE, CONTENT_LIFECYCLE, furthest, levelFrom, reaches, type ContainerState, type ContentState, type Level, type LevelName } from '@augur/records';
 import { nextIssue, type Cadence, type IssuePlace } from './cadence.ts';
 import { UNIT_LEVELS, nextLevel, type FolderLevel, type UnitLevel } from './units.ts';
@@ -2115,7 +2116,7 @@ export class PgFolioStore implements FolioStore {
   }
 
   static async connect(connectionString: string) {
-    const store = new PgFolioStore(new pg.Pool({ connectionString }));
+    const store = new PgFolioStore(steadyPool(new pg.Pool({ connectionString })));
     await store.migrate();
     return store;
   }
@@ -3314,7 +3315,7 @@ export class PgFolioStore implements FolioStore {
 
   /** A connection pool whose search path is Folio's schema, for the outbox relay, which names its table plainly. */
   static outboxPool(connectionString: string) {
-    return new pg.Pool({ connectionString, max: 2, options: '-c search_path=folio' });
+    return steadyPool(new pg.Pool({ connectionString, max: 2, options: '-c search_path=folio' }));
   }
 }
 

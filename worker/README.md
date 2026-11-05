@@ -8,6 +8,7 @@ Makes each version's renditions after it is uploaded: a reader copy in Markdown 
 | `folio_worker/worker.py` | The `renditions` workflow and its steps, run by [DBOS](https://docs.dbos.dev/python/programming-guide) |
 | `folio_worker/rows.py` | What each step records in `folio.renditions` |
 | `Dockerfile` | Its image, with Docling's models inside so it fetches nothing at run time |
+| `requirements.lock` | Every package it installs, Torch and Transformers included, at an exact version with hashes: the image and CI install from it, and OSV-Scanner reads it. After changing `pyproject.toml`, run `worker/lock.sh` (needs download.pytorch.org) or Actions → Lockfile |
 
 ## How it works
 
@@ -25,7 +26,7 @@ The worker's DBOS application version is `augur-jobs-1` (`JOBS_VERSION` in `work
 
 ## Settings
 
-The same as Folio's service, so both read one set of storage settings ([App storage](https://github.com/harry-burton-dev/im-platform/blob/main/docs/app-storage.md)).
+The same as Folio's service, so both read one set of storage settings ([App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md)).
 
 | Variable | What it is |
 | --- | --- |
@@ -39,7 +40,7 @@ The same as Folio's service, so both read one set of storage settings ([App stor
 
 ```sh
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[test]"
+pip install --require-hashes -r requirements.lock && pip install --no-deps -e ".[test]" && pip install pytest
 pytest                                    # without Postgres, the workflow's tests skip
 DATABASE_URL=postgres://… pnpm --filter @apps/folio migrate && DATABASE_URL=postgres://… pytest
 RUN_PDF_TESTS=1 pytest                    # PDFs need Docling's models, fetched the first time

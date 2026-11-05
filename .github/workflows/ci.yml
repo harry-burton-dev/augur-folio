@@ -101,13 +101,43 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: worker/pyproject.toml
-      # Torch's CPU-only build, as the image has it.
-      - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -e "worker[test]"
+          cache-dependency-path: worker/requirements.lock
+      # The lock holds pyproject.toml's pins; then exactly what the image installs (Torch's CPU-only build).
+      - run: worker/lock.sh check
+      - run: |
+          pip install --require-hashes -r worker/requirements.lock
+          pip install --no-deps -e worker
+          pip install "$(python3 -c 'import tomllib; print(tomllib.load(open("worker/pyproject.toml","rb"))["project"]["optional-dependencies"]["test"][0])')"
+      # Known vulnerabilities in the worker's packages, listed in the summary. Only ones this change brings
+      # in fail it; the base branch's are for the next dependency update.
+      - name: No new Python packages with known vulnerabilities (OSV-Scanner)
+        run: |
+          ids() { jq -r '[.results[]?.packages[]? | .package as $p | .vulnerabilities[]? | "\($p.name)@\($p.version) \(.id)"] | unique | .[]'; }
+          osv() { docker run --rm -v "$1:/src:ro" -w /src ghcr.io/google/osv-scanner:v2.0.2 scan source -L requirements.txt:requirements.lock --format json 2>/dev/null || true; }
+          mkdir -p "$RUNNER_TEMP/base"
+          osv "$PWD/worker" > "$RUNNER_TEMP/now.json"
+          jq -e '.results' "$RUNNER_TEMP/now.json" > /dev/null
+          ids < "$RUNNER_TEMP/now.json" > "$RUNNER_TEMP/now.txt"
+          { echo "### Known vulnerabilities in the worker's packages: $(wc -l < "$RUNNER_TEMP/now.txt")"; sed 's/^/- /' "$RUNNER_TEMP/now.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          # Only a pull request has a base to compare with; on a push the summary is the record.
+          [ -n "$BASE_REF" ] || exit 0
+          git fetch -q --depth=1 origin "$BASE_REF"
+          if ! git show "origin/$BASE_REF:worker/requirements.lock" > "$RUNNER_TEMP/base/requirements.lock" 2>/dev/null; then
+            echo "$BASE_REF has no lock yet: nothing to compare with."
+            exit 0
+          fi
+          osv "$RUNNER_TEMP/base" > "$RUNNER_TEMP/before.json"
+          jq -e '.results' "$RUNNER_TEMP/before.json" > /dev/null
+          ids < "$RUNNER_TEMP/before.json" > "$RUNNER_TEMP/before.txt"
+          new=$(comm -23 <(sort "$RUNNER_TEMP/now.txt") <(sort "$RUNNER_TEMP/before.txt"))
+          if [ -n "$new" ]; then echo "This change brings in:"; echo "$new"; exit 1; fi
+          echo "Nothing new: $(wc -l < "$RUNNER_TEMP/now.txt") known, all already on the base branch."
+        env:
+          BASE_REF: ${{ github.base_ref }}
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: docling-models-${{ hashFiles('worker/pyproject.toml') }}
+          key: docling-models-${{ hashFiles('worker/requirements.lock') }}
       # The worker works on the tables the service makes.
       - run: pnpm --filter @apps/folio migrate
       - run: python -m pytest worker -v
