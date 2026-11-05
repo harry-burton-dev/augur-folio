@@ -1360,6 +1360,13 @@ export class MemoryFolioStore implements FolioStore {
     return { documents: drafts.slice(0, limit).map((d) => ({ ...d, libraryName: this.shelves.get(d.library)!.name })), total: drafts.length };
   }
 
+  /** The newest version that a step published up to one of `principals`' floors lets through, as reachedVersion works it out. */
+  private placedFor<V extends { number: number; state: ContentState }>(d: { id: string; library: string; folder?: string }, principals: readonly string[], versions: readonly V[]) {
+    const around = new Set([d.id, d.library, ...folderPath(this.folderList, d.folder).map((f) => f.id)]);
+    const states = new Set(this.placementList.filter((p) => !p.ended && around.has(p.record.id) && principals.includes(p.toPrincipal)).flatMap((p) => p.filter));
+    return states.size ? versions.filter((v) => states.has(v.state)).reduce<V | undefined>((a, b) => (!a || b.number > a.number ? b : a), undefined) : undefined;
+  }
+
   async search(principals: readonly string[], q: string, limit = 10) {
     const words = searchWords(q);
     if (!words.length) return [];
@@ -1372,10 +1379,12 @@ export class MemoryFolioStore implements FolioStore {
       const reader = this.readersOf(d.library, d.id).some((p) => principals.includes(p));
       const [last] = this.publicationsOf(d.id);
       const live = last && !last.ended && last.audience.some((a) => principals.includes(a)) ? last : undefined;
-      if (!reader && !live) continue;
-      // Its readers search its newest version; its audience only the version published to them.
       const versions = this.versionList.filter((v) => v.document === d.id);
-      const version = reader ? versions.reduce((a, b) => (b.number > a.number ? b : a)) : versions.find((v) => v.number === live!.version);
+      // Or a floor of theirs it was published up to: the newest version that floor's steps let through.
+      const placed = reader || live ? undefined : this.placedFor(d, principals, versions);
+      if (!reader && !live && !placed) continue;
+      // Its readers search its newest version; its audience only the version published to them.
+      const version = reader ? versions.reduce((a, b) => (b.number > a.number ? b : a)) : live ? versions.find((v) => v.number === live.version) : placed;
       const text = version && this.renditions.get(version.id)?.text;
       const tags = [...(this.docTags.get(d.id) ?? [])].map((id) => this.tagList.find((t) => t.id === id)?.name).join(' ');
       let score = 0;
@@ -3310,19 +3319,28 @@ export class PgFolioStore implements FolioStore {
   async search(principals: readonly string[], q: string, limit = 10) {
     const words = searchWords(q);
     if (!words.length) return [];
-    // Its readers search its newest version (v); its audience only the version published to them.
+    // Its readers search its newest version (v); its audience only the version published to them; a floor it
+    // was published up to, the newest version that floor's steps let through (up), as reachedVersion does.
     const { rows } = await this.pool.query<DocumentRow & { library_name: string; audience_only: boolean }>(
       `${DOCUMENT_SELECT.replace('count(*) over () as total', 'count(*) over () as total, l.name as library_name, rd.document_id is null as audience_only')}
         join folio.libraries l on l.id = d.library_id and l.archived_at is null
         cross join (select to_tsquery('english', $2) as q) s
         left join folio.readers rd on rd.document_id = d.id and rd.principals && $1::text[]
         left join folio.publications live on live.document_id = d.id and live.ended_at is null and live.audience && $1::text[]
-        left join folio.renditions rt on rt.version_id = case when rd.document_id is not null then v.id else live.version_id end
+        left join lateral (
+          select pv.id from folio.document_versions pv
+          where rd.document_id is null and live.id is null and pv.document_id = d.id and pv.state = any(array(
+            select unnest(p.filter) from folio.placements p
+            where p.ended_at is null and p.to_principal = any($1::text[])
+              and (p.record_id = d.id or p.record_id = d.library_id or p.record_id in (${FOLDERS_ABOVE('d.folder_id')}))))
+          order by pv.number desc limit 1
+        ) up on true
+        left join folio.renditions rt on rt.version_id = case when rd.document_id is not null then v.id when live.id is not null then live.version_id else up.id end
         cross join lateral (
           select to_tsvector('english', coalesce(string_agg(t.name, ' '), '')) as words
           from folio.document_tags dt join folio.tags t on t.id = dt.tag_id where dt.document_id = d.id
         ) tg
-        where d.deleted_at is null and (rd.document_id is not null or live.id is not null)
+        where d.deleted_at is null and (rd.document_id is not null or live.id is not null or up.id is not null)
           and (d.title_words || tg.words || coalesce(rt.words, ''::tsvector)) @@ s.q
         order by ts_rank(d.title_words, s.q) * 4 + ts_rank(tg.words, s.q) * 2 + coalesce(ts_rank(rt.words, s.q), 0) desc, d.updated_at desc, d.id
         limit $3`,
