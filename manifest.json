@@ -61,6 +61,13 @@
       "default": 30
     }
   ],
+  "previews": [
+    {
+      "id": "lit-path",
+      "name": "The lit path",
+      "detail": "As you open a library or folder, the path in the side rail draws itself down to where you are."
+    }
+  ],
   "orbit": false,
   "menu": [
     {
