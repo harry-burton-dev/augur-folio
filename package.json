@@ -18,7 +18,7 @@
     "release-out": "pnpm --filter ./service deploy --prod --legacy out && cp -r frontend/dist out/frontend"
   },
   "devDependencies": {
-    "@augur/app-tools": "npm:@harry-burton-dev/augur-app-tools@^0.4.0",
+    "@augur/app-tools": "npm:@harry-burton-dev/augur-app-tools@^0.4.1",
     "@changesets/cli": "^2.31.1",
     "@eslint/js": "^10.0.1",
     "eslint": "^10.14.0",

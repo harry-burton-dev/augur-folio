@@ -4,10 +4,16 @@
   "route": "/folio",
   "entry": "/apps/folio/entry.js",
   "version": "0.8.0",
-  "sdk": "^2.0.0",
+  "sdk": "^2.1.0",
   "description": "Documents kept for you, your teams and the org",
   "icon": "library",
   "category": "pillar",
+  "links": {
+    "entities": true
+  },
+  "bindings": [
+    "record"
+  ],
   "floors": [
     "personal",
     "team",
