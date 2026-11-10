@@ -424,6 +424,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     const floor = await store.floorRow(document.workspace);
     const closed = closedAbove(access, document.folder);
     return {
+      floor: { id: document.workspace, kind: floor?.kind ?? 'team' },
       document: documentView(document, names),
       path: stepsOf(pathTo(access.folders, document.folder)),
       versions: versions.map((v) => versionView(v, names)),

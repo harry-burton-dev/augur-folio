@@ -137,6 +137,8 @@ export interface DocumentPage {
 
 /** `GET /v1/documents/:id`: everything About shows. */
 export interface DocumentAnswer {
+  /** The floor it is kept on, which is another floor's when it was shared with the caller. */
+  floor: { id: string; kind: FloorKind };
   document: DocumentView;
   path: PathStep[];
   versions: VersionView[];
