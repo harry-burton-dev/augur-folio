@@ -15,7 +15,7 @@
       "augur.dev/route": "/folio",
       "augur.dev/contract": "3",
       "augur.dev/floors": "personal,team,org",
-      "augur.dev/scopes": "audit:write,events:publish,people:read,notifications:send,inbox:write,knowledge:read,knowledge:extract"
+      "augur.dev/scopes": "audit:write,events:publish,people:read,notifications:send,inbox:write"
     }
   },
   "spec": {
@@ -74,7 +74,6 @@
     "system": "folio",
     "consumesApis": [
       "api:default/events-api",
-      "api:default/knowledge-api",
       "api:default/registry-api"
     ],
     "dependsOn": []

@@ -10,7 +10,7 @@
   "frontend": { "entry": "sandbox.js" },
   "api": { "openapi": "openapi.json" },
   "maxUpload": 200,
-  "scopes": ["audit:write", "events:publish", "people:read", "notifications:send", "inbox:write", "knowledge:read", "knowledge:extract"],
+  "scopes": ["audit:write", "events:publish", "people:read", "notifications:send", "inbox:write"],
   "contributes": {
     "places": [
       { "id": "home", "label": "Home", "icon": "home", "detail": "What needs you, and what’s new", "path": "/" },
