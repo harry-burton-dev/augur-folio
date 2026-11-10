@@ -10,7 +10,7 @@
       "github.com/project-slug": "harry-burton-dev/augur-folio",
       "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/",
       "augur.dev/release-unit": "app/folio",
-      "augur.dev/version": "0.8.0",
+      "augur.dev/version": "0.9.0",
       "augur.dev/app-id": "folio",
       "augur.dev/route": "/folio",
       "augur.dev/contract": "3",
@@ -35,7 +35,7 @@
       "github.com/project-slug": "harry-burton-dev/augur-folio",
       "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/frontend/",
       "augur.dev/package": "@apps/folio-frontend",
-      "augur.dev/version": "0.8.0",
+      "augur.dev/version": "0.9.0",
       "augur.dev/release-unit": "app/folio",
       "augur.dev/app-id": "folio"
     }
@@ -62,7 +62,7 @@
       "github.com/project-slug": "harry-burton-dev/augur-folio",
       "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/service/",
       "augur.dev/package": "@apps/folio",
-      "augur.dev/version": "0.8.0",
+      "augur.dev/version": "0.9.0",
       "augur.dev/release-unit": "app/folio",
       "augur.dev/app-id": "folio"
     }
