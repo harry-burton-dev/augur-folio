@@ -19,6 +19,15 @@ containers:
       PORT: "8080"
       GATEWAY_URL: ${resources.gateway.url}
       CALLER_KEYS_URL: ${resources.gateway.caller_keys_url}
+      # The app signs in as itself to put reviews in the Inbox, look people up and write to the audit log,
+      # all through the gateway (service/src/platform.ts).
+      GATEWAY_TOKEN_URL: ${resources.gateway.token_url}
+      SERVICE_CLIENT_SECRET_FILE: /run/augur/client-secret
+      S3_ENDPOINT: ${resources.bucket.endpoint}
+      S3_REGION: ${resources.bucket.region}
+      S3_BUCKET: ${resources.bucket.bucket}
+      S3_ACCESS_KEY_ID: ${resources.bucket.access_key_id}
+      S3_SECRET_ACCESS_KEY_FILE: /run/augur/bucket-secret
       DATABASE_HOST: ${resources.db.host}
       DATABASE_PORT: ${resources.db.port}
       DATABASE_NAME: ${resources.db.name}
@@ -32,6 +41,12 @@ containers:
       /run/augur/database-password:
         mode: "0400"
         content: ${resources.db.password}
+      /run/augur/client-secret:
+        mode: "0400"
+        content: ${resources.gateway.client_secret}
+      /run/augur/bucket-secret:
+        mode: "0400"
+        content: ${resources.bucket.secret_access_key}
     volumes:
       /scratch:
         source: ${resources.scratch}
@@ -51,6 +66,8 @@ resources:
     type: augur-gateway
     params:
       inbound: true
+  bucket:
+    type: augur-bucket
   db:
     type: augur-database
     params:

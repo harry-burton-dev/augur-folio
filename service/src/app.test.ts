@@ -56,11 +56,11 @@ describe('the service', () => {
     expect(forged.statusCode).toBe(401);
   });
 
-  it('answers Home for the floor the gateway signed, with nothing on it yet', async () => {
+  it('says it can’t keep documents when it has no database, rather than showing an empty floor', async () => {
     const { app, gateway } = await behindGateway();
     const res = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/v1/home', headers: await delegated(gateway) });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ floor: { id: 'ws-team', kind: 'team' }, needsYou: [], latest: [] });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ reason: 'unavailable', whoCanChange: expect.any(String) });
   });
 
   it('refuses a caller signed for another service', async () => {

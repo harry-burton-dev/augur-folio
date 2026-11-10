@@ -14,6 +14,20 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # The store's tests run on Postgres, the image deployments use; it starts with the job, so it costs seconds.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: folio
+          POSTGRES_PASSWORD: folio-ci-only
+          POSTGRES_DB: folio
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U folio"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
       - name: Package token
@@ -47,4 +61,6 @@ jobs:
       - run: pnpm check:app
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          DATABASE_URL: postgres://folio:folio-ci-only@localhost:5432/folio
       - run: pnpm build
