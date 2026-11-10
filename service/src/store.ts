@@ -162,6 +162,19 @@ export interface PlacementRecord {
 
 export class PlacedError extends Error {}
 
+/** A link from a document to another record, here or in another app. */
+export interface LinkRecord {
+  id: string;
+  workspace: string;
+  from: string;
+  relation: string;
+  to: { app: string; kind: string; id: string; label?: string };
+  by: string;
+  at: string;
+}
+
+export class LinkedError extends Error {}
+
 export class NameTakenError extends Error {}
 export class NotEmptyError extends Error {}
 export class GoneError extends Error {}
@@ -716,6 +729,46 @@ export class Store {
     return rowCount === 1;
   }
 
+  // Links and follows
+
+  async link(input: Omit<LinkRecord, 'id' | 'at'>): Promise<LinkRecord> {
+    const id = newId('l');
+    try {
+      const { rows } = await this.pool.query(
+        'insert into links (id, workspace_id, from_document, relation, to_app, to_kind, to_id, to_label, linked_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *',
+        [id, input.workspace, input.from, input.relation, input.to.app, input.to.kind, input.to.id, input.to.label ?? null, input.by],
+      );
+      return linkOf(rows[0]!);
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new LinkedError('It’s already linked that way.');
+      throw err;
+    }
+  }
+
+  /** A document's links, and the links to it from other documents in this app. */
+  async links(document: string, app: string): Promise<{ from: LinkRecord[]; to: LinkRecord[] }> {
+    const [from, to] = await Promise.all([
+      this.pool.query('select * from links where from_document = $1 order by linked_at', [document]),
+      this.pool.query('select * from links where to_app = $1 and to_id = $2 order by linked_at', [app, document]),
+    ]);
+    return { from: from.rows.map(linkOf), to: to.rows.map(linkOf) };
+  }
+
+  async unlink(document: string, id: string) {
+    const { rowCount } = await this.pool.query('delete from links where id = $1 and from_document = $2', [id, document]);
+    return rowCount === 1;
+  }
+
+  async follow(folder: string, person: string, on: boolean) {
+    if (on) await this.pool.query('insert into follows (folder_id, person) values ($1, $2) on conflict do nothing', [folder, person]);
+    else await this.pool.query('delete from follows where folder_id = $1 and person = $2', [folder, person]);
+  }
+
+  async followers(folder: string): Promise<string[]> {
+    const { rows } = await this.pool.query('select person from follows where folder_id = $1 order by followed_at', [folder]);
+    return rows.map((r) => r.person as string);
+  }
+
   // Publishing up
 
   async place(input: Omit<PlacementRecord, 'id' | 'at' | 'ended'>): Promise<PlacementRecord> {
@@ -806,4 +859,14 @@ const placementOf = (r: DatabaseRow): PlacementRecord => ({
   by: r.placed_by as string,
   at: iso(r.placed_at),
   ...(r.ended_at ? { ended: { at: iso(r.ended_at), by: r.ended_by as string, ...(r.ended_reason ? { reason: r.ended_reason as string } : {}) } } : {}),
+});
+
+const linkOf = (r: DatabaseRow): LinkRecord => ({
+  id: r.id as string,
+  workspace: r.workspace_id as string,
+  from: r.from_document as string,
+  relation: r.relation as string,
+  to: { app: r.to_app as string, kind: r.to_kind as string, id: r.to_id as string, ...(r.to_label ? { label: r.to_label as string } : {}) },
+  by: r.linked_by as string,
+  at: iso(r.linked_at),
 });

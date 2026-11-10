@@ -28,6 +28,9 @@ const ROUTES: Record<string, Record<string, string>> = {
   '/placements/{id}/landing': { put: 'Where it sits on the floor it went to, by that floor’s leads; no folder puts it back under From below' },
   '/placements/{id}/withdraw': { post: 'Take it back, and every step that went on up through it' },
   '/received': { get: 'From below: what floors below published up to this one, each in one place (ReceivedAnswer)' },
+  '/documents/{id}/links': { get: 'Its links, the links back to it, and the kinds of link (LinksAnswer)', post: 'Link it to another document: relates to, supersedes, responds to' },
+  '/documents/{id}/links/{link}': { delete: 'Take a link off' },
+  '/folders/{id}/follow': { put: 'Follow a series, or stop: followers are told of each new issue' },
   '/received/{id}': { get: 'Inside a folder published up here, at the states it shows (ReceivedFolderAnswer)' },
 };
 

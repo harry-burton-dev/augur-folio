@@ -49,6 +49,7 @@ import type {
 import { homeSchema } from './api-types.ts';
 import type { ObjectStore } from './objects.ts';
 import type { Inbox } from './platform.ts';
+import { linking } from './links.ts';
 import { placing } from './placements.ts';
 import { GoneError, NameTakenError, newId, NotEmptyError, objectKeyFor, searchWords, type DocumentRecord, type FolderRecord, type Store, type VersionRecord } from './store.ts';
 
@@ -186,6 +187,9 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     return { document, access, level: 'read' as Level, reached };
   };
 
+  const links = linking({ app: manifest.id, store, notify, recorded, log: app.log, callerOf, readDocument, readFolder });
+  await links.routes(app);
+
   /** A version of a document, when the caller may open that one. */
   const versionIn = async (read: Awaited<ReturnType<typeof readDocument>>, number: number) => {
     if (read.reached && read.reached.version !== number) throw notFound('version');
@@ -280,6 +284,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     const floor = await store.floorRow(folder.workspace);
     const closed = closedAbove(access, folder.id);
     const placed = await place.signpostFor(caller, access, { id: folder.id, ...(folder.parent ? { folder: folder.parent } : {}) });
+    const follow = await links.followOf(caller, folder);
     return {
       folder: folderView(folder),
       path: stepsOf(pathTo(access.folders, folder.id)),
@@ -288,6 +293,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
       holds: holdsOf(folder.level),
       received: folder.workspace === caller.workspace.id ? await place.receivedIn(caller, folder.id) : [],
       ...(placed ? { placed } : {}),
+      ...(follow ? { follow } : {}),
     };
   });
 
@@ -617,7 +623,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     },
     async (req) => {
       const caller = await callerOf(req);
-      const { document, level } = await readDocument(caller, req.params.id);
+      const { document, access, level } = await readDocument(caller, req.params.id);
       const version = await store.version(document.id, req.params.number);
       if (!version) throw notFound('version');
       try {
@@ -628,6 +634,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
       const moved = await store.moveVersion(document, version, req.body.to, caller.id, req.body.note).catch(refused);
       if (req.body.to === 'in-review') await openReview(moved, version, caller);
       else if (version.state === 'in-review') await closeReview(moved, version, req.body.to === 'in-progress' ? 'withdrawn' : 'done', `Moved to ${CONTENT_LIFECYCLE.get(req.body.to).name} by ${caller.name}.`);
+      if (req.body.to === 'issued') void links.issued(caller, access, moved, version);
       if (req.body.to === 'issued' || req.body.to === 'retired')
         void recorded({ actor: caller.id, action: `document.${req.body.to}`, target: document.id, workspace: document.workspace, detail: { version: version.number, from: version.state } });
       return documentView(moved, await store.names([moved.latest.createdBy]));

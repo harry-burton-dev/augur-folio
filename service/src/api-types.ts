@@ -133,6 +133,8 @@ export interface FolderAnswer {
   received: ReceivedItem[];
   /** Where the caller's one place for this folder is, when that is a floor above. */
   placed?: Signpost;
+  /** For a series: whether the caller follows it, and how many do. */
+  follow?: { following: boolean; followers: number };
 }
 
 /** `GET /v1/folders/:id/documents`: a page of what's in it. */
@@ -260,6 +262,47 @@ export interface ReceivedFolderAnswer {
   folders: FolderView[];
   documents: (DocumentView & { version: VersionView })[];
   states: ContentState[];
+}
+
+/** A kind of link, read from the document it starts at and back from the other end, and whether it can be made here. */
+export interface LinkKind {
+  id: string;
+  name: string;
+  inverse: string;
+  available: boolean;
+  why?: string;
+}
+
+/** The other end of a link: a document here, or a thing another app keeps. */
+export interface LinkEnd {
+  app: string;
+  kind: string;
+  id: string;
+  label: string;
+  /** Why the caller can't open it, when they can't. It stays listed. */
+  unavailable?: string;
+}
+
+export interface LinkView {
+  id: string;
+  relation: string;
+  /** The link in words, read from this document: "Supersedes", or back, "Superseded by". */
+  words: string;
+  /** Where it goes: for a link from this document. */
+  to?: LinkEnd;
+  /** Where it comes from: for a link back to it. */
+  from?: LinkEnd;
+  by: string;
+  byName?: string;
+  at: string;
+}
+
+/** `GET /v1/documents/:id/links`: its links, the links back to it, and whether the caller may change them. */
+export interface LinksAnswer {
+  kinds: LinkKind[];
+  links: LinkView[];
+  back: LinkView[];
+  can: { change: boolean; why?: string };
 }
 
 export interface TagView {

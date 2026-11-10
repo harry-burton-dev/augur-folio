@@ -192,6 +192,21 @@ const theLibrary = (over: Record<string, () => Response> = {}): Service => (meth
       return Response.json(received({ here: [], places: [] }));
     case 'PUT /placements/p-1/landing':
       return Response.json(placement({ landed: { folder: 'f-ops-proc', name: 'Procedures' } }));
+    case 'GET /documents/d-berth/links':
+      return Response.json({
+        kinds: [
+          { id: 'relates-to', name: 'Relates to', inverse: 'Relates to', available: true },
+          { id: 'supersedes', name: 'Supersedes', inverse: 'Superseded by', available: true },
+          { id: 'about', name: 'About', inverse: 'Written about in', available: false, why: 'Saying what a document is about comes in the next version of Artifacts.' },
+        ],
+        links: [],
+        back: [{ id: 'l-1', relation: 'supersedes', words: 'Superseded by', from: { app: 'folio', kind: 'document', id: 'd-new', label: 'Berth procedure 2027' }, by: 'u-tomas', at: '2026-11-04T10:00:00Z' }],
+        can: { change: true },
+      });
+    case 'GET /search':
+      return Response.json({ results: [{ id: 'd-old', title: 'Berth procedure 2025', detail: 'Procedures › Berths · Retired' }] });
+    case 'POST /documents/d-berth/links':
+      return Response.json({ id: 'l-2' }, { status: 201 });
     case 'GET /shared':
       return Response.json({ items: [{ kind: 'document', id: 'd-tide', title: 'Tide tables', floor: 'w-finance', level: 'read', path: '/documents/d-tide' }] });
   }
@@ -337,6 +352,27 @@ describe('Artifacts', () => {
     expect(shell.notified.at(-1)?.title).toBe('“Berth procedure” is in Procedures now.');
     fire(find(shell.screen, 'quill-list')[0], 'onOpen', 'p-1');
     expect(shell.navigated.at(-1)).toBe('/documents/d-berth');
+  });
+
+  it('links a document to another found by title, and shows the links back to it', async () => {
+    const { ctx, shell } = fakeShell(theLibrary(), { path: '/documents/d-berth' });
+    await start(ctx);
+    await settle();
+    expect(text(shell.about.get('links'))).toContain('Superseded by Berth procedure 2027');
+    expect(text(shell.about.get('links'))).toContain('About: Saying what a document is about');
+    await shell.commands.get('document.link')!();
+    await settle();
+    let dialog = find(shell.screen, 'quill-dialog')[0]!;
+    expect(find(dialog, 'quill-choice')[0]!.props!.options).toContainEqual(expect.objectContaining({ value: 'about', disabled: true }));
+    fire(find(dialog, 'quill-choice')[0], 'onChange', 'supersedes');
+    fire(find(dialog, 'quill-text-field')[0], 'onCommit', '2025');
+    await settle();
+    dialog = find(shell.screen, 'quill-dialog')[0]!;
+    fire(find(dialog, 'quill-choice')[1], 'onChange', 'd-old');
+    fire(dialog, 'onSubmit', {});
+    await settle();
+    expect(shell.calls).toContain(`POST /api/${manifest.id}/v1/documents/d-berth/links`);
+    expect(shell.notified.at(-1)?.title).toBe('Linked “Berth procedure”.');
   });
 
   it('shows a signpost on the floor below where its one place is higher up', async () => {

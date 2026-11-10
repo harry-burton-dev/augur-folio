@@ -1,6 +1,6 @@
 import { CONTENT_LIFECYCLE } from '@augur/records';
 import type { Workspace, RemoteNode } from '@augur/mfe-sdk/sdk3';
-import type { DocumentAnswer, GrantView, MoveView, PlacementsAnswer, ReaderAnswer, VersionView } from '../../service/src/api-types.js';
+import type { DocumentAnswer, GrantView, LinksAnswer, LinkView, MoveView, PlacementsAnswer, ReaderAnswer, VersionView } from '../../service/src/api-types.js';
 import { floorName, signpostNotice, statesLine, trailOf, type Load } from './library.js';
 import { quill } from './screen.js';
 
@@ -18,6 +18,8 @@ export interface DocumentData {
   grants: GrantView[];
   /** Its steps up the floors; undefined when they couldn't be asked. */
   placements?: PlacementsAnswer;
+  /** Its links both ways; undefined when they couldn't be asked. */
+  links?: LinksAnswer;
 }
 
 /** The version a person sees first: a reader gets the newest Issued one, when there is one; anyone who can change it, the newest. */
@@ -180,5 +182,39 @@ export const floorsAbout = (data: DocumentData, floor: Workspace, publish: () =>
   ];
 };
 
-/** About, Links: none yet; they come with publishing up. */
-export const linksAbout = (): RemoteNode => quill('quill-state', { kind: 'empty', heading: 'Links to other documents and to what it’s about come in the next version of Artifacts.', size: 'line' });
+const linkRow = (l: LinkView, unlink: boolean) => {
+  const other = l.to ?? l.from!;
+  return {
+    id: l.id,
+    title: `${l.words} ${other.label}`,
+    detail: `${l.byName ?? l.by} · ${new Date(l.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`,
+    icon: 'link',
+    ...(other.unavailable ? { disabled: true, reason: other.unavailable } : {}),
+    ...(unlink && l.to ? { actions: [{ id: 'unlink', label: 'Take the link off' }] } : {}),
+  };
+};
+
+/** About, Links: what it links to and what links to it, then the kinds of link that can't be made yet, saying why. */
+export const linksAbout = (data: DocumentData, on: { link: () => void; open: (document: string) => void; unlink: (link: string) => void }): RemoteNode => {
+  const answer = data.links;
+  if (!answer) return quill('quill-state', { kind: 'error', heading: 'Its links couldn’t be asked for.', size: 'line' });
+  const all = [...answer.links, ...answer.back];
+  return [
+    quill('quill-list', {
+      label: 'Links',
+      noun: ['link', 'links'],
+      density: 'compact',
+      look: 'plain',
+      items: all.map((l) => linkRow(l, answer.can.change)),
+      empty: 'It isn’t linked to any other document.',
+      onOpen: (id: string) => {
+        const l = all.find((x) => x.id === id);
+        const other = l && (l.to ?? l.from);
+        if (other && !other.unavailable && other.kind === 'document') on.open(other.id);
+      },
+      onAction: ({ item }: { item: string; action: string }) => on.unlink(item),
+    }),
+    ...answer.kinds.filter((k) => !k.available && k.why).map((k) => quill('quill-state', { kind: 'empty', heading: `${k.name}: ${k.why}`, size: 'line' })),
+    quill('quill-button', { label: 'Link to a document', kind: 'secondary', size: 'sm', icon: 'link', ...(answer.can.change ? {} : { disabled: true, reason: answer.can.why ?? 'You can’t change its links.' }), onPress: on.link }),
+  ];
+};
