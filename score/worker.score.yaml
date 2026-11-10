@@ -1,0 +1,54 @@
+# The worker part: makes each version's reader copy in the background (service/src/worker.ts), with
+# Poppler and Mammoth, no ML models. It takes work from a queue in the app's own schema, so it needs only
+# the database and the bucket: no gateway, no port. Its scratch folder holds one file at a time.
+apiVersion: score.dev/v1b1
+metadata:
+  name: worker
+  annotations:
+    augur.dev/part: worker
+containers:
+  worker:
+    image: .
+    command: ["node", "dist/worker.js"]
+    variables:
+      S3_ENDPOINT: ${resources.bucket.endpoint}
+      S3_REGION: ${resources.bucket.region}
+      S3_BUCKET: ${resources.bucket.bucket}
+      S3_ACCESS_KEY_ID: ${resources.bucket.access_key_id}
+      S3_SECRET_ACCESS_KEY_FILE: /run/augur/bucket-secret
+      DATABASE_HOST: ${resources.db.host}
+      DATABASE_PORT: ${resources.db.port}
+      DATABASE_NAME: ${resources.db.name}
+      DATABASE_USER: ${resources.db.user}
+      DATABASE_SCHEMA: ${resources.db.schema}
+      DATABASE_CONNECTIONS: ${resources.db.connections}
+      DATABASE_PASSWORD_FILE: /run/augur/database-password
+      SCRATCH_DIR: /scratch
+    files:
+      /run/augur/database-password:
+        mode: "0400"
+        content: ${resources.db.password}
+      /run/augur/bucket-secret:
+        mode: "0400"
+        content: ${resources.bucket.secret_access_key}
+    volumes:
+      /scratch:
+        source: ${resources.scratch}
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 1000m
+      requests:
+        memory: 128Mi
+        cpu: 50m
+resources:
+  bucket:
+    type: augur-bucket
+  db:
+    type: augur-database
+    params:
+      connections: 2
+  scratch:
+    type: augur-scratch
+    params:
+      size: 512Mi
