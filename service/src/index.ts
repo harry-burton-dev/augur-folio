@@ -30,8 +30,8 @@ const retentionDays = retentionDaysOf(manifest, env);
 await startAppService({
   manifest,
   env,
-  buildApp: async ({ jobs, audit, log }) => {
-    const app = await buildApp({ manifest, jobs, events, store, objects, people, audit, inbox: inboxFor(manifest.id, (line) => log.info(line, 'inbox (no Inbox here)'), env), env });
+  buildApp: async ({ jobs, audit, notify, log }) => {
+    const app = await buildApp({ manifest, jobs, events, store, objects, people, audit, notify, inbox: inboxFor(manifest.id, (line) => log.info(line, 'inbox (no Inbox here)'), env), env });
     // Deleted documents' files leave the bucket once the retention setting's days have passed. Every hour,
     // from whichever instance gets there: the store takes each one once.
     if (store) {

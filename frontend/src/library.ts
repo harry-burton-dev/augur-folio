@@ -1,6 +1,6 @@
 import { CONTAINER_LIFECYCLE, CONTENT_LIFECYCLE } from '@augur/records';
 import type { RemoteNode } from '@augur/mfe-sdk/sdk3';
-import type { DocumentPage, DocumentView, FolderAnswer, FolderView, LevelInfo, LibraryAnswer, PathStep, Rights, SharedItem, UnitLevel } from '../../service/src/api-types.js';
+import type { ContentState, DocumentPage, DocumentView, FloorView, FolderAnswer, FolderView, LevelInfo, LibraryAnswer, PathStep, ReceivedAnswer, ReceivedFolderAnswer, ReceivedItem, Rights, SharedItem, Signpost, UnitLevel } from '../../service/src/api-types.js';
 import { quill } from './screen.js';
 
 /**
@@ -79,15 +79,41 @@ const SORTS = [
 
 const when = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
+/** A floor in a sentence: "Operations", or "the org’s floor". */
+export const floorName = (f: FloorView) => (f.kind === 'org' ? 'the org’s floor' : f.name);
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+export const statesLine = (states: readonly ContentState[]) => states.map((st) => CONTENT_LIFECYCLE.get(st).name).join(', ');
+
+/** Where someone's one place for a thing is, said on the floor below. */
+export const signpostLine = (p: Signpost) => `Its place is on ${floorName(p.to)}${p.landed ? `, in ${p.landed}` : ''}`;
+
 /** A document as a row: its title, then its state, version and when it last changed. */
 export const documentRow = (d: DocumentView, { needs = false }: { needs?: boolean } = {}) => ({
   id: d.id,
   title: d.title,
   detail: [CONTENT_LIFECYCLE.get(d.latest.state).name, `version ${d.latest.number}`, `changed ${when(d.updatedAt)}`].join(' · '),
   icon: 'document',
+  ...(d.placed ? { meta: signpostLine(d.placed) } : {}),
   ...(needs && d.latest.state === 'in-review' ? { status: 'needs' as const } : {}),
   thing: { kind: 'document', id: d.id, label: d.title },
 });
+
+/** Something published up to this floor, as a row: what it is, where it came from and what it shows. */
+export const receivedRow = (i: ReceivedItem, { actions = true }: { actions?: boolean } = {}) => {
+  const { placement: p } = i;
+  const isDocument = p.record.kind === 'document';
+  return {
+    id: p.id,
+    title: p.record.name,
+    detail: [`From ${p.from.kind === 'org' ? 'the org' : p.from.name}`, isDocument && i.version ? `${CONTENT_LIFECYCLE.get(i.version.state).name}, version ${i.version.number}` : `Shows ${statesLine(i.states).toLowerCase()}`, p.landed ? `in ${p.landed.name}` : undefined]
+      .filter(Boolean)
+      .join(' · '),
+    icon: isDocument ? 'document' : 'folder',
+    ...(isDocument ? { thing: { kind: 'document', id: p.record.id, label: p.record.name } } : {}),
+    ...(actions && p.can.land ? { actions: [{ id: 'land', label: p.landed ? 'Move it' : 'Give it a place' }] } : {}),
+  };
+};
+
 
 export interface FolderData {
   folder: FolderAnswer;
@@ -100,7 +126,30 @@ export interface FolderOn extends LibraryOn {
   filter: (filter: RowFilter) => void;
   openDocument: (id: string) => void;
   add: () => void;
+  /** Opens something published up to this floor. */
+  openReceived: (item: ReceivedItem) => void;
+  land: (item: ReceivedItem) => void;
 }
+
+/** The signpost a floor below shows where someone's place for a thing is higher up. */
+export const signpostNotice = (p: Signpost, what: string) =>
+  quill('quill-notice', { tone: 'info', label: 'One place', heading: `${capital(signpostLine(p))}.` }, [`People there read ${what} there. It is still kept, and changed, here.`]);
+
+const receivedList = (items: readonly ReceivedItem[], on: { open: (item: ReceivedItem) => void; land: (item: ReceivedItem) => void }, label: string, empty?: string) =>
+  quill('quill-list', {
+    label,
+    noun: ['thing', 'things'],
+    items: items.map((i) => receivedRow(i)),
+    ...(empty ? { empty } : {}),
+    onOpen: (id: string) => {
+      const item = items.find((i) => i.placement.id === id);
+      if (item) on.open(item);
+    },
+    onAction: ({ item }: { item: string; action: string }) => {
+      const found = items.find((i) => i.placement.id === item);
+      if (found) on.land(found);
+    },
+  });
 
 /** A folder: what it holds as tiles, then its documents as rows under the filter bar. */
 export const folderScreen = (load: Load<FolderData>, filter: RowFilter, on: FolderOn): RemoteNode => {
@@ -118,6 +167,7 @@ export const folderScreen = (load: Load<FolderData>, filter: RowFilter, on: Fold
       ...(folder.description ? { summary: folder.description } : {}),
       onTrail: on.trail,
     }),
+    answer.placed ? signpostNotice(answer.placed, 'it') : null,
     folders.length || next
       ? quill('quill-tiles', { label: 'In it' }, [...folders.map((f) => folderTile(f, levels, on.open)), ...(next ? [addTile(`New ${levelName(levels, next).toLowerCase()}`, rights, on.newFolder)] : [])])
       : null,
@@ -143,6 +193,9 @@ export const folderScreen = (load: Load<FolderData>, filter: RowFilter, on: Fold
         onOpen: on.openDocument,
       }),
     ]),
+    answer.received.length
+      ? quill('quill-section', { label: 'Published up to here', count: answer.received.length }, [receivedList(answer.received, { open: on.openReceived, land: on.land }, 'Published up to here')])
+      : null,
   ];
 };
 
@@ -166,8 +219,66 @@ export const sharedScreen = (load: Load<SharedItem[]>, on: { retry: () => void; 
   ];
 };
 
-/** What floors below published up here. Publishing up arrives with the next part of the rebuild. */
-export const belowScreen = (): RemoteNode => [
-  quill('quill-page-head', { heading: 'From below', summary: 'What the floors below this one publish up to it.' }),
-  quill('quill-state', { kind: 'empty', heading: 'Nothing has been published up to this floor yet.', body: 'When a floor below publishes a document up to this one, it shows here, read only.', size: 'region' }),
-];
+/** What floors below published up here: waiting for a place, given one, and signposts to where it went on up. */
+export const belowScreen = (load: Load<ReceivedAnswer>, on: { retry: () => void; open: (item: ReceivedItem) => void; land: (item: ReceivedItem) => void; signpost: (placement: string, kind: string, id: string) => void }): RemoteNode => {
+  if (load.kind === 'asking') return asking('Finding what was published up here');
+  if (load.kind === 'failed') return failed('From below couldn’t open', load.why, on.retry);
+  const { here, signposts, places } = load.value;
+  const waiting = here.filter((i) => !i.placement.landed);
+  const placed = here.filter((i) => i.placement.landed);
+  const head = quill('quill-page-head', { heading: 'From below', summary: 'What the floors below this one publish up to it, read only. Its own floor keeps it and changes it.' });
+  if (!here.length && !signposts.length)
+    return [head, quill('quill-state', { kind: 'empty', heading: 'Nothing has been published up to this floor yet.', body: 'When a floor below publishes something up to this one, it shows here.', size: 'region' })];
+  const leads = places.length > 0 || here.some((i) => i.placement.can.land);
+  return [
+    head,
+    quill('quill-section', { label: 'Waiting for a place', count: waiting.length }, [
+      receivedList(waiting, on, 'Waiting for a place', leads ? 'Everything here has a place in the library.' : 'Nothing is waiting. The floor’s leads give each thing its place in the library.'),
+    ]),
+    placed.length ? quill('quill-section', { label: 'Given a place', count: placed.length }, [receivedList(placed, on, 'Given a place')]) : null,
+    signposts.length
+      ? quill('quill-section', { label: 'Gone on up', count: signposts.length }, [
+          quill('quill-list', {
+            label: 'Gone on up',
+            noun: ['thing', 'things'],
+            density: 'compact',
+            items: signposts.map((p) => ({ id: p.placement, title: p.record.name, detail: signpostLine(p), icon: 'arrow' })),
+            onOpen: (id: string) => {
+              const p = signposts.find((x) => x.placement === id);
+              if (p) on.signpost(p.placement, p.record.kind, p.record.id);
+            },
+          }),
+        ])
+      : null,
+  ];
+};
+
+/** Inside a folder published up here, at the states it shows. */
+export const receivedFolderScreen = (
+  load: Load<ReceivedFolderAnswer>,
+  levels: readonly LevelInfo[],
+  on: { retry: () => void; trail: (id: string) => void; open: (folder: string) => void; openDocument: (id: string) => void },
+): RemoteNode => {
+  if (load.kind === 'asking') return asking('Opening the folder');
+  if (load.kind === 'failed') return failed('The folder couldn’t open', load.why, on.retry);
+  const { placement, folder, path, folders, documents, states } = load.value;
+  return [
+    quill('quill-page-head', {
+      trail: [{ id: 'below', label: 'From below' }, ...path.slice(0, -1).map((s) => ({ id: s.id, label: s.name }))],
+      eyebrow: `${levelName(levels, folder.level)} · from ${placement.from.kind === 'org' ? 'the org' : placement.from.name}`,
+      heading: folder.name,
+      summary: `Published up here, showing ${statesLine(states).toLowerCase()}. Its own floor keeps it and changes it.`,
+      onTrail: on.trail,
+    }),
+    folders.length ? quill('quill-tiles', { label: 'In it' }, folders.map((f) => quill('quill-kind-tile', { kind: tileKind(f), name: f.name, eyebrow: levelName(levels, f.level), onOpen: () => on.open(f.id) }))) : null,
+    quill('quill-section', { label: 'Documents', count: documents.length }, [
+      quill('quill-list', {
+        label: 'Documents',
+        noun: ['document', 'documents'],
+        items: documents.map((d) => ({ ...documentRow(d), detail: [CONTENT_LIFECYCLE.get(d.version.state).name, `version ${d.version.number}`].join(' · ') })),
+        empty: 'Nothing in here is in a state this floor is shown.',
+        onOpen: on.openDocument,
+      }),
+    ]),
+  ];
+};

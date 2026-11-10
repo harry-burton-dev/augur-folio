@@ -1,7 +1,7 @@
 import { CONTENT_LIFECYCLE } from '@augur/records';
 import type { Workspace, RemoteNode } from '@augur/mfe-sdk/sdk3';
-import type { DocumentAnswer, GrantView, MoveView, ReaderAnswer, VersionView } from '../../service/src/api-types.js';
-import { trailOf, type Load } from './library.js';
+import type { DocumentAnswer, GrantView, MoveView, PlacementsAnswer, ReaderAnswer, VersionView } from '../../service/src/api-types.js';
+import { floorName, signpostNotice, statesLine, trailOf, type Load } from './library.js';
 import { quill } from './screen.js';
 
 /**
@@ -16,6 +16,8 @@ export interface DocumentData {
   version: VersionView;
   reader: ReaderAnswer;
   grants: GrantView[];
+  /** Its steps up the floors; undefined when they couldn't be asked. */
+  placements?: PlacementsAnswer;
 }
 
 /** The version a person sees first: a reader gets the newest Issued one, when there is one; anyone who can change it, the newest. */
@@ -69,6 +71,11 @@ export const documentScreen = (load: Load<DocumentData>, on: DocumentOn): Remote
       summary: `${version.filename} · ${size(version.size)} · added ${day(version.createdAt)}${version.createdByName ? ` by ${version.createdByName}` : ''}`,
       onTrail: on.trail,
     }),
+    answer.reached
+      ? quill('quill-notice', { tone: 'info', label: 'Published up', heading: `Published up to ${floorName(answer.reached.floor)}.` }, [answer.rights.why ?? ''])
+      : document.placed
+        ? signpostNotice(document.placed, 'it')
+        : null,
     reading(load.value, on),
     // History sits under the content (App patterns, 9 November).
     quill('quill-section', { label: 'Versions', count: versions.length }, [
@@ -115,7 +122,10 @@ export const lifecycleAbout = (data: DocumentData): RemoteNode => {
 export const placeAbout = (data: DocumentData, floor: Workspace): RemoteNode =>
   quill('quill-details', {
     items: [
-      { label: 'Floor', value: data.answer.floor.id === floor.id ? floor.name : 'Another floor, which shared it with you' },
+      {
+        label: 'Floor',
+        value: data.answer.floor.id === floor.id ? floor.name : data.answer.reached ? `Published up to ${floorName(data.answer.reached.floor)} from the floor that keeps it` : 'Another floor, which shared it with you',
+      },
       { label: 'In', value: data.answer.path.map((s) => s.name).join(' › ') || 'The library' },
     ],
   });
@@ -142,11 +152,33 @@ export const accessAbout = (data: DocumentData, floor: Workspace, share: () => v
   ];
 };
 
-/** About, Up the floors: only this floor until publishing up comes with the next part of the rebuild. */
-export const floorsAbout = (floor: Workspace): RemoteNode => [
-  quill('quill-floor-path', { label: 'Up the floors', floors: [{ id: floor.id, kind: floor.kind, name: floor.name, owner: true, here: true, line: 'Kept here' }] }),
-  quill('quill-state', { kind: 'empty', heading: 'Publishing up to the floors above comes in the next version of Artifacts.', size: 'line' }),
-];
+/** About, Up the floors: its own floor, then every floor it was published up to, the owner marked. */
+export const floorsAbout = (data: DocumentData, floor: Workspace, publish: () => void): RemoteNode => {
+  const up = data.placements;
+  if (!up) return quill('quill-state', { kind: 'error', heading: 'Its steps up the floors couldn’t be asked for.', size: 'line' });
+  const here = floor.kind === 'org' ? 'org' : floor.id;
+  const live = up.placements.filter((p) => !p.ended).sort((a, b) => b.to.rank - a.to.rank);
+  const open = up.targets.filter((t) => !t.why);
+  return [
+    quill('quill-floor-path', {
+      label: 'Up the floors',
+      floors: [
+        { id: up.own.id, kind: up.own.kind, name: up.own.name, line: 'Kept here', owner: up.owner.id === up.own.id, here: up.own.id === here },
+        ...live.map((p) => ({
+          id: p.to.id,
+          kind: p.to.kind,
+          name: p.to.name,
+          line: `Shows ${statesLine(p.filter).toLowerCase()}${p.landed ? `, in ${p.landed.name}` : ', under From below'}`,
+          owner: up.owner.id === p.to.id,
+          here: p.to.id === here,
+        })),
+      ],
+    }),
+    up.targets.length
+      ? quill('quill-button', { label: 'Publish up', kind: 'secondary', size: 'sm', icon: 'publish', ...(open.length ? {} : { disabled: true, reason: up.targets[0]?.why ?? 'It’s on every floor above it can reach.' }), onPress: publish })
+      : null,
+  ];
+};
 
 /** About, Links: none yet; they come with publishing up. */
 export const linksAbout = (): RemoteNode => quill('quill-state', { kind: 'empty', heading: 'Links to other documents and to what it’s about come in the next version of Artifacts.', size: 'line' });

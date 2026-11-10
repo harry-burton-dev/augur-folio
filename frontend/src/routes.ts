@@ -2,7 +2,8 @@
  * Where in Artifacts a path below `/<id>` leads. The host owns the address (spec 6.12): the app reads
  * `ctx.path` and hears each move with `ctx.onNavigate`, and asks to move with `ctx.navigate`.
  * The rail's places are the manifest's: Home `/`, Library `/library`, Shared with you `/shared`,
- * From below `/below`.
+ * From below `/below`. A folder published up here opens at `/received/<placement>`, and a folder inside it
+ * at `/received/<placement>/folders/<folder>`.
  */
 export type Route =
   | { kind: 'home' }
@@ -11,6 +12,7 @@ export type Route =
   | { kind: 'document'; id: string; version?: number }
   | { kind: 'shared' }
   | { kind: 'below' }
+  | { kind: 'received'; id: string; folder?: string }
   | { kind: 'missing'; path: string };
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -23,6 +25,10 @@ export const routeOf = (path: string): Route => {
   if (parts.length === 1 && first === 'shared') return { kind: 'shared' };
   if (parts.length === 1 && first === 'below') return { kind: 'below' };
   if (first === 'folders' && parts.length === 2 && ID.test(id!)) return { kind: 'folder', id: id! };
+  if (first === 'received' && id && ID.test(id)) {
+    if (parts.length === 2) return { kind: 'received', id };
+    if (parts.length === 4 && sub === 'folders' && ID.test(number!)) return { kind: 'received', id, folder: number! };
+  }
   if (first === 'documents' && id && ID.test(id)) {
     if (parts.length === 2) return { kind: 'document', id };
     const n = Number(number);
@@ -41,6 +47,8 @@ export const pathOf = (route: Route): string => {
       return `/${route.kind}`;
     case 'folder':
       return `/folders/${route.id}`;
+    case 'received':
+      return route.folder ? `/received/${route.id}/folders/${route.folder}` : `/received/${route.id}`;
     case 'document':
       return route.version ? `/documents/${route.id}/versions/${route.version}` : `/documents/${route.id}`;
     case 'missing':

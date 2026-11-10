@@ -1,6 +1,7 @@
 import { defineApp, type AppContext, type FrameAction, type RemoteNode } from '@augur/mfe-sdk/sdk3';
 import manifest from '../../manifest.json';
 import type {
+  ContentState,
   DocumentAnswer,
   DocumentPage,
   FolderAnswer,
@@ -10,13 +11,19 @@ import type {
   LevelInfo,
   LibraryAnswer,
   PeopleAnswer,
+  PlacementsAnswer,
+  PlacementView,
   ReaderAnswer,
+  ReceivedAnswer,
+  ReceivedFolderAnswer,
+  ReceivedItem,
+  RecordKind,
   SharedItem,
 } from '../../service/src/api-types.js';
 import { apiFor, Refused } from './api.js';
-import { dialogFor, type Dialog, type Principal } from './dialogs.js';
+import { dialogFor, targetKey, type Dialog, type Principal } from './dialogs.js';
 import { accessAbout, documentScreen, floorsAbout, lifecycleAbout, linksAbout, placeAbout, shownVersion, type DocumentData } from './document.js';
-import { belowScreen, DEFAULT_FILTER, folderScreen, libraryScreen, sharedScreen, type FolderData, type Load, type RowFilter } from './library.js';
+import { belowScreen, DEFAULT_FILTER, folderScreen, libraryScreen, receivedFolderScreen, sharedScreen, type FolderData, type Load, type RowFilter } from './library.js';
 import { pathOf, routeOf, type Route } from './routes.js';
 import { card, floorFacts, home, nothingOpen, type Asked } from './screen.js';
 
@@ -34,6 +41,9 @@ const READER_POLLS = 45;
 
 const whyOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/** What a new placement shows at first: what's finished. */
+const FIRST_FILTER: ContentState[] = ['complete', 'issued'];
+
 export const startArtifacts = (ctx: AppContext) => {
   const api = apiFor(ctx);
   let route: Route = routeOf(ctx.path);
@@ -43,6 +53,8 @@ export const startArtifacts = (ctx: AppContext) => {
   let filter: RowFilter = DEFAULT_FILTER;
   let doc: Load<DocumentData> = { kind: 'asking' };
   let shared: Load<SharedItem[]> = { kind: 'asking' };
+  let below: Load<ReceivedAnswer> = { kind: 'asking' };
+  let received: Load<ReceivedFolderAnswer> = { kind: 'asking' };
   let dialog: Dialog | undefined;
   /** Each load counts up, so an answer to a screen the person has left is dropped. */
   let turn = 0;
@@ -66,11 +78,15 @@ export const startArtifacts = (ctx: AppContext) => {
         { command: 'document.share', ...unavailable(rights.why, rights.share) },
         { command: 'document.download' },
         { command: 'document.add', label: 'Add a version', ...unavailable(rights.why, rights.add) },
-        { command: 'document.publish', unavailable: 'Publishing up to the floors above comes in the next version of Artifacts.' },
+        { command: 'document.publish', ...unavailable(publishWhy(doc.value.placements), Boolean(doc.value.placements?.targets.some((t) => !t.why))) },
       ];
     }
     return [];
   };
+
+  /** Why it can't be published up from here, for the action that says so. */
+  const publishWhy = (up: PlacementsAnswer | undefined) =>
+    !up ? 'Its steps up the floors couldn’t be asked for. Try again in a moment.' : !up.targets.length ? 'Only whoever manages it publishes it up, from its own floor, or the leads of a floor that received it.' : (up.targets[0]?.why ?? 'It’s on every floor above it can reach.');
 
   const title = () => {
     switch (route.kind) {
@@ -86,6 +102,8 @@ export const startArtifacts = (ctx: AppContext) => {
         return 'Shared with you';
       case 'below':
         return 'From below';
+      case 'received':
+        return received.kind === 'answered' ? received.value.folder.name : 'From below';
       case 'missing':
         return manifest.name;
     }
@@ -109,6 +127,8 @@ export const startArtifacts = (ctx: AppContext) => {
           },
           openDocument: (id) => go({ kind: 'document', id }),
           add: () => void addFiles(),
+          openReceived: (item) => openReceived(item),
+          land: (item) => void land(item),
         });
       case 'document':
         return documentScreen(doc, {
@@ -121,7 +141,19 @@ export const startArtifacts = (ctx: AppContext) => {
       case 'shared':
         return sharedScreen(shared, { retry: () => void open(), open: (item) => ctx.navigate(item.path) });
       case 'below':
-        return belowScreen();
+        return belowScreen(below, {
+          retry: () => void open(),
+          open: (item) => openReceived(item),
+          land: (item) => void land(item),
+          signpost: (_placement, kind, id) => (kind === 'document' ? go({ kind: 'document', id }) : say('Its place is on a floor higher up.', 'Open it from that floor’s From below or library.')),
+        });
+      case 'received':
+        return receivedFolderScreen(received, levels(), {
+          retry: () => void open(),
+          trail: (id) => (id === 'below' ? go({ kind: 'below' }) : route.kind === 'received' && go({ kind: 'received', id: route.id, folder: id })),
+          open: (folder) => route.kind === 'received' && go({ kind: 'received', id: route.id, folder }),
+          openDocument: (id) => go({ kind: 'document', id }),
+        });
       case 'missing':
         return [
           { type: 'quill-state', props: { kind: 'empty', heading: 'There’s nothing at this address.', body: 'It may have moved, or been deleted.', action: 'Go to the library', size: 'region', onAction: () => go({ kind: 'library' }) } },
@@ -140,7 +172,7 @@ export const startArtifacts = (ctx: AppContext) => {
       if (section.id === 'lifecycle') root.render(lifecycleAbout(data));
       else if (section.id === 'place') root.render(placeAbout(data, ctx.workspace));
       else if (section.id === 'access') root.render(accessAbout(data, ctx.workspace, () => void share()));
-      else if (section.id === 'floors') root.render(floorsAbout(ctx.workspace));
+      else if (section.id === 'floors') root.render(floorsAbout(data, ctx.workspace, () => void publish()));
       else if (section.id === 'links') root.render(linksAbout());
     }
   };
@@ -185,12 +217,13 @@ export const startArtifacts = (ctx: AppContext) => {
       const answer = await api.get<DocumentAnswer>(`/documents/${encodeURIComponent(id)}`);
       const version = shownVersion(answer, number);
       if (!version) throw new Error(`This document has no version ${number}.`);
-      const [reader, grants] = await Promise.all([
+      const [reader, grants, placements] = await Promise.all([
         api.get<ReaderAnswer>(`/documents/${encodeURIComponent(id)}/versions/${version.number}/reader`),
         answer.rights.share ? api.get<{ grants: GrantView[] }>(`/grants?kind=document&record=${encodeURIComponent(id)}`).then((g) => g.grants) : Promise.resolve([]),
+        api.get<PlacementsAnswer>(`/placements?kind=document&record=${encodeURIComponent(id)}`).catch(() => undefined),
       ]);
       if (at !== turn) return;
-      doc = { kind: 'answered', value: { answer, version, reader, grants } };
+      doc = { kind: 'answered', value: { answer, version, reader, grants, ...(placements ? { placements } : {}) } };
       if (reader.state === 'queued' || reader.state === 'working') watchReader(id, version.number, at, 0);
     } catch (err) {
       if (at !== turn) return;
@@ -258,6 +291,30 @@ export const startArtifacts = (ctx: AppContext) => {
         }
         if (at === turn) draw();
         return;
+      case 'below':
+        below = { kind: 'asking' };
+        draw();
+        try {
+          below = { kind: 'answered', value: await api.get<ReceivedAnswer>('/received') };
+        } catch (err) {
+          below = { kind: 'failed', why: whyOf(err) };
+        }
+        if (at === turn) draw();
+        return;
+      case 'received': {
+        received = { kind: 'asking' };
+        draw();
+        if (library.kind !== 'answered') await loadLibrary();
+        const q = route.folder ? `?folder=${encodeURIComponent(route.folder)}` : '';
+        try {
+          const value = await api.get<ReceivedFolderAnswer>(`/received/${encodeURIComponent(route.id)}${q}`);
+          if (at === turn) received = { kind: 'answered', value };
+        } catch (err) {
+          if (at === turn) received = { kind: 'failed', why: whyOf(err) };
+        }
+        if (at === turn) draw();
+        return;
+      }
       default:
         draw();
     }
@@ -373,6 +430,57 @@ export const startArtifacts = (ctx: AppContext) => {
     await api.download(`/documents/${encodeURIComponent(answer.document.id)}/versions/${version.number}/file`).catch((err) => say('It couldn’t be downloaded.', whyOf(err)));
   };
 
+  /** Opens something published up to this floor: a document as itself, a folder inside its window. */
+  const openReceived = (item: ReceivedItem) => (item.placement.record.kind === 'document' ? go({ kind: 'document', id: item.placement.record.id }) : go({ kind: 'received', id: item.placement.id }));
+
+  /** The record a publish command is for: the radial menu's thing, else what's on screen. */
+  const recordFor = (detail: unknown): { kind: RecordKind; id: string; title: string } | undefined => {
+    const thing = (detail as { thing?: { kind?: string; id?: string; label?: string } } | undefined)?.thing;
+    if (thing?.id) return { kind: thing.kind === 'document' ? 'document' : 'folder', id: thing.id, title: thing.label ?? '' };
+    if (route.kind === 'document' && doc.kind === 'answered') return { kind: 'document', id: doc.value.answer.document.id, title: doc.value.answer.document.title };
+    if (route.kind === 'folder' && folder.kind === 'answered') return { kind: 'folder', id: folder.value.folder.folder.id, title: folder.value.folder.folder.name };
+    return undefined;
+  };
+
+  /** The Publish up dialog: every floor above, why for any it can't go to, and what they'd see. */
+  const publish = async (detail?: unknown) => {
+    const record = recordFor(detail);
+    if (!record) return say('Open a document or a folder first.');
+    let answer: PlacementsAnswer;
+    try {
+      answer = await api.get<PlacementsAnswer>(`/placements?kind=${record.kind}&record=${encodeURIComponent(record.id)}`);
+    } catch (err) {
+      return say('Its floors couldn’t be asked for.', whyOf(err));
+    }
+    if (!answer.targets.length) return say('You can’t publish this up.', publishWhy(answer));
+    const first = answer.targets.find((t) => !t.why);
+    dialog = {
+      kind: 'publish',
+      record: { kind: record.kind, id: record.id },
+      title: record.title || answer.record.name,
+      answer,
+      ...(first ? { target: targetKey(first) } : {}),
+      filter: FIRST_FILTER.filter((st) => !first?.most || first.most.includes(st)),
+    };
+    draw();
+  };
+
+  /** Where a floor's leads put something published up to it. */
+  const land = async (item: ReceivedItem) => {
+    if (!item.placement.can.land) return say('Only the floor’s leads give it a place.');
+    let places = below.kind === 'answered' ? below.value.places : [];
+    if (!places.length) {
+      try {
+        places = (await api.get<ReceivedAnswer>('/received')).places;
+      } catch (err) {
+        return say('This floor’s library couldn’t be asked for.', whyOf(err));
+      }
+    }
+    if (item.placement.record.level === 'collection') return say('A whole collection stays as it is under From below.', 'It can’t go inside another collection.');
+    dialog = { kind: 'land', placement: item.placement.id, title: item.placement.record.name, places, ...(item.placement.landed ? { current: item.placement.landed.folder } : {}) };
+    draw();
+  };
+
   const readAgain = async () => {
     if (doc.kind !== 'answered') return;
     const { answer, version } = doc.value;
@@ -449,6 +557,39 @@ export const startArtifacts = (ctx: AppContext) => {
     choose: (chosen: Principal[]) => {
       if (dialog?.kind === 'share') dialog = { ...dialog, chosen };
     },
+    publish: (note?: string) =>
+      void working(async () => {
+        if (dialog?.kind !== 'publish') return;
+        const d = dialog;
+        const target = d.answer.targets.find((t) => targetKey(t) === d.target);
+        if (!target) throw new Error('Choose a floor to publish it up to.');
+        if (target.why) throw new Error(target.why);
+        if (!dialog.filter.length) throw new Error('Tick at least one state for them to see.');
+        const placed = await api.send<PlacementView>('POST', '/placements', { record: dialog.record, to: target.to.id, filter: dialog.filter, ...(target.via ? { via: target.via } : {}), ...(note ? { note } : {}) });
+        say(`Published “${dialog.title}” up to ${placed.to.name}.`, 'They see it under From below until their leads give it a place.');
+      }),
+    target: (key: string) => {
+      if (dialog?.kind !== 'publish') return;
+      const most = dialog.answer.targets.find((t) => targetKey(t) === key)?.most;
+      dialog = { ...dialog, target: key, filter: most ? dialog.filter.filter((st) => most.includes(st)) : dialog.filter };
+      draw();
+    },
+    filter: (states: ContentState[]) => {
+      if (dialog?.kind === 'publish') dialog = { ...dialog, filter: states };
+    },
+    withdraw: (placement: string) =>
+      void working(async () => {
+        if (dialog?.kind !== 'publish') return;
+        const { withdrawn } = await api.send<{ withdrawn: { name: string }[] }>('POST', `/placements/${encodeURIComponent(placement)}/withdraw`, {});
+        say(`Took “${dialog.title}” back.`, withdrawn.length > 1 ? `It went from ${withdrawn.map((f) => f.name).join(', ')}.` : undefined);
+      }),
+    land: (folderId?: string) =>
+      void working(async () => {
+        if (dialog?.kind !== 'land') return;
+        await api.send('PUT', `/placements/${encodeURIComponent(dialog.placement)}/landing`, folderId ? { folder: folderId } : {});
+        const place = dialog.places.find((pl) => pl.id === folderId);
+        say(place ? `“${dialog.title}” is in ${place.label} now.` : `“${dialog.title}” is back under From below.`);
+      }),
   };
 
   // Wiring
@@ -463,7 +604,8 @@ export const startArtifacts = (ctx: AppContext) => {
     'document.move': (detail) => move(detail),
     'document.share': (detail) => share(detail),
     'document.download': (detail) => download(detail),
-    'document.publish': () => say('Publishing up comes in the next version of Artifacts.', 'For now, share it with the people or teams who need it.'),
+    'document.publish': (detail) => publish(detail),
+    'folder.publish': (detail) => publish(detail),
     'document.about': () => say('Saying what a document is about comes in the next version of Artifacts.'),
     'folder.new': (detail) => newFolder((detail as { thing?: { id?: string } } | undefined)?.thing?.id),
     'collection.new': () => newFolder(undefined, true),

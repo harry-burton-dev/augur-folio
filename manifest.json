@@ -28,6 +28,7 @@
       { "id": "document.about", "label": "Say what it’s about", "icon": "atlas", "when": "selection", "keywords": "entity about knowledge" },
       { "id": "document.download", "label": "Download the original", "icon": "download", "when": "selection" },
       { "id": "folder.new", "label": "New folder", "icon": "folder-plus", "keywords": "folder collection" },
+      { "id": "folder.publish", "label": "Publish up", "icon": "publish", "when": "selection", "keywords": "floor publish up" },
       { "id": "collection.new", "label": "New collection", "icon": "library", "keywords": "collection" }
     ],
     "radial": [
@@ -38,7 +39,9 @@
       { "command": "document.about", "on": "document", "order": 4 },
       { "command": "document.download", "on": "document", "order": 5 },
       { "command": "folder.new", "on": "folder", "order": 0 },
-      { "command": "folder.new", "on": "collection", "order": 0 }
+      { "command": "folder.publish", "on": "folder", "order": 1 },
+      { "command": "folder.new", "on": "collection", "order": 0 },
+      { "command": "folder.publish", "on": "collection", "order": 1 }
     ],
     "about": [
       { "id": "lifecycle", "label": "Lifecycle", "icon": "series" },

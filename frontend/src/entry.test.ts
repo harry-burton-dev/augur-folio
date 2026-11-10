@@ -1,7 +1,7 @@
 import type { AppContext, FrameState, Notice, RemoteElement, RemoteNode } from '@augur/mfe-sdk/sdk3';
 import { describe, expect, it } from 'vitest';
 import manifest from '../../manifest.json';
-import type { DocumentAnswer, DocumentView, FolderAnswer, LibraryAnswer, Rights, VersionView } from '../../service/src/api-types.js';
+import type { DocumentAnswer, DocumentView, FolderAnswer, LibraryAnswer, PlacementsAnswer, PlacementView, ReceivedAnswer, Rights, VersionView } from '../../service/src/api-types.js';
 import start from './entry.js';
 import { routeOf } from './routes.js';
 
@@ -106,6 +106,7 @@ const folderAnswer: FolderAnswer = {
   folders: [],
   rights: rights(),
   holds: ['series', 'file'],
+  received: [],
 };
 const version = (number: number, over: Partial<VersionView> = {}): VersionView => ({ number, filename: `berth-procedure-v${number}.pdf`, mediaType: 'application/pdf', size: 52000, state: 'in-progress', createdBy: 'u-tomas', createdByName: 'Tomas Lindqvist', createdAt: '2026-11-02T10:00:00Z', reader: 'ready', thumbnail: true, ...over });
 const documentView = (latest: VersionView): DocumentView => ({ id: 'd-berth', folder: 'f-berths', title: 'Berth procedure', tags: [], createdBy: 'u-tomas', createdAt: '2026-11-02T10:00:00Z', updatedAt: '2026-11-03T10:00:00Z', latest });
@@ -120,6 +121,39 @@ const documentAnswer = (over: Partial<DocumentAnswer> = {}): DocumentAnswer => (
     { to: 'in-review', allowed: true },
     { to: 'issued', allowed: false, why: 'Only whoever manages it can do that.' },
   ],
+  ...over,
+});
+
+const port = { id: 'w-port', kind: 'team' as const, name: 'Port Services', rank: 2 };
+const ops = { id: 'w-ops', kind: 'team' as const, name: 'Operations', rank: 1 };
+const org = { id: 'org', kind: 'org' as const, name: 'The org', rank: 0 };
+const placement = (over: Partial<PlacementView> = {}): PlacementView => ({
+  id: 'p-1',
+  record: { kind: 'document', id: 'd-berth', name: 'Berth procedure', level: 'file' },
+  from: port,
+  to: ops,
+  filter: ['complete', 'issued'],
+  by: 'u-lead',
+  byName: 'Ada Lead',
+  at: '2026-11-04T10:00:00Z',
+  can: { withdraw: true, land: false },
+  ...over,
+});
+const placements = (over: Partial<PlacementsAnswer> = {}): PlacementsAnswer => ({
+  record: { kind: 'document', id: 'd-berth', name: 'Berth procedure', level: 'file' },
+  own: port,
+  owner: port,
+  placements: [],
+  targets: [
+    { from: port, to: ops },
+    { from: port, to: org, why: 'Publishing to the org needs the publisher role, which an admin can give you.' },
+  ],
+  ...over,
+});
+const received = (over: Partial<ReceivedAnswer> = {}): ReceivedAnswer => ({
+  here: [{ placement: placement({ can: { withdraw: true, land: true } }), states: ['complete', 'issued'], version: version(1, { state: 'issued' }) }],
+  signposts: [],
+  places: [{ id: 'f-ops-proc', label: 'Procedures', level: 'collection' }],
   ...over,
 });
 
@@ -150,6 +184,14 @@ const theLibrary = (over: Record<string, () => Response> = {}): Service => (meth
       return Response.json({ query: 'lu', items: [{ kind: 'person', id: 'u-lucia', name: 'Lucia Ferreira' }] });
     case 'PUT /grants':
       return Response.json({ ok: true });
+    case 'GET /placements':
+      return Response.json(placements());
+    case 'POST /placements':
+      return Response.json(placement(), { status: 201 });
+    case 'GET /received':
+      return Response.json(received({ here: [], places: [] }));
+    case 'PUT /placements/p-1/landing':
+      return Response.json(placement({ landed: { folder: 'f-ops-proc', name: 'Procedures' } }));
     case 'GET /shared':
       return Response.json({ items: [{ kind: 'document', id: 'd-tide', title: 'Tide tables', floor: 'w-finance', level: 'read', path: '/documents/d-tide' }] });
   }
@@ -162,6 +204,7 @@ describe('where a path leads', () => {
     expect(routeOf('/library')).toEqual({ kind: 'library' });
     expect(routeOf('/folders/f-berths')).toEqual({ kind: 'folder', id: 'f-berths' });
     expect(routeOf('/documents/d-berth/versions/2')).toEqual({ kind: 'document', id: 'd-berth', version: 2 });
+    expect(routeOf('/received/p-1/folders/f-berths')).toEqual({ kind: 'received', id: 'p-1', folder: 'f-berths' });
     expect(routeOf('/documents/d%2F..')).toEqual({ kind: 'missing', path: '/documents/d%2F..' });
   });
 });
@@ -251,9 +294,57 @@ describe('Artifacts', () => {
     expect(text(shell.about.get('lifecycle'))).toContain('In progress');
     expect(text(shell.about.get('place'))).toContain('Port operations');
     expect(text(shell.about.get('access'))).toContain('Hamid Sadeghi');
-    expect(text(shell.about.get('floors'))).toContain('next version');
-    // Publishing up isn't here yet: it stays in the pane's actions, saying why.
-    expect(shell.pane.actions).toContainEqual({ command: 'document.publish', unavailable: expect.stringContaining('next version') });
+    expect(find(shell.about.get('floors'), 'quill-floor-path')[0]!.props!.floors).toEqual([expect.objectContaining({ name: 'Port Services', owner: true, here: true, line: 'Kept here' })]);
+    expect(shell.pane.actions).toContainEqual({ command: 'document.publish' });
+  });
+
+  it('publishes up through a dialog that lists every floor above, with why for any it can’t reach', async () => {
+    const { ctx, shell } = fakeShell(theLibrary(), { path: '/documents/d-berth' });
+    await start(ctx);
+    await settle();
+    await shell.commands.get('document.publish')!();
+    await settle();
+    const dialog = find(shell.screen, 'quill-dialog')[0]!;
+    expect(dialog.props!.heading).toBe('Publish “Berth procedure” up');
+    expect(find(dialog, 'quill-choice')[0]!.props).toMatchObject({
+      value: 'w-ops',
+      options: [
+        { value: 'w-ops', label: 'Operations' },
+        { value: 'org', label: 'The org', disabled: true, reason: expect.stringContaining('publisher role') },
+      ],
+    });
+    expect(find(dialog, 'quill-checkbox-group')[0]!.props!.value).toEqual(['complete', 'issued']);
+    fire(find(dialog, 'quill-checkbox-group')[0], 'onChange', ['issued']);
+    fire(dialog, 'onSubmit', {});
+    await settle();
+    expect(shell.calls).toContain(`POST /api/${manifest.id}/v1/placements`);
+    expect(shell.notified.at(-1)?.title).toBe('Published “Berth procedure” up to Operations.');
+  });
+
+  it('lists what came up from below, and its leads give it a place', async () => {
+    const { ctx, shell } = fakeShell(theLibrary({ 'GET /received': () => Response.json(received()) }), { path: '/below' });
+    await start(ctx);
+    await settle();
+    const waiting = find(shell.screen, 'quill-list')[0]!;
+    expect(waiting.props!.items).toEqual([expect.objectContaining({ id: 'p-1', title: 'Berth procedure', detail: 'From Port Services · Issued, version 1', actions: [{ id: 'land', label: 'Give it a place' }] })]);
+    fire(waiting, 'onAction', { item: 'p-1', action: 'land' });
+    await settle();
+    const dialog = find(shell.screen, 'quill-dialog')[0]!;
+    expect(find(dialog, 'quill-choice')[0]!.props!.options).toEqual([expect.objectContaining({ value: 'f-ops-proc', label: 'Procedures' }), { value: '', label: 'Leave it under From below' }]);
+    fire(dialog, 'onSubmit', { folder: 'f-ops-proc' });
+    await settle();
+    expect(shell.calls).toContain(`PUT /api/${manifest.id}/v1/placements/p-1/landing`);
+    expect(shell.notified.at(-1)?.title).toBe('“Berth procedure” is in Procedures now.');
+    fire(find(shell.screen, 'quill-list')[0], 'onOpen', 'p-1');
+    expect(shell.navigated.at(-1)).toBe('/documents/d-berth');
+  });
+
+  it('shows a signpost on the floor below where its one place is higher up', async () => {
+    const placed = { placement: 'p-1', to: ops, landed: 'Procedures' };
+    const { ctx, shell } = fakeShell(theLibrary({ 'GET /folders/f-berths/documents': () => Response.json({ documents: [{ ...documentView(version(1)), placed }], total: 1 }) }), { path: '/folders/f-berths' });
+    await start(ctx);
+    await settle();
+    expect((find(shell.screen, 'quill-list')[0]!.props!.items as unknown[])[0]).toMatchObject({ meta: 'Its place is on Operations, in Procedures' });
   });
 
   it('says what is happening when its copy to read isn’t made yet, and offers the original', async () => {

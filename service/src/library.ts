@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
-import { floorCaller, Problem, standInPeople, type AppAudit, type AppManifest, type AppPeople, type OnFloor } from '@augur/service-kit';
+import { floorCaller, Problem, standInPeople, type AppAudit, type AppManifest, type AppNotify, type AppPeople, type OnFloor } from '@augur/service-kit';
 import { BadMoveError, PRINCIPAL } from '@augur/records';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
@@ -49,6 +49,7 @@ import type {
 import { homeSchema } from './api-types.ts';
 import type { ObjectStore } from './objects.ts';
 import type { Inbox } from './platform.ts';
+import { placing } from './placements.ts';
 import { GoneError, NameTakenError, newId, NotEmptyError, objectKeyFor, searchWords, type DocumentRecord, type FolderRecord, type Store, type VersionRecord } from './store.ts';
 
 export interface LibraryOptions {
@@ -58,6 +59,8 @@ export interface LibraryOptions {
   people?: AppPeople;
   inbox: Inbox;
   audit: AppAudit;
+  /** Tells people as the app: a floor that something was published up to it. */
+  notify?: AppNotify;
   /** The most one upload may be, in bytes. */
   maxUploadBytes: number;
 }
@@ -131,7 +134,7 @@ const measured = (max: number) => {
   return { through, done: () => ({ size, sha256: hash.digest('hex') }) };
 };
 
-export const libraryRoutes = async (app: FastifyInstance, { manifest, store, objects, people = standInPeople, inbox, audit, maxUploadBytes }: LibraryOptions) => {
+export const libraryRoutes = async (app: FastifyInstance, { manifest, store, objects, people = standInPeople, inbox, audit, notify = async () => undefined, maxUploadBytes }: LibraryOptions) => {
   const floorOf = floorCaller(manifest);
   const recorded = (entry: Parameters<AppAudit>[0]) => audit(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action }, 'could not record in the audit log'));
 
@@ -168,13 +171,27 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     return { folder, access, level };
   };
 
+  const place = placing({ store, people, notify, recorded, log: app.log, callerOf, principalsOf, accessOn });
+  await place.routes(app);
+
+  /** A document the caller may read: on its floor, by a grant, or, one version only, through publishing up. */
   const readDocument = async (caller: OnFloor, id: string) => {
     const document = await store.document(id);
     if (!document) throw notFound('document');
     const access = await accessOn(caller, document.workspace);
     const level = documentLevel(access, document);
-    if (!level) throw notFound('document');
-    return { document, access, level };
+    if (level) return { document, access, level };
+    const reached = await place.reachedVersion(caller, access, document);
+    if (!reached) throw notFound('document');
+    return { document, access, level: 'read' as Level, reached };
+  };
+
+  /** A version of a document, when the caller may open that one. */
+  const versionIn = async (read: Awaited<ReturnType<typeof readDocument>>, number: number) => {
+    if (read.reached && read.reached.version !== number) throw notFound('version');
+    const version = await store.version(read.document.id, number);
+    if (!version) throw notFound('version');
+    return version;
   };
 
   const need = (level: Level | undefined, want: Level, what: string) => {
@@ -262,12 +279,15 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     const { folder, access, level } = await readFolder(caller, req.params.id);
     const floor = await store.floorRow(folder.workspace);
     const closed = closedAbove(access, folder.id);
+    const placed = await place.signpostFor(caller, access, { id: folder.id, ...(folder.parent ? { folder: folder.parent } : {}) });
     return {
       folder: folderView(folder),
       path: stepsOf(pathTo(access.folders, folder.id)),
       folders: [...access.folders.values()].filter((f) => f.parent === folder.id && f.state !== 'archived').map(folderView),
       rights: rightsFor(level, { freeTags: floor?.freeTags, ...(closed ? { closed } : {}) }),
       holds: holdsOf(folder.level),
+      received: folder.workspace === caller.workspace.id ? await place.receivedIn(caller, folder.id) : [],
+      ...(placed ? { placed } : {}),
     };
   });
 
@@ -346,7 +366,16 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
       // Someone let into one document but not the folder reads only that one; a folder they read shows all.
       const documents = page.documents.filter((d) => documentLevel(access, d));
       const names = await store.names(documents.map((d) => d.latest.createdBy));
-      return { documents: documents.map((d) => documentView(d, names)), total: page.total };
+      // One place: a document whose place for the caller is a floor above shows a signpost to it here.
+      const reaching = await place.covering([...new Set(documents.flatMap((d) => place.shownThrough(access, d)))], access.principals);
+      const placed = await Promise.all(
+        documents.map((d) => {
+          const through = new Set(place.shownThrough(access, d));
+          const steps = reaching.filter((p) => through.has(p.record.id));
+          return steps.length ? place.signpostFor(caller, access, d, steps) : undefined;
+        }),
+      );
+      return { documents: documents.map((d, i) => ({ ...documentView(d, names), ...(placed[i] ? { placed: placed[i] } : {}) })), total: page.total };
     },
   );
 
@@ -418,19 +447,27 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
 
   app.get<{ Params: { id: string } }>('/documents/:id', { schema: { params: idParams } }, async (req): Promise<DocumentAnswer> => {
     const caller = await callerOf(req);
-    const { document, access, level } = await readDocument(caller, req.params.id);
-    const [versions, moves] = await Promise.all([store.versions(document.id), store.moves(document.id)]);
+    const { document, access, level, reached } = await readDocument(caller, req.params.id);
+    const [all, allMoves] = await Promise.all([store.versions(document.id), store.moves(document.id)]);
+    // Through publishing up, the one version the caller's floors let through, and nothing about the others.
+    const versions = reached ? all.filter((v) => v.number === reached.version) : all;
+    const moves = reached ? allMoves.filter((m) => m.version === reached.version) : allMoves;
     const names = await store.names([...versions.map((v) => v.createdBy), ...moves.map((m) => m.by)]);
     const floor = await store.floorRow(document.workspace);
     const closed = closedAbove(access, document.folder);
+    const shown = reached ? { ...document, latest: versions[0]!, issued: versions[0]!.state === 'issued' ? versions[0] : undefined } : document;
+    const placed = reached ? undefined : await place.signpostFor(caller, access, document);
     return {
       floor: { id: document.workspace, kind: floor?.kind ?? 'team' },
-      document: documentView(document, names),
+      document: { ...documentView(shown, names), ...(placed ? { placed } : {}) },
       path: stepsOf(pathTo(access.folders, document.folder)),
       versions: versions.map((v) => versionView(v, names)),
       moves: moves.map(({ record: _, ...m }) => ({ ...m, ...(names.get(m.by) ? { byName: names.get(m.by) } : {}) })),
-      rights: rightsFor(level, { freeTags: floor?.freeTags, ...(closed ? { closed } : {}) }),
-      next: nextStates(document.latest.state, level),
+      rights: reached
+        ? { ...rightsFor('read'), why: `It was published up to ${reached.floor.kind === 'org' ? 'the org’s floor' : reached.floor.name}, which shows the version its floor lets through. Its own floor changes it.` }
+        : rightsFor(level, { freeTags: floor?.freeTags, ...(closed ? { closed } : {}) }),
+      next: reached ? [] : nextStates(document.latest.state, level),
+      ...(reached ? { reached } : {}),
     };
   });
 
@@ -480,9 +517,7 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
 
   app.get<{ Params: { id: string; number: number } }>('/documents/:id/versions/:number/file', { schema: { params: versionParams } }, async (req, reply) => {
     const caller = await callerOf(req);
-    const { document } = await readDocument(caller, req.params.id);
-    const version = await store.version(document.id, req.params.number);
-    if (!version) throw notFound('version');
+    const version = await versionIn(await readDocument(caller, req.params.id), req.params.number);
     const body = await objects.get(version.objectKey);
     if (!body) throw new Problem(404, 'file_missing', 'The file for this version can’t be found in storage.', { whoCanChange: 'An admin, who can check the app’s bucket.' });
     return reply.type(version.mediaType).header('content-length', version.size).header('content-disposition', contentDisposition(version.filename)).header('cache-control', 'private, no-store').send(body);
@@ -492,10 +527,9 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
 
   const readVersion = async (req: FastifyRequest<{ Params: { id: string; number: number } }>) => {
     const caller = await callerOf(req);
-    const { document, level } = await readDocument(caller, req.params.id);
-    const version = await store.version(document.id, req.params.number);
-    if (!version) throw notFound('version');
-    return { document, version, level, rendition: await store.rendition(version.id) };
+    const read = await readDocument(caller, req.params.id);
+    const version = await versionIn(read, req.params.number);
+    return { document: read.document, version, level: read.level, rendition: await store.rendition(version.id) };
   };
 
   const READER_WHY: Partial<Record<ReaderState, string>> = {
@@ -785,6 +819,10 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     const needsYou: HomeItem[] = [];
     if (reaches(libraryLevel(access), 'manage') && floor.kind !== 'personal')
       for (const r of await store.inReview(floor.workspace)) needsYou.push({ id: `${r.document}/${r.number}`, title: r.title, detail: `Version ${r.number} is waiting for review.`, path: `/documents/${r.document}` });
+    for (const p of await place.waiting(caller)) {
+      const what = p.record.kind === 'document' ? (await store.document(p.record.id))?.title : (await store.folder(p.record.id))?.name;
+      if (what) needsYou.push({ id: `placement/${p.id}`, title: what, detail: 'Published up to this floor: give it a place in the library.', path: '/below' });
+    }
     const latest = (await store.changedSince(floor.workspace, since, 30))
       .filter((d) => documentLevel(access, d))
       .slice(0, 10)

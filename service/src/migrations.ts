@@ -178,4 +178,39 @@ export const MIGRATIONS: readonly Migration[] = [
       create index renditions_waiting on renditions (queued_at) where state in ('queued', 'working');
       create index renditions_words on renditions using gin (text_words);`,
   },
+  {
+    id: '004_placements',
+    sql: `
+      -- Publishing up the floors (the spec's section 4, \`@augur/records\` placements): a folder or a document
+      -- put on a floor above its own through a filter of lifecycle states, as a live window onto it. Floors
+      -- are named as placements name them: a team's or someone's own floor by its workspace id, the org as
+      -- \`org\`. A floor that received it may publish it further up (\`via\`), never showing more. Taking one
+      -- back ends it, and every one that came up through it; ended rows stay, for the record.
+      create table placements (
+        id text primary key,
+        -- The floor the record is kept on.
+        workspace_id text not null references floors (workspace_id),
+        record_kind text not null check (record_kind in ('folder', 'document')),
+        record_id text not null,
+        from_floor text not null,
+        to_floor text not null,
+        -- Who on that floor sees it: \`tree:<team>\`, or \`org\`.
+        to_principal text not null,
+        filter text[] not null,
+        via text references placements (id),
+        -- Where its receiving floor's leads put it in their library; none while it waits under From below.
+        landed_folder text references folders (id) on delete set null,
+        note text,
+        placed_by text not null,
+        placed_at timestamptz not null default now(),
+        ended_at timestamptz,
+        ended_by text,
+        ended_reason text
+      );
+      create index placements_record on placements (record_id);
+      create index placements_to on placements (to_floor) where ended_at is null;
+      create index placements_landed on placements (landed_folder) where ended_at is null;
+      -- One live window per record and floor.
+      create unique index placements_live on placements (record_id, to_floor) where ended_at is null;`,
+  },
 ];
