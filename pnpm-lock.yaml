@@ -37,8 +37,8 @@ importers:
         version: '@harry-burton-dev/augur-mfe-sdk@3.0.0(msw@2.15.0(@types/node@22.20.5)(typescript@5.9.3))'
     devDependencies:
       '@augur/app-kit':
-        specifier: npm:@harry-burton-dev/augur-app-kit@^0.15.0
-        version: '@harry-burton-dev/augur-app-kit@0.15.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)'
+        specifier: npm:@harry-burton-dev/augur-app-kit@^0.19.0
+        version: '@harry-burton-dev/augur-app-kit@0.19.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)'
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -388,8 +388,8 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@harry-burton-dev/augur-app-kit@0.15.0':
-    resolution: {integrity: sha512-AIY/1kTFDaoY6qHANLf9TGbwwthrx2Tx7CogqWCxFQRE2IFUByVWVOU9YlBTW7RTW6PoJdaN73anR+oR5qT2jw==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-app-kit/0.15.0/3c9a48391a979b89785fddbb4e45486a9cff5c99}
+  '@harry-burton-dev/augur-app-kit@0.19.0':
+    resolution: {integrity: sha512-CMs6avbtJvB6H3QoolvrZ5CcgJMjfL+KSwz6MpexoE5cHDEpH0l8A5IpBdWzmPag9UH+hYRgvZuxXZH95eYjmw==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-app-kit/0.19.0/afe466ae07748bb250ec7dec9ed0881fe0da9ce2}
     peerDependencies:
       react: ^19.3.1
       react-dom: ^19.3.1
@@ -398,8 +398,8 @@ packages:
     resolution: {integrity: sha512-Zh5+lu80lG5AqXupioeTNSQNPtdifjGverHSUZg5wlg69WmGq34oObAWEE2Kcl9aJk2oA5AMTaI2Quy5Y2cvrw==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-app-tools/0.5.0/f91b6876dafffdf273c1b769fb8ac9095deb7fc8}
     hasBin: true
 
-  '@harry-burton-dev/augur-kit-common@0.13.0':
-    resolution: {integrity: sha512-XkLKuUJlfM36SbfHULOWMyhQtqrglEuebNMGwK85eqvA6qGQPv1A9q9iWnxo5o0zOXm695lJm6Vuk1F1XtxS4w==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-kit-common/0.13.0/1fff51c26fcf22287e057a48faaabbc82c9d9073}
+  '@harry-burton-dev/augur-kit-common@0.15.1':
+    resolution: {integrity: sha512-v/EzxQ8j+hRaLXEtRcD4Da+nxE8/lTGmAYcgAtVg7lBgdH7LEaKXrqdKkyCPUCyCpLBKXrQy86Pn2n56aYTglg==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-kit-common/0.15.1/2c6a020e0cd5811d94d994e22f699febc866d795}
     peerDependencies:
       react: ^19.3.1
       react-dom: ^19.3.1
@@ -408,6 +408,9 @@ packages:
     resolution: {integrity: sha512-hkoWLQXD0mZfJYPHfUu1ALjt9wCZM2FpEBT3FA8t1+nXYLzXxHiZsJmTbfWy6ImLcsymqB+5PbqHAisPAI2yjA==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-mfe-sdk/3.0.0/96cfe78cd7cdbfb67d5b83d4c892f2cce632af9c}
     peerDependencies:
       msw: ^2.0.0 || ^3.0.0
+    peerDependenciesMeta:
+      msw:
+        optional: true
 
   '@harry-burton-dev/augur-service-kit@0.18.0':
     resolution: {integrity: sha512-8wm0GinUcz3g+zsBhLY3bJdN4k2yg4IbMkCy6MMfUUDiIn38v0/u2cYasN4Kt6HaWAHFYD0biVaOj8JCheSo0Q==, tarball: https://npm.pkg.github.com/download/@harry-burton-dev/augur-service-kit/0.18.0/d7f2d740e44a513c4083a8d6b21dc327feac38b3}
@@ -2850,9 +2853,9 @@ snapshots:
       protobufjs: 7.6.6
       yargs: 17.7.3
 
-  '@harry-burton-dev/augur-app-kit@0.15.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@harry-burton-dev/augur-app-kit@0.19.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
-      '@augur/kit-common': '@harry-burton-dev/augur-kit-common@0.13.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)'
+      '@augur/kit-common': '@harry-burton-dev/augur-kit-common@0.15.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)'
       '@internationalized/date': 3.12.4
       '@remote-dom/core': 1.12.1
       '@tanstack/react-query': 5.104.4(@types/react@19.3.0)(react@19.3.1)
@@ -2897,7 +2900,7 @@ snapshots:
       - pg-native
       - supports-color
 
-  '@harry-burton-dev/augur-kit-common@0.13.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@harry-burton-dev/augur-kit-common@0.15.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@fontsource/ibm-plex-mono': 5.2.7
       '@fontsource/instrument-sans': 5.2.8
@@ -2912,6 +2915,7 @@ snapshots:
   '@harry-burton-dev/augur-mfe-sdk@3.0.0(msw@2.15.0(@types/node@22.20.5)(typescript@5.9.3))':
     dependencies:
       '@remote-dom/core': 1.12.1
+    optionalDependencies:
       msw: 2.15.0(@types/node@22.20.5)(typescript@5.9.3)
     transitivePeerDependencies:
       - '@preact/signals-core'
@@ -2955,7 +2959,8 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@inquirer/ansi@2.0.10': {}
+  '@inquirer/ansi@2.0.10':
+    optional: true
 
   '@inquirer/confirm@6.3.5(@types/node@22.20.5)':
     dependencies:
@@ -2963,6 +2968,7 @@ snapshots:
       '@inquirer/type': 4.2.1(@types/node@22.20.5)
     optionalDependencies:
       '@types/node': 22.20.5
+    optional: true
 
   '@inquirer/core@12.0.6(@types/node@22.20.5)':
     dependencies:
@@ -2975,6 +2981,7 @@ snapshots:
       signal-exit: 4.1.0
     optionalDependencies:
       '@types/node': 22.20.5
+    optional: true
 
   '@inquirer/external-editor@1.0.3(@types/node@22.20.5)':
     dependencies:
@@ -2983,11 +2990,13 @@ snapshots:
     optionalDependencies:
       '@types/node': 22.20.5
 
-  '@inquirer/figures@2.0.10': {}
+  '@inquirer/figures@2.0.10':
+    optional: true
 
   '@inquirer/type@4.2.1(@types/node@22.20.5)':
     optionalDependencies:
       '@types/node': 22.20.5
+    optional: true
 
   '@internationalized/date@3.12.4':
     dependencies:
@@ -3037,6 +3046,7 @@ snapshots:
       is-node-process: 1.2.0
       outvariant: 1.4.3
       strict-event-emitter: 0.5.1
+    optional: true
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
@@ -3050,16 +3060,20 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.3
 
-  '@open-draft/deferred-promise@2.2.0': {}
+  '@open-draft/deferred-promise@2.2.0':
+    optional: true
 
-  '@open-draft/deferred-promise@3.0.0': {}
+  '@open-draft/deferred-promise@3.0.0':
+    optional: true
 
   '@open-draft/logger@0.3.0':
     dependencies:
       is-node-process: 1.2.0
       outvariant: 1.4.3
+    optional: true
 
-  '@open-draft/until@2.1.0': {}
+  '@open-draft/until@2.1.0':
+    optional: true
 
   '@opentelemetry/api@1.10.0': {}
 
@@ -3624,8 +3638,10 @@ snapshots:
   '@types/set-cookie-parser@2.4.10':
     dependencies:
       '@types/node': 22.20.5
+    optional: true
 
-  '@types/statuses@2.0.6': {}
+  '@types/statuses@2.0.6':
+    optional: true
 
   '@types/use-sync-external-store@0.0.6': {}
 
@@ -3869,7 +3885,8 @@ snapshots:
 
   cjs-module-lexer@2.3.0: {}
 
-  cli-width@4.1.0: {}
+  cli-width@4.1.0:
+    optional: true
 
   client-only@0.0.1: {}
 
@@ -3891,7 +3908,8 @@ snapshots:
 
   cookie-es@3.1.1: {}
 
-  cookie@1.1.1: {}
+  cookie@1.1.1:
+    optional: true
 
   cookie@2.0.1: {}
 
@@ -4096,11 +4114,13 @@ snapshots:
     dependencies:
       fast-decode-uri-component: 1.0.1
 
-  fast-string-truncated-width@3.0.3: {}
+  fast-string-truncated-width@3.0.3:
+    optional: true
 
   fast-string-width@3.0.2:
     dependencies:
       fast-string-truncated-width: 3.0.3
+    optional: true
 
   fast-uri@3.1.9: {}
 
@@ -4109,6 +4129,7 @@ snapshots:
   fast-wrap-ansi@0.2.2:
     dependencies:
       fast-string-width: 3.0.2
+    optional: true
 
   fastify@5.12.8:
     dependencies:
@@ -4208,7 +4229,8 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  graphql@16.15.0: {}
+  graphql@16.15.0:
+    optional: true
 
   happy-dom@20.14.6:
     dependencies:
@@ -4232,6 +4254,7 @@ snapshots:
     dependencies:
       '@types/set-cookie-parser': 2.4.10
       set-cookie-parser: 3.2.2
+    optional: true
 
   hookified@1.15.1: {}
 
@@ -4284,7 +4307,8 @@ snapshots:
     dependencies:
       is-extglob: 2.1.1
 
-  is-node-process@1.2.0: {}
+  is-node-process@1.2.0:
+    optional: true
 
   is-number@7.0.0: {}
 
@@ -4427,8 +4451,10 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - '@types/node'
+    optional: true
 
-  mute-stream@3.0.0: {}
+  mute-stream@3.0.0:
+    optional: true
 
   nanoid@3.3.20: {}
 
@@ -4457,7 +4483,8 @@ snapshots:
 
   outdent@0.5.0: {}
 
-  outvariant@1.4.3: {}
+  outvariant@1.4.3:
+    optional: true
 
   p-filter@2.1.0:
     dependencies:
@@ -4496,7 +4523,8 @@ snapshots:
 
   path-key@3.1.1: {}
 
-  path-to-regexp@6.3.0: {}
+  path-to-regexp@6.3.0:
+    optional: true
 
   path-type@4.0.0: {}
 
@@ -4769,7 +4797,8 @@ snapshots:
 
   ret@0.5.1: {}
 
-  rettime@0.11.12: {}
+  rettime@0.11.12:
+    optional: true
 
   reusify@1.1.0: {}
 
@@ -4872,11 +4901,13 @@ snapshots:
 
   stackback@0.0.2: {}
 
-  statuses@2.0.2: {}
+  statuses@2.0.2:
+    optional: true
 
   std-env@3.10.0: {}
 
-  strict-event-emitter@0.5.1: {}
+  strict-event-emitter@0.5.1:
+    optional: true
 
   string-width@4.2.3:
     dependencies:
@@ -4898,7 +4929,8 @@ snapshots:
     dependencies:
       copy-anything: 3.0.5
 
-  tagged-tag@1.0.0: {}
+  tagged-tag@1.0.0:
+    optional: true
 
   term-size@2.2.1: {}
 
@@ -4921,11 +4953,13 @@ snapshots:
 
   tinyspy@4.0.6: {}
 
-  tldts-core@7.4.20: {}
+  tldts-core@7.4.20:
+    optional: true
 
   tldts@7.4.19:
     dependencies:
       tldts-core: 7.4.20
+    optional: true
 
   to-regex-range@5.0.1:
     dependencies:
@@ -4936,6 +4970,7 @@ snapshots:
   tough-cookie@6.0.2:
     dependencies:
       tldts: 7.4.19
+    optional: true
 
   ts-api-utils@2.5.0(typescript@5.9.3):
     dependencies:
@@ -4952,6 +4987,7 @@ snapshots:
   type-fest@5.10.0:
     dependencies:
       tagged-tag: 1.0.0
+    optional: true
 
   typebox@1.4.6: {}
 
@@ -4974,7 +5010,8 @@ snapshots:
 
   universalify@0.1.2: {}
 
-  until-async@3.0.2: {}
+  until-async@3.0.2:
+    optional: true
 
   uri-js@4.4.1:
     dependencies:
