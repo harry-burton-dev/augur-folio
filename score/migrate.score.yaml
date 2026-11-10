@@ -1,0 +1,32 @@
+# A job part: runs once per install, to exit 0, before the switch (the app's migrations). It asks for
+# the database itself and gets the same login and schema as the app's other parts.
+apiVersion: score.dev/v1b1
+metadata:
+  name: migrate
+  annotations:
+    augur.dev/part: job
+    augur.dev/ready-seconds: "120"
+containers:
+  migrate:
+    image: .
+    command: ["node", "dist/migrate.js"]
+    variables:
+      DATABASE_HOST: ${resources.db.host}
+      DATABASE_PORT: ${resources.db.port}
+      DATABASE_NAME: ${resources.db.name}
+      DATABASE_USER: ${resources.db.user}
+      DATABASE_SCHEMA: ${resources.db.schema}
+      DATABASE_PASSWORD_FILE: /run/augur/database-password
+    files:
+      /run/augur/database-password:
+        mode: "0400"
+        content: ${resources.db.password}
+    resources:
+      limits:
+        memory: 128Mi
+        cpu: 250m
+resources:
+  db:
+    type: augur-database
+    params:
+      connections: 1

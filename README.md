@@ -1,197 +1,31 @@
-# Folio
+# Artifacts
 
 Part of AUGUR, which is proprietary; see `LICENSE`.
 
-People see Folio as **Artifacts**: that's its name in the manifest and in everything it says to them. Folio stays its id, route, schema, bucket, containers and code name.
+Documents kept for you, your teams and the org: a library on every floor, each version moving through a lifecycle, published up the floors to become the floor's trusted record. Folio stays its code name, id, route and schema; people only ever see **Artifacts**.
 
-AUGUR's first pillar app: libraries of documents on every floor (your own, a team's, the org's), given form by levels (collection › subcollection › series › subseries › file), each version moving through a lifecycle, then published for people to read. Its levels, lifecycles and access rules come from `@augur/records` ([App patterns](https://github.com/harry-burton-dev/augur/blob/main/App patterns, in the AUGUR handbook)). It is built only on the public app contract, like any other app.
-
-Folio keeps every file exactly as it was uploaded, as numbered versions in its own bucket, with its size and SHA-256. It takes PDF, Word (.docx), HTML, Markdown and plain text, up to the manifest's `maxUpload` each (200 MB, or less where an admin lowered it in Admin, Apps); uploads stream straight through to the bucket.
-
-This README is for developers. To use Folio, or run it as an admin, see [the Artifacts guide](https://github.com/harry-burton-dev/augur/blob/main/docs/folio.md).
+It is being rebuilt as an app on the app contract (contract 3): its screen runs in the shell's sandbox and the shell draws it with the kit. The rebuild follows the accepted spec, "Artifacts on contract 3 and Endstate" (in the AUGUR handbook), and its records: Artifacts ADR 0003 and PDR-001, and AUGUR's ADR 0092. This version uses no AI.
 
 | Path | What it is |
 | --- | --- |
-| `manifest.json` | How the registry lists Folio: its name, its route, its menu (kept inside it, `"orbit": false`), floors and the storage it keeps |
-| `frontend/` | The micro frontend the shell mounts at `/folio` (`@apps/folio-frontend`) |
-| `service/` | Folio's API, reached through the gateway at `/api/folio` (`@apps/folio`) |
-| `worker/` | The rendition worker, in Python: makes each version's reader copy with Docling ([its README](worker/README.md)) |
+| `manifest.json` | What the shell draws for the app (places, commands, About sections), its settings, the scopes it asks for and the floors it works on (manifest 3). `$schema` points at the schema in `@augur/app-tools`, so your editor checks it; `pnpm check:app` checks it as the registry will |
+| `score/` | One Score file per part: `web` (the inbound service, with its database, setting and scratch folder) and `migrate` (a job that runs the migrations before each install switches over). Each says what the part asks for and its limits; `image: .` is pinned by digest in the release |
+| `catalog-info.yaml` | The app's entry in Backstage's catalog, written from the manifest and the package.json files by `augur-app catalog`. Don't edit it: CI checks it's current (`pnpm check:catalog`) and Version packages rewrites it |
+| `service/` | The image both parts run (`@apps/folio`): `src/app.ts` its routes and `/healthz`, `src/events.ts` the events pushed to it, `src/migrations.ts` its schema, `src/index.ts` and `src/migrate.ts` what each part starts, each reaching the app's database with the service kit's `appDatabaseFromEnv` (none under `pnpm dev:app`) |
+| `service/src/api-types.ts` | The wire types, written once: the service answers with them, its OpenAPI document describes them and the frontend reads them |
+| `frontend/` | What the shell runs in the app's worker (`@apps/folio-frontend`): `src/entry.ts` its `start(ctx)`, `src/screen.ts` what it draws |
+| `run/index.ts` | Its scenarios for AUGUR's run suite (augur-run): give each a RUN id there when the app joins the proving run |
 
-Run it in a stand-in shell with `pnpm dev:app ../augur-folio` from an AUGUR checkout, with `DATABASE_URL` pointing at a Postgres: the dev stack's (`docker compose -f infra/docker-compose.yml up -d postgres` there) does, and Folio makes its own `folio` schema in it. Without the `S3_*` settings its files live in memory until it restarts, and a stand-in makes reader copies of Markdown and text, as the worker can't reach them; give it a bucket as in [App storage](https://github.com/harry-burton-dev/augur/blob/main/docs/app-storage.md) to keep them. It won't start without `DATABASE_URL`, and in production not without its bucket either.
-
-The service's tests run on real Postgres, never an in-memory copy: CI's check job starts one. Locally, give them a database of their own, because each test file empties the `folio` schema: `DATABASE_URL=postgres://… pnpm test`. Without `DATABASE_URL`, those tests are skipped.
-
-## Shipped with AUGUR
-
-Every deployment runs Folio: the platform release builds its images (`folio`, `folio-worker`), serves its frontend from the front door, and pins its version. It's still an ordinary app. It signs in as itself (`app-folio`, from `FOLIO_CLIENT_SECRET`, which identity makes in Keycloak), keeps its own schema and bucket (from `FOLIO_DATABASE_PASSWORD` and `FOLIO_BUCKET_SECRET`, which the storage container sets up), and registers its manifest each time its service starts, so it's in Admin, Apps with no admin step. The registry knows it as one of `PILLAR_APPS`: it gets the scopes each release asks for, its version comes with the release, and an admin can turn it off, org-wide or floor by floor, but not remove it. The contract tests run with Folio on and off (`platform/contract`).
-
-## Who can do what
-
-A library belongs to the floor it was made on. Everyone who can stand on that floor can read it, from wherever they are: on a team's floor that's its members and those of the teams below it, on the org's everyone, and on your own floor only you. Standing on its floor, they can add to it too, and the floor's leads manage it. Anyone else sees a library or a document only once it has been shared with them.
-
-Whoever manages a library can share it, or one document in it, with a person, a team, a team and the teams below it, or the whole org, and say how far: **read** (read it, download the original), **edit** (also add documents and folders, and change any document; for one document, add versions, retitle and tag it), or **manage** (also share it, and for a library rename and archive it). What's shared appears under "Shared with you" on every floor of theirs, each named by whose floor it comes from: a team's or a person's name from identity's directory, the org by its name. When the directory can't be asked, the page says so and names them by kind. Anyone who can see something can see who else can.
-
-| | Can read | On its floor, or can edit | Can manage (the floor's leads) |
-| --- | --- | --- | --- |
-| See the library, its folders and documents | yes | yes | yes |
-| Download any version's original; read its reader copy | yes | yes | yes |
-| See who else can see it | yes | yes | yes |
-| Make a folder, upload a document, save a view | | yes | yes |
-| Rename or remove a folder | | the ones they made (any, with edit) | any |
-| Add a version, retitle, move, tag or delete a document; ask again for a failed reader copy | | the ones they added (any, with edit) | any |
-| Add a tag to the library | | when it takes free tags | yes |
-| Share it, rename or archive it, keep its tags, rename or delete anyone's views | | | yes |
-
-Folio asks identity who each person stands for (`people:read`): `person:<id>`, `team:<id>` for each team they're on, `tree:<id>` for each of those teams and every team above it, and `org`. Each document's readers (its library's floor and everyone let in) are written down in `folio.readers`, and lists keep to what overlaps. While identity can't be asked, Folio lets nothing through. Under `pnpm dev:app` there's no identity: you stand for yourself, the floor you're on and the org, and you can share with the people Folio has seen.
-
-## Publishing
-
-Whoever manages a document can publish one of its versions to an audience: a team, a team and the teams below it, or the whole org. Everyone in the audience can then read that version, and only that one, from their own floor, even if they can't see the library: it's under "Published to you", and each of them is told, with a **Read** button that opens it. Publishing a document again puts the new version out in place of the old one; withdrawing it takes it back, with a reason if there is one. Every time it was published stays on the record.
-
-A team's leads publish to their team and the teams below it, and the org's leads to any team. Publishing to the whole org, to teams beyond the floor, or from your own floor needs the **publisher** role, which an admin gives in Admin, People. To let one person in, share the document with them instead.
-
-Documents are drafts until they're published, and the list can be narrowed to drafts, published or withdrawn ones.
-
-Folio tells other apps what happened through the platform's events (`events:publish`), from an outbox in its own schema, so an event goes out if and only if the change it tells of was saved: `folio.document.version.created`, `folio.document.published`, `folio.document.withdrawn`, `folio.document.deleted`, `folio.document.readers.changed`, and `folio.record.entity-bound` / `folio.record.entity-unbound` when a library, folder or document is linked to an entity in Data Atlas or unlinked from it (ADR 0025; `{ record: "<library>/<record>", library, level, entity, role, link }`, `level` as in a UnitRef, the shape Mandate uses). They carry ids only, never titles or text. It handles `document.open`: another app opens one of Folio's documents with `openDocument(ctx, ref)`.
-
-A folder can be removed only once it is empty; archiving a library takes it off the floor's list and deletes nothing, and deleting a document takes it out of its library but keeps its files.
-
-## Series
-
-A series is a named run of documents in one library that comes out on a cadence, such as a weekly cash report: weekly, monthly, quarterly, or now and then. It has the tags each issue starts with, and the audience each issue goes to. Whoever manages the library keeps its series; the audience must be one they could publish to.
-
-Each issue is an ordinary document with a number and a period ("Week 43, 2026", "October 2026", "Q4 2026"). Adding the next one takes one file: drop it on the series' page and the series names it ("Cash report: Week 44, 2026"), numbers it, tags it and, when the person adding it may publish to the series' audience, publishes it. Anyone else's issue waits as a draft for whoever manages the library. The next issue is for the period after the last one, but never more than one period behind now, so a series picked up after a break carries on from last period. Periods are in UTC.
-
-Its library's readers and its audience can follow a series, to be told of each issue that's published to them, with a **Read** button; an issue goes only to the followers in its audience, not to everyone in it. When an issue is late (a day after a week ends, three after a month, seven after a quarter), the series' owner, who made it, is told once. The reader shows where an issue comes in its series, with the issues either side that the person may read.
-
-A series with no issues can be removed; one with issues stays, so its issues keep their place.
-
-## Tags, filters and views
-
-Each library has its own tags, and the org has tags every library shares (such as Policy or Finance). The org's tags are kept by the leads on the org's floor. A library's tag can't take an org tag's name, and a new org tag takes in the libraries' tags of its name: their documents and saved views carry the org's tag from then on. Removing a tag takes it off every document and view that had it.
-
-The list can be narrowed by tags (all of those chosen), file type, who added it, when it last changed, whether it's published and which series it's in, and sorted by title, newest, most recently changed or series period. Once a filter is on, the list looks in every folder below where you are. A set of filters can be saved as a view, which goes in the library's side rail for everyone there; "the past month" stays the past month, not the month it was saved.
-
-## Reader copies
-
-Every version gets a reader copy: the rendition worker turns its file into Markdown with [Docling](https://github.com/docling-project/docling), with the pictures it shows, a thumbnail of a PDF's first page, and its words as plain text for search. The original stays as it was; the reader copy is what Folio shows people to read. Each version says how its copy is coming along (`reader.state`: queued, running, ready or failed). A file Docling can't read fails at once with why; anything else (the bucket down, say) is tried again after a minute, then four, and fails after the third try. Whoever may change the document can ask for a failed copy again.
-
-Folio's service queues each version's rendition as a durable job (a [DBOS](https://docs.dbos.dev) workflow, as AUGUR's service kit runs jobs) and the worker runs it, one version at a time, so any number can run side by side; one that stops mid-file carries on where it was. The `renditions` table stays the record of how each copy is coming along ([worker/README.md](worker/README.md)). Under `pnpm dev:app` there's no worker: Markdown and plain text are their own reader copies, and other files say the worker isn't running.
-
-## Reading
-
-Opening a document opens its reader page: the reader copy as a page of text, set in the kit's type and the floor's colours, light or dark. Its headings make the contents down the side, which follow along as you read and take you to a heading in one press. Every heading and paragraph has a stable anchor (`#claims`, `#b12`), so a link can point into a document. A reading bar over the text makes it smaller or larger, and the page wide or narrow; Folio remembers that for you, on that browser. It also remembers where you got to in each version and takes you back there next time. What can be done to the document (download the original, share it or see who can, publish it, publish it up, follow its series, move it to another state, change it) is in its actions: right-click its title, press long on it, or press Actions beside it. Each one you can't do stays there, dimmed, saying why. Move to… lists every state but the one its version is in; the ones it can't go to now say why, and issuing or retiring asks first. The text itself keeps the browser's own menu, for copying. Selecting words in it brings up a small bar just above them: Add to Data Atlas offers them to Data Atlas, and Copy a link copies a link that opens the document at that paragraph. The side panel is About: what the document is, where its version is in its life (a picture, no buttons), how it's published, its series, links, tags and versions (an older one says so, with a way to the newest). Until a version's reader copy is ready, the page says it's being made; if it failed, it says why, and whoever may change the document can try again.
-
-## Home and Find
-
-Folio's card on Home (on every kind of floor) says how much has been published to you since you last opened "Published to you", names the newest of it, and opens it in one press; the floor's leads also see how many drafts are waiting to be published in its libraries. The card counts drafts on the floor it's on and not the teams below, as a lead manages only their own floor's libraries.
-
-Find (`search: true`) asks `GET /v1/search?q=` as you type. It answers with up to ten documents you may read, or that have been published to you, that have every word you typed as the start of a word in their title, their tags or their text, best first: a word in the title counts most, then in a tag, then in the text. Its readers search a document's newest version; its audience searches only the version published to them, and a floor something was published up to searches only the newest version that passes what was published up (its states). The text is the version's own (the rendition worker's), up to its first 400,000 characters. A document in a library on another team's floor you're on opens there; anything else opens where you are.
-
-## Other apps
-
-Folio handles the standard intents, so another app can use its documents without knowing about Folio:
-
-- `document.open` opens a document to read, at the version asked for.
-- `library.open` opens one of its libraries.
-- `document.pick` opens Folio over the asking app as a picker. The person finds a document by what they type (as Find does) or looks through a library on this floor or shared with them, newest first. Only the kinds of file the asking app takes (`accept`) are offered. Folio answers with a `DocumentRef`: the newest version, or for someone who only has a document because it was published to them, the version published to them. Closing the picker cancels the request.
-- `folio.open` `{ path }` opens Folio at a place in it, as its address has it. Its card on Home uses it.
-
-## Keeping deleted documents
-
-A deleted document drops out of sight straight away, but its files stay in the bucket for the retention period: 30 days, or what an admin sets as "Keep deleted documents for" in Admin, Apps, Folio (1 to 3650 days). Once a deleted document is older than that, Folio's service removes every file of it (each version's original, reader copy, thumbnail and pictures) and forgets its text, then records `document.purged` in the activity log; its record stays so the log can still name it. It looks once an hour. While the registry can't say what the period is, nothing is removed. Files go first, so a document whose files couldn't all be removed is tried again next time.
-
-## On the record
-
-Folio writes to the platform's audit log (the `audit:write` scope): a library made or archived, a series made or removed, a document uploaded (with its series and issue number when it's an issue), a version added, a document deleted, published or withdrawn, every change to who it's shared with, and every download of an original. A download is given only once it is on the record: while the audit log can't be reached, downloads wait.
-
-## API
-
-All under `/api/folio/v1`, sent with the floor's `X-Workspace-Id` (`ctx.fetch` adds it).
-
-| | |
-| --- | --- |
-| `GET /levels` | The levels a library is built from (collection › subcollection › series › subseries › file), called what the org calls them, what each may hold, and whether the caller may rename them |
-| `PUT /levels/:level` `{name, plural}`, `DELETE /levels/:level` | Rename a level for the whole org, or give it its own name back (the org's leads, on the org's floor) |
-| `GET /libraries?archived=` | The floor's libraries (its collections), and whether the caller can make one. With `archived=true`, a lead also gets the archived ones |
-| `POST /libraries` `{name, description?}` | A new library (the floor's leads) |
-| `GET /libraries/:id` | A library with its folders, tags (the org's and its own), authors, saved views, series, and what the caller may do there |
-| `PATCH /libraries/:id` `{name?, description?, freeTags?}` | Rename or describe it, or let anyone add tags (leads) |
-| `POST /libraries/:id/archive` | Take it off the floor's list (leads) |
-| `PUT /libraries/:id/state` `{state, note?}` | Move it through its lifecycle: open, closed (nothing new goes in) or archived (whoever manages it). An archived one can be opened again |
-| `GET /libraries/:id/moves?folder=` | Every lifecycle move of the library, or of one of its folders, newest first |
-| `POST /libraries/:id/folders` `{name, parent?, level?, description?}` | A subcollection, series or subseries: at `level`, or the next level down from `parent` (or the top). Refused where that level can't go, and inside anything closed |
-| `PATCH /libraries/:id/folders/:folder` `{name?, description?}` | Rename or describe it |
-| `PUT /libraries/:id/folders/:folder/state` `{state, note?}` | Open, close or archive it (whoever manages the library) |
-| `DELETE /libraries/:id/folders/:folder` | Remove an empty folder |
-| `GET /libraries/:id/documents?folder=&below=&tag=&type=&author=&since=&from=&to=&state=&series=&sort=&limit=&offset=` | The documents in a folder (or at the top), or with `below=true` everything inside it, filtered and sorted, with the `total`. `tag`, `type`, `author` and `state` repeat; `type` is pdf, word, html, markdown or text; `since` is week, month, quarter or year; `state` is draft, published or withdrawn; `series` is one series' issues; `lifecycle` (repeats) is the state of the newest version; `sort` is title, newest, updated or period |
-| `POST /libraries/:id/documents?filename=&title=&folder=&tag=&series=` | Upload a document: the body is the file, its `Content-Type` its type; `tag` repeats. With `series`, it's that series' next issue: named, numbered, tagged and published to its audience when the uploader may (otherwise a draft, with why in `draft`) |
-| `PUT /libraries/:id/documents/:doc/tags` `{tags}` | Give a document exactly these tags |
-| `GET /libraries/:id/documents/:doc` | A document with its versions, newest first, its `state` and what's `published`. To its audience alone: only the version that's out, as `only`. An issue has its `issue` (number and period) and `run`: its series, the issues either side the caller may read, and whether they follow it |
-| `PATCH /libraries/:id/documents/:doc` `{title?, folder?}` | Retitle it, or move it (`folder: null` is the top) |
-| `DELETE /libraries/:id/documents/:doc` | Take it out of the library |
-| `POST /libraries/:id/documents/:doc/versions?filename=` | Its next version, sent as above |
-| `GET /libraries/:id/documents/:doc/versions/:n/original` | Version n's file as it was uploaded |
-| `PUT /libraries/:id/documents/:doc/versions/:n/state` `{state, note?}` | Move version n through its lifecycle: in progress, in review and complete for whoever may change it, issued and retired for whoever manages it. The document's `can.moves` says where its newest version may go |
-| `GET /libraries/:id/documents/:doc/moves` | Every lifecycle move of its versions, newest first |
-| `GET /libraries/:id/documents/:doc/versions/:n/reader` | Its reader copy, as Markdown (409 `not-ready` until it's made) |
-| `GET /libraries/:id/documents/:doc/versions/:n/reader/images/:name` | A picture the reader copy shows (`images/1.png`) |
-| `GET /libraries/:id/documents/:doc/versions/:n/thumbnail`, `…/text` | Its first page as a PNG (PDFs), and its words as plain text |
-| `POST /libraries/:id/documents/:doc/versions/:n/reader/retry` | Ask again for a reader copy that failed |
-| `GET /libraries/:id/access`, `GET /libraries/:id/documents/:doc/access` | Who may see it: its floor, who has been let in (for a document, into it and into its library), the floors it's published up to (`placed`: who each lets in, its filter, and the floors it came up through), and whether the caller may share it |
-| `PUT /libraries/:id/access/:principal` `{level}`, `DELETE …` | Let a person or team into the library that far (read, edit or manage), or take them out (managers). `:principal` is `person:<id>`, `team:<id>`, `tree:<id>` or `org` |
-| `PUT /libraries/:id/documents/:doc/access/:principal` `{level}`, `DELETE …` | The same for one document (whoever manages it) |
-| `GET /libraries/:id/folders/:folder/access` | Who may see a folder: its floor, who has been let into its library, and who into the folder |
-| `PUT /libraries/:id/folders/:folder/access/:principal` `{level}`, `DELETE …` | Let a person or team into a folder and everything inside it, while it stays inside (whoever manages the library). A document's access lists these under `folders` |
-| `GET /people?q=` | People and teams to share with, by name |
-| `GET /shared` | Libraries and documents shared with the caller from other floors |
-| `POST /libraries/:id/documents/:doc/publish` `{version, audience, note?}` | Put a version of a series' issue out to `audience` (`team:<id>`, `tree:<id>` or `org`), in place of what was out, and tell them (whoever manages it). Any other document answers 410 `publish-up`: it's published up the floors (`POST /placements`), and what was published this way before is moved there by itself |
-| `POST /libraries/:id/documents/:doc/withdraw` `{reason?}` | Take back what's out (whoever manages it) |
-| `GET /libraries/:id/documents/:doc/publications` | Every time it was published, newest first, with its audience named, and whether the caller may publish it, and to the org |
-| `GET /published?limit=&offset=` | What's out to the caller now, from any floor, newest first |
-| `POST /placements` `{library, record, to, filter, via?, landing?, note?}` | Publish a record (`record: {kind, id}`, a collection, folder or document) up to a floor above its own (`to`: a team's id or `org`), showing only versions in the `filter`'s lifecycle states. `via` is the step it came up through, and it can show no more than that step. The org needs the publisher role; a step further up comes from the leads of the floor that received it |
-| `GET /placements?library=&record=` | A record's steps up the floors, its owner (the highest floor it reached), and where each person sees it |
-| `PATCH /placements/:id` `{filter}` | Show more or less through a step. Narrowing it narrows every step above it, and ends any left showing nothing |
-| `PUT /placements/:id/landing` `{library, folder?}`, `DELETE …` | Where it sits on the floor that received it (that floor's leads); with none it sits under "From below" |
-| `POST /placements/:id/withdraw` `{reason?}` | Take it back off that floor, and off every floor it went to from there |
-| `GET /placements/:id/above` | The steps that came up through this one, which would go with it if it were taken back: for whoever may take it back |
-| `PUT /libraries/:id/folders/:folder/tags` `{tags}` | A folder's own tags, the org's or the library's: they count for everything inside it when filtering by tag. Whoever may change the folder |
-| `GET /libraries/:id/links?record=` | A library's, folder's or document's links (`record` is its id; the library's own id for the library), the links to it from other records (`back`), the kinds of link, and whether the caller may change them. A linked record the caller can't open stays listed, with `unavailable` saying so |
-| `POST /libraries/:id/links` `{record, relation, to}` | Link a record to another (`to` is a `RecordRef`: `{app, kind, id, label?}`). `relates-to`, `supersedes` and `responds-to` link to Artifacts' own records (`{app: 'folio', kind: 'unit', id: '<library>/<record>'}`), `about` to a thing in Data Atlas, `serves` to an intent in Mandate. Whoever may change the record links it |
-| `DELETE /libraries/:id/links/:link?record=` | Unlink it |
-| `GET /received` | What's been published up to the caller's floor, with where it's landed |
-| `GET /received/:id?folder=` | The documents a received step shows, each at the newest version its filter lets through |
-| `GET /search?q=` | Find's answer: up to ten documents the caller may read or has had published to them (or up to their floor), matching every word by title, tag or text |
-| `GET /find?q=` | The same search for the picker, as whole documents with their `libraryName` and `audienceOnly` (only the version published to them is theirs) |
-| `GET /home` | Home's card: what's been published to the caller since they last looked (`published.new`, the newest three), and for the floor's leads its `drafts` |
-| `PUT /published/looked` | The caller has looked at what's published to them: Home stops counting it as new. The app sends it when "Published to you" opens |
-| `GET /documents/:doc` | Where a document is (`{id, library, title}`), for `document.open`, which gives only its id |
-| `GET /libraries/:id/series` | The library's series, each with the issue it expects next (`next`, with `dueBy` and `overdue`), whether the caller follows it and what they may do |
-| `POST /libraries/:id/series` `{name, cadence, description?, audience?, tags?, parent?, folder?}` | A schedule for a series (whoever manages the library): a new series in `parent` or at the top, or `folder`, a series already there. `cadence` is weekly, monthly, quarterly or adhoc. Issues go in the series |
-| `PATCH /libraries/:id/series/:series` `{name?, cadence?, description?, audience?, tags?}`, `DELETE …` | Change a series, or remove one with no issues (whoever manages the library) |
-| `GET /series/:series` | A series with its audience named, for its library's readers and its audience |
-| `GET /series/:series/issues?limit=&offset=` | The issues the caller may read, newest period first |
-| `PUT /series/:series/follow` `{following}` | Be told of each issue published to you, or stop |
-| `GET /tags` | The org's tags, and whether the caller keeps them |
-| `POST /tags` `{name}`, `PATCH /tags/:tag` `{name}`, `DELETE /tags/:tag` | Keep the org's tags (leads on the org's floor) |
-| `POST /libraries/:id/tags` `{name}` | A tag for the library (leads, or anyone when it takes free tags) |
-| `PATCH /libraries/:id/tags/:tag` `{name}`, `DELETE /libraries/:id/tags/:tag` | Rename or remove one of its tags (leads) |
-| `POST /libraries/:id/views` `{name, query}` | Save a view: `query` is `{folder?, tags?, types?, authors?, since?, sort?, states?, series?}` |
-| `PATCH /libraries/:id/views/:view` `{name?, query?}`, `DELETE /libraries/:id/views/:view` | Change or delete a view (whoever saved it, or leads) |
-
-## In the run suite
-
-`run/index.ts` holds Artifacts' scenarios for AUGUR's run suite (`augur-run`, AUGUR's ADR 0050), which loads it with `--scenarios ../augur-folio/run/index.ts`. RUN-15 proves that publishing up the floors is counted in who can read (alpha Goal 30): an editor publishes a document up from their own floor, someone on that floor finds it under its library's name and opens it, and someone on another floor can do neither and is told why. Each scenario has a row in augur-run's `traceability.md`, which gives out the ids. The module imports nothing, because the suite runs it from source; `pnpm typecheck` checks it.
+`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm check:app` run everything; set
+`NODE_AUTH_TOKEN` first, and for `check:app` also `GITHUB_REPOSITORY` (`owner/repo`, which names the image; CI sets it).
 
 ## Releases
 
-It lives in its own repository and ships with AUGUR: CI here builds, tests, signs and releases it, and each AUGUR release takes the version pinned in AUGUR's `release/shipped-apps.json`.
-
 | Workflow | When | What |
 | --- | --- | --- |
-| CI | Every pull request | Lint, typecheck, test and build; the rendition worker's tests against a real Postgres |
+| CI | Every pull request | Lint, typecheck, test and build, and the manifest, the Score files and the release file they make checked against contract 3 |
 | App previews | A pull request that changes the app | A signed preview its developers can run beside the app |
 | App dev builds | Every merge into main | A signed dev build for preview servers |
-| Release | Merging Version packages | The beta release `app/folio@<version>`, which AUGUR's next release can pin |
+| Release | Merging Version packages | The beta release `app/folio@<version>`, then AUGUR's feed lists it |
 
-Each needs two secrets: `PACKAGES_READ_TOKEN` (reads AUGUR's packages) and `APP_RELEASES_TOKEN` (starts AUGUR's release feed workflow).
+Every pull request carries a changeset (`pnpm changeset`). An empty changeset (`pnpm changeset --empty`) never holds back a release.

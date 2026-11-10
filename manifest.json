@@ -1,110 +1,65 @@
 {
+  "$schema": "./node_modules/@augur/app-tools/manifest-3.schema.json",
   "id": "folio",
   "name": "Artifacts",
-  "route": "/folio",
-  "entry": "/apps/folio/entry.js",
   "version": "0.8.0",
-  "sdk": "^2.1.0",
+  "contract": 3,
   "description": "Documents kept for you, your teams and the org",
   "icon": "library",
-  "category": "pillar",
-  "links": {
-    "entities": true
-  },
-  "bindings": [
-    "record"
-  ],
-  "floors": [
-    "personal",
-    "team",
-    "org"
-  ],
-  "surfaces": [
-    {
-      "floor": "personal",
-      "slot": "card",
-      "module": "./Glance"
-    },
-    {
-      "floor": "team",
-      "slot": "card",
-      "module": "./Glance"
-    },
-    {
-      "floor": "org",
-      "slot": "card",
-      "module": "./Glance"
-    }
-  ],
-  "search": true,
-  "storage": {
-    "database": true,
-    "bucket": true
-  },
-  "scopes": [
-    "audit:write",
-    "people:read",
-    "notifications:send",
-    "events:publish"
-  ],
-  "handles": [
-    "document.open",
-    "document.pick",
-    "library.open",
-    "unit.open",
-    "folio.open"
-  ],
+  "floors": ["personal", "team", "org"],
+  "frontend": { "entry": "sandbox.js" },
+  "api": { "openapi": "openapi.json" },
   "maxUpload": 200,
-  "settings": [
-    {
-      "id": "retentionDays",
-      "label": "Keep deleted documents for",
-      "detail": "After this, a deleted document’s files and text are removed for good. The activity log still names it.",
-      "type": "integer",
-      "unit": "days",
-      "min": 1,
-      "max": 3650,
-      "default": 30
-    }
-  ],
-  "previews": [
-    {
-      "id": "lit-path",
-      "name": "The lit path",
-      "detail": "As you open a library or folder, the path in the side rail draws itself down to where you are."
-    }
-  ],
-  "orbit": false,
-  "menu": [
-    {
-      "id": "libraries",
-      "label": "Libraries",
-      "icon": "folder",
-      "items": [
-        {
-          "id": "all",
-          "label": "All libraries",
-          "icon": "list",
-          "path": "/libraries",
-          "detail": "Everything kept on this floor",
-          "keywords": "documents folders shelves"
-        },
-        {
-          "id": "published",
-          "label": "Published to you",
-          "icon": "inbox",
-          "path": "/published",
-          "detail": "What’s been put out to you, newest first",
-          "keywords": "new inbox notices read"
-        },
-        {
-          "id": "new",
-          "label": "New library",
-          "icon": "plus",
-          "path": "/libraries/new",
-          "keywords": "create add shelf"
-        }
+  "scopes": ["audit:write", "events:publish", "people:read", "notifications:send", "inbox:write"],
+  "contributes": {
+    "places": [
+      { "id": "home", "label": "Home", "icon": "home", "detail": "What needs you, and what’s new", "path": "/" },
+      { "id": "library", "label": "Library", "icon": "library", "detail": "This floor’s documents", "fills": true },
+      { "id": "shared", "label": "Shared with you", "icon": "people", "detail": "Documents other floors let you read" },
+      { "id": "below", "label": "From below", "icon": "inbox", "detail": "What floors below published up to this one", "floors": ["team", "org"] }
+    ],
+    "commands": [
+      { "id": "document.add", "label": "Add a document", "icon": "upload", "keywords": "upload new file" },
+      { "id": "document.open", "label": "Open", "icon": "document", "when": "selection" },
+      { "id": "document.review", "label": "Ask for review", "icon": "check", "when": "selection", "keywords": "review manager" },
+      { "id": "document.move", "label": "Move to…", "icon": "arrow", "when": "selection", "keywords": "lifecycle state issue retire" },
+      { "id": "document.publish", "label": "Publish up", "icon": "publish", "when": "selection", "keywords": "floor publish up" },
+      { "id": "document.share", "label": "Share", "icon": "people", "when": "selection", "keywords": "share read only people team" },
+      { "id": "document.about", "label": "Say what it’s about", "icon": "atlas", "when": "selection", "keywords": "entity about knowledge" },
+      { "id": "document.download", "label": "Download the original", "icon": "download", "when": "selection" },
+      { "id": "folder.new", "label": "New folder", "icon": "folder-plus", "keywords": "folder collection" },
+      { "id": "collection.new", "label": "New collection", "icon": "library", "keywords": "collection" }
+    ],
+    "radial": [
+      { "command": "document.open", "on": "document", "order": 0 },
+      { "command": "document.move", "on": "document", "order": 1 },
+      { "command": "document.publish", "on": "document", "order": 2 },
+      { "command": "document.share", "on": "document", "order": 3 },
+      { "command": "document.about", "on": "document", "order": 4 },
+      { "command": "document.download", "on": "document", "order": 5 },
+      { "command": "folder.new", "on": "folder", "order": 0 },
+      { "command": "folder.new", "on": "collection", "order": 0 }
+    ],
+    "about": [
+      { "id": "lifecycle", "label": "Lifecycle", "icon": "series" },
+      { "id": "place", "label": "Where it is", "icon": "folder" },
+      { "id": "access", "label": "Who can open it", "icon": "lock" },
+      { "id": "floors", "label": "Up the floors", "icon": "org" },
+      { "id": "links", "label": "Links", "icon": "link" }
+    ],
+    "settings": [
+      { "id": "retentionDays", "label": "Keep deleted documents for", "detail": "After this, a deleted document’s files and text are removed for good. The activity log still names it.", "type": "number", "unit": "days", "min": 1, "max": 3650, "default": 30 }
+    ],
+    "intents": { "handles": ["document.open", "document.pick"] },
+    "notifications": {
+      "kinds": [
+        { "id": "published", "label": "Published to your floor", "detail": "A floor below published a document up to one of yours" },
+        { "id": "shared", "label": "Shared with you", "detail": "Someone let you read a document" },
+        { "id": "issue", "label": "New issue of a series you follow", "detail": "A series you follow has a new issue" }
       ]
-    }
-  ]
+    },
+    "inbox": { "kinds": [{ "id": "review", "label": "Review a document", "detail": "A version waits for you to review it" }] },
+    "search": true,
+    "card": true
+  }
 }

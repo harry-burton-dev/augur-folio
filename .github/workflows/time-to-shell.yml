@@ -1,0 +1,86 @@
+name: Time to the shell
+# Alpha goal 6: a new repository from this template runs in AUGUR's dev shell within 15 minutes. This times
+# the machine's part of that path, as README "A new app in 15 minutes" walks it: a copy of this template is
+# named, installed and tested, then AUGUR's stand-in shell (`pnpm dev:app`) is started beside it and asked
+# for the app's page and its service's health. Each step's time goes in the run's summary, and the run fails
+# past 15 minutes. A person's reading and typing come on top; that part is timed by hand (PER-280).
+# Run by hand only (Actions → Time to the shell), so it costs no minutes on pull requests.
+on:
+  workflow_dispatch:
+    inputs:
+      augur-ref:
+        description: The AUGUR branch or tag to run the shell from
+        default: main
+permissions:
+  contents: read
+  packages: read
+jobs:
+  time:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_ID: timecheck
+      LIMIT_MINUTES: 15
+    steps:
+      - name: Package token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
+        run: |
+          t=$(printf %s "$PACKAGES_TOKEN" | tr -d '\r\n' | sed 's/^\xef\xbb\xbf//')
+          echo "::add-mask::$t"
+          echo "NODE_AUTH_TOKEN=$t" >> "$GITHUB_ENV"
+          echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      # The repository a person gets from "Use this template", beside a checkout of AUGUR.
+      - uses: actions/checkout@v4
+        with:
+          path: augur-timecheck
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/augur
+          ref: ${{ inputs.augur-ref }}
+          path: augur
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: augur-timecheck/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: augur-timecheck/.nvmrc
+      - name: Name it, install and test (README step 2)
+        working-directory: augur-timecheck
+        run: |
+          node scripts/make-app.mjs "$APP_ID" --name "Time check"
+          pnpm install
+          pnpm test
+          echo "NAMED=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Run it in the shell (README step 3)
+        working-directory: augur
+        run: |
+          pnpm install --frozen-lockfile
+          INIT_CWD="$PWD" nohup pnpm dev:app ../augur-timecheck > "$RUNNER_TEMP/dev-app.log" 2>&1 &
+          for _ in $(seq 1 180); do
+            page=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:5173/$APP_ID" || true)
+            service=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8090/healthz" || true)
+            if [ "$page" = 200 ] && [ "$service" = 200 ]; then
+              echo "UP=$(date +%s)" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::The shell didn't serve /$APP_ID with its service healthy within 15 minutes of starting. The end of its log:"
+          tail -n 60 "$RUNNER_TEMP/dev-app.log"
+          exit 1
+      - name: How long it took
+        if: always()
+        run: |
+          mins() { [ -n "$1" ] && echo "$(( ($1 - STARTED + 59) / 60 )) min" || echo "not reached"; }
+          {
+            echo "### Time to the shell"
+            echo
+            echo "| Step | Minutes from the start |"
+            echo "| --- | --- |"
+            echo "| Named, installed and tested | $(mins "$NAMED") |"
+            echo "| The app's page and service answer in the dev shell | $(mins "$UP") |"
+            echo
+            echo "Limit: $LIMIT_MINUTES minutes (alpha goal 6), on top of which a person reads and types."
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -n "$UP" ] && [ $(( UP - STARTED )) -le $(( LIMIT_MINUTES * 60 )) ] || { echo "::error::Over $LIMIT_MINUTES minutes, or the shell never came up."; exit 1; }

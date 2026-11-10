@@ -1,0 +1,40 @@
+name: Name the app
+# Run once, by Backstage's "New AUGUR app" template, in a repository it has just made from this template:
+# the same as `pnpm make-app <id> --name <name>` by hand (README), committed to main. Once the app has its
+# name, scripts/make-app.mjs is gone and this does nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: The app's id (its route and API prefix)
+        required: true
+      name:
+        description: The app's name, as people see it
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: name-app
+jobs:
+  name:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Name it
+        env:
+          APP_ID: ${{ inputs.id }}
+          APP_NAME: ${{ inputs.name }}
+        run: |
+          if [ ! -f scripts/make-app.mjs ]; then
+            echo "::notice::This app already has its name; nothing to do."
+            exit 0
+          fi
+          node scripts/make-app.mjs "$APP_ID" --name "$APP_NAME"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Make this the $APP_NAME app ($APP_ID)"
+          git push

@@ -1,9 +1,11 @@
 name: Release
 # On main: Changesets keeps a "Version packages" pull request open while changes wait to be released.
-# Merging it moves the app's version; this workflow then builds, pushes and signs the app's bundle and
-# makes the GitHub release app/<id>@<version> with its app-release.json (@augur/app-tools, augur-app).
-# Deployments trust it because AUGUR's release/app-repos.json names this repository for this app, and the
-# signature names this workflow on main (ADR 0047 in the AUGUR repository). Every release starts as a beta.
+# Merging it moves the app's version; this workflow then builds, pushes and signs the app's image and
+# frontend bundle (augur-app bundle) and makes the GitHub release app/<id>@<version> with its
+# app-release.json: release v2, each part's image pinned by digest, and the asks an admin agrees to
+# (augur-app release publish).
+# Deployments trust it when their admin lists this repository in APP_PUBLISHERS, and the signature names
+# this workflow on main (ADR 0047 in the AUGUR repository). Every release starts as a beta.
 on:
   push:
     branches: [main]
@@ -17,6 +19,8 @@ permissions:
   id-token: write # cosign keyless: the signature names this workflow
 jobs:
   release:
+    # The template itself releases nothing: an app made from it does.
+    if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-latest
     steps:
       # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
@@ -80,7 +84,7 @@ jobs:
         run: |
           pnpm build && pnpm release-out
           pnpm exec augur-app bundle beta > "$RUNNER_TEMP/bundle.json"
-          pnpm exec augur-app publish "$RUNNER_TEMP/bundle.json"
+          pnpm exec augur-app release publish "$RUNNER_TEMP/bundle.json"
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TARGET: ${{ github.sha }}

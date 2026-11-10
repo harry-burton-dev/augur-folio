@@ -1,0 +1,65 @@
+# The inbound part: the service the gateway sends /api/<id>/* to (AUGUR's app contract, section 4).
+# It gets only what its resources give it: no addresses of AUGUR's services, no .env. Every secret
+# arrives as a file; its filesystem is read-only except /tmp and its scratch folder.
+apiVersion: score.dev/v1b1
+metadata:
+  name: web
+  annotations:
+    augur.dev/part: service
+    augur.dev/ready-seconds: "60"
+service:
+  ports:
+    http:
+      port: 8080
+containers:
+  web:
+    # The release build pins the image it pushed, by digest.
+    image: .
+    variables:
+      PORT: "8080"
+      GATEWAY_URL: ${resources.gateway.url}
+      CALLER_KEYS_URL: ${resources.gateway.caller_keys_url}
+      DATABASE_HOST: ${resources.db.host}
+      DATABASE_PORT: ${resources.db.port}
+      DATABASE_NAME: ${resources.db.name}
+      DATABASE_USER: ${resources.db.user}
+      DATABASE_SCHEMA: ${resources.db.schema}
+      DATABASE_CONNECTIONS: ${resources.db.connections}
+      DATABASE_PASSWORD_FILE: /run/augur/database-password
+      RETENTION_DAYS: ${resources.settings.retentionDays}
+      SCRATCH_DIR: /scratch
+    files:
+      /run/augur/database-password:
+        mode: "0400"
+        content: ${resources.db.password}
+    volumes:
+      /scratch:
+        source: ${resources.scratch}
+    resources:
+      limits:
+        memory: 256Mi
+        cpu: 500m
+      requests:
+        memory: 96Mi
+        cpu: 50m
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+resources:
+  gateway:
+    type: augur-gateway
+    params:
+      inbound: true
+  db:
+    type: augur-database
+    params:
+      connections: 5
+  settings:
+    type: augur-settings
+    params:
+      ids: [retentionDays]
+  scratch:
+    type: augur-scratch
+    params:
+      size: 64Mi

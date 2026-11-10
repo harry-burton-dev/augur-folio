@@ -3,5 +3,3 @@ dist/
 out/
 *.tsbuildinfo
 .env
-__pycache__/
-*.egg-info/

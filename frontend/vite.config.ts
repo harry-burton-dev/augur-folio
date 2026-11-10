@@ -1,18 +1,27 @@
 import { isSharedModule } from '@augur/mfe-sdk/build';
-import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vitest/config';
+import { defineConfig, type Plugin } from 'vitest/config';
+import manifest from '../manifest.json';
 
-// One ES module at dist/entry.js: the registry's entry URL for Folio. React, the
-// kits and Lit stay external; the shell serves them to every app through its
-// import map. The new layout's Tailwind stylesheet is inlined and added to the
-// page when it mounts.
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  build: {
-    lib: { entry: 'src/entry.tsx', formats: ['es'], fileName: () => 'entry.js' },
-    target: 'es2022',
-    rollupOptions: { external: isSharedModule },
+// One ES module, the manifest's `frontend.entry` (dist/sandbox.js), which the shell serves from
+// /apps/<id>/<version>/ and runs in a web worker of the app's own: no DOM, no network, no token. The
+// worker has no import map, so everything the entry imports is bundled into it, and React and the
+// kits, which only the shell's page has, can't be imported at all: the app draws Quill's remote
+// elements by name instead (`@augur/app-kit/remote` has their props, as types).
+const pageOnly = (): Plugin => ({
+  name: 'page-only-modules',
+  enforce: 'pre',
+  resolveId(id) {
+    if (isSharedModule(id)) {
+      this.error(`${id} is only on the shell's page, and ${manifest.name}'s frontend runs in a worker: draw Quill's remote elements by name (\`@augur/app-kit/remote\`).`);
+    }
   },
-  test: { environment: 'happy-dom' },
+});
+
+export default defineConfig({
+  plugins: [pageOnly()],
+  build: {
+    lib: { entry: 'src/entry.ts', formats: ['es'], fileName: () => manifest.frontend.entry },
+    target: 'es2022',
+  },
+  test: { environment: 'node' },
 });

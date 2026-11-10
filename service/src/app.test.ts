@@ -1,103 +1,120 @@
-import { callerCheckFor, callerHeaders, callerSigner, signedCallerHeaders, type Caller } from '@augur/service-kit';
+import {
+  CALLER_TOKEN_HEADER,
+  callerAudienceOf,
+  callerCheckFor,
+  callerHeaders,
+  callerOfService,
+  callerSigner,
+  eventDeliveryKey,
+  IDEMPOTENCY_KEY_HEADER,
+  packageVersion,
+  PART_EVENTS_PATH,
+  readManifest,
+  signDelegation,
+  signedCallerHeaders,
+  type DomainEvent,
+} from '@augur/service-kit';
 import { describe, expect, it } from 'vitest';
-import { buildApp } from './app.ts';
-import { DATABASE_URL, folioDb } from './db.testing.ts';
+import { buildApp, retentionDaysOf } from './app.ts';
+import { memoryEvents } from './events.ts';
 
-const db = folioDb();
+const manifest = readManifest(import.meta.url);
+const sam = { id: 'u1', name: 'Sam Okafor', departments: [], roles: [], workspace: { id: 'ws-team', kind: 'team' as const, role: 'member' as const } };
+// The gateway's address inside the deployment: not loopback, which the service kit believes as it comes.
+const fromGateway = '172.18.0.9';
 
-const sam: Caller = { id: 'u-sam', name: 'Sam Okafor', departments: [], roles: [] };
-const alex: Caller = { id: 'u-alex', name: 'Alex Rivera', departments: [], roles: [] };
-const lead = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { id: floor, kind: 'team', role: 'lead' } });
-const member = (who: Caller, floor = 'w-fin'): Caller => ({ ...who, workspace: { id: floor, kind: 'team', role: 'member' } });
-
-const setup = async () => {
-  const app = await buildApp({ store: db.store });
-  const call = (caller: Caller | undefined, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
-    app.inject({ method, url, headers: caller ? callerHeaders(caller) : {}, ...(payload ? { payload } : {}) });
-  return { app, call };
+/** The app as it runs behind the gateway: it believes only a caller the gateway signed for `app-<id>` (`callerAudienceOf`, on contract 3). */
+const behindGateway = async () => {
+  const gateway = callerSigner();
+  const kept = memoryEvents();
+  const app = await buildApp({ manifest, callers: callerCheckFor(gateway, callerAudienceOf(manifest)), events: kept });
+  return { app, gateway, kept };
 };
 
-describe.runIf(DATABASE_URL)('folio', () => {
-  it('reports healthy', async () => {
-    const app = await buildApp({ store: db.store });
-    const res = await app.inject({ method: 'GET', url: '/healthz' });
+/** The caller the gateway signs when the shell calls the app for a person (contract 3): the person, with the app and its scopes. */
+const delegated = async (gateway: ReturnType<typeof callerSigner>) => ({
+  [CALLER_TOKEN_HEADER]: await signDelegation(gateway, sam, { app: manifest.id, scopes: (manifest.scopes as string[] | undefined) ?? [] }),
+});
+
+const event: DomainEvent = { seq: '41', topic: 'platform.team.renamed', id: 'e41', publisher: 'identity', at: '2026-11-09T09:00:00Z', payload: { team: 'ws-team' } };
+
+describe('the service', () => {
+  it('answers /healthz with its release, with no one calling', async () => {
+    const { app } = await behindGateway();
+    const res = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ status: 'ok', service: 'folio', version: expect.stringMatching(/^\d+\.\d+\.\d+/), api: 'v1' });
+    expect(res.json()).toMatchObject({ status: 'ok', version: packageVersion(import.meta.url), api: 'v1' });
   });
 
-  it('needs someone signed in, on a floor', async () => {
-    const { call } = await setup();
-    expect((await call(undefined, 'GET', '/v1/libraries')).statusCode).toBe(401);
-    const off = await call(sam, 'GET', '/v1/libraries');
-    expect(off.statusCode).toBe(400);
-    expect(off.json()).toMatchObject({ error: 'floor_needed', reason: 'floor_needed' });
-  });
-
-  it('believes only the caller the gateway signed for it', async () => {
-    const gateway = callerSigner();
-    const app = await buildApp({ store: db.store, callers: callerCheckFor(gateway, 'folio') });
-    const signed = await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/libraries', headers: await signedCallerHeaders(gateway, lead(sam), 'folio') });
-    expect(signed.statusCode).toBe(200);
-    const forged = await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/libraries', headers: callerHeaders(lead(sam)) });
+  it('refuses Home to a caller nobody signed, as a problem details body', async () => {
+    const { app } = await behindGateway();
+    const unsigned = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/v1/home' });
+    expect(unsigned.statusCode).toBe(401);
+    expect(unsigned.headers['content-type']).toMatch(/application\/problem\+json/);
+    // Plain x-user-* headers are anyone's word: dropped, so nobody is calling.
+    const forged = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/v1/home', headers: callerHeaders(sam) });
     expect(forged.statusCode).toBe(401);
   });
 
-  it('lets a floor’s leads make libraries, and everyone on it see them', async () => {
-    const { call } = await setup();
-    expect((await call(member(alex), 'POST', '/v1/libraries', { name: 'Policies' })).statusCode).toBe(403);
-    const made = await call(lead(sam), 'POST', '/v1/libraries', { name: '  Policies ', description: 'How we work' });
-    expect(made.statusCode).toBe(201);
-    expect(made.json()).toMatchObject({ name: 'Policies', description: 'How we work', workspace: 'w-fin', createdBy: 'u-sam' });
-    expect((await call(lead(sam), 'POST', '/v1/libraries', { name: 'policies' })).statusCode).toBe(409);
-    expect((await call(lead(sam), 'POST', '/v1/libraries', { name: '   ' })).statusCode).toBe(400);
-    const seen = await call(member(alex), 'GET', '/v1/libraries');
-    expect(seen.json()).toMatchObject({ libraries: [{ name: 'Policies' }], can: { create: false } });
-    expect((await call(lead(sam), 'GET', '/v1/libraries')).json().can).toEqual({ create: true });
+  it('answers Home for the floor the gateway signed, with nothing on it yet', async () => {
+    const { app, gateway } = await behindGateway();
+    const res = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/v1/home', headers: await delegated(gateway) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ floor: { id: 'ws-team', kind: 'team' }, needsYou: [], latest: [] });
   });
 
-  it('keeps a library to its own floor', async () => {
-    const { call } = await setup();
-    const { id } = (await call(lead(sam), 'POST', '/v1/libraries', { name: 'Policies' })).json();
-    expect((await call(lead(sam, 'w-legal'), 'GET', '/v1/libraries')).json().libraries).toEqual([]);
-    expect((await call(lead(sam, 'w-legal'), 'GET', `/v1/libraries/${id}`)).statusCode).toBe(404);
-    expect((await call(lead(sam, 'w-legal'), 'PATCH', `/v1/libraries/${id}`, { name: 'Mine now' })).statusCode).toBe(404);
-    expect((await call(lead(sam, 'w-legal'), 'POST', `/v1/libraries/${id}/folders`, { name: 'Sneaky' })).statusCode).toBe(404);
+  it('refuses a caller signed for another service', async () => {
+    const { app, gateway } = await behindGateway();
+    const res = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: '/v1/home', headers: await signedCallerHeaders(gateway, sam, 'identity') });
+    expect(res.statusCode).toBe(401);
   });
 
-  it('opens a library with its folders and what the caller may do there', async () => {
-    const { call } = await setup();
-    const { id } = (await call(lead(sam), 'POST', '/v1/libraries', { name: 'Policies' })).json();
-    const hr = (await call(member(alex), 'POST', `/v1/libraries/${id}/folders`, { name: 'HR' })).json();
-    expect((await call(member(alex), 'POST', `/v1/libraries/${id}/folders`, { name: 'Leave', parent: hr.id })).statusCode).toBe(201);
-    expect((await call(member(alex), 'POST', `/v1/libraries/${id}/folders`, { name: 'a/b' })).statusCode).toBe(400);
-    expect((await call(member(alex), 'POST', `/v1/libraries/${id}/folders`, { name: 'X', parent: 'nope' })).json().error).toBe('bad-parent');
-    const opened = await call(member(alex), 'GET', `/v1/libraries/${id}`);
-    expect(opened.json()).toMatchObject({ name: 'Policies', can: { manage: false, addFolders: true } });
-    expect(opened.json().folders.map((f: { name: string }) => f.name)).toEqual(['HR', 'Leave']);
+  it('keeps deleted documents for the days the admin gave, else the manifest’s default, and stops on a bad one', () => {
+    const declared = (manifest.contributes as { settings: { id: string; default: number }[] }).settings.find((s) => s.id === 'retentionDays')!;
+    expect(retentionDaysOf(manifest, {})).toBe(declared.default);
+    expect(retentionDaysOf(manifest, { RETENTION_DAYS: '90' })).toBe(90);
+    expect(() => retentionDaysOf(manifest, { RETENTION_DAYS: '0' })).toThrow(/whole number of days/);
+    expect(() => retentionDaysOf(manifest, { RETENTION_DAYS: '2.5' })).toThrow(/whole number of days/);
   });
 
-  it('lets leads rename and archive a library', async () => {
-    const { call } = await setup();
-    const { id } = (await call(lead(sam), 'POST', '/v1/libraries', { name: 'Policies' })).json();
-    expect((await call(member(alex), 'PATCH', `/v1/libraries/${id}`, { name: 'Rules' })).statusCode).toBe(403);
-    expect((await call(lead(sam), 'PATCH', `/v1/libraries/${id}`, {})).statusCode).toBe(400);
-    expect((await call(lead(sam), 'PATCH', `/v1/libraries/${id}`, { name: 'Rules' })).json().name).toBe('Rules');
-    expect((await call(member(alex), 'POST', `/v1/libraries/${id}/archive`)).statusCode).toBe(403);
-    expect((await call(lead(sam), 'POST', `/v1/libraries/${id}/archive`)).statusCode).toBe(204);
-    expect((await call(lead(sam), 'GET', `/v1/libraries/${id}`)).statusCode).toBe(404);
+  it('serves its OpenAPI document where the manifest says', async () => {
+    const { app } = await behindGateway();
+    const res = await app.inject({ remoteAddress: fromGateway, method: 'GET', url: `/${(manifest.api as { openapi: string }).openapi}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ openapi: expect.stringMatching(/^3\./), info: { title: manifest.name, version: packageVersion(import.meta.url) } });
+    expect(Object.keys(res.json().paths)).toContain('/v1/home');
+  });
+});
+
+describe('events AUGUR pushes to the part', () => {
+  const deliver = async (app: Awaited<ReturnType<typeof buildApp>>, headers: Record<string, string>) =>
+    app.inject({ remoteAddress: fromGateway, method: 'POST', url: PART_EVENTS_PATH, headers, payload: event });
+
+  it('keeps each event once, however often it is delivered', async () => {
+    const { app, gateway, kept } = await behindGateway();
+    const headers = { ...(await signedCallerHeaders(gateway, callerOfService('events'), callerAudienceOf(manifest))), [IDEMPOTENCY_KEY_HEADER]: eventDeliveryKey(event) };
+    const first = await deliver(app, headers);
+    const again = await deliver(app, headers);
+    expect(first.statusCode).toBe(204);
+    expect(again.statusCode).toBe(204);
+    expect(kept.all()).toEqual([{ key: eventDeliveryKey(event), event }]);
   });
 
-  it('lets whoever made a folder, or a lead, rename or remove it, once it is empty', async () => {
-    const { call } = await setup();
-    const { id } = (await call(lead(sam), 'POST', '/v1/libraries', { name: 'Policies' })).json();
-    const mine = (await call(member(alex), 'POST', `/v1/libraries/${id}/folders`, { name: 'Drafts' })).json();
-    const theirs = (await call(lead(sam), 'POST', `/v1/libraries/${id}/folders`, { name: 'HR' })).json();
-    await call(lead(sam), 'POST', `/v1/libraries/${id}/folders`, { name: 'Leave', parent: theirs.id });
-    expect((await call(member(alex), 'PATCH', `/v1/libraries/${id}/folders/${theirs.id}`, { name: 'Mine' })).statusCode).toBe(403);
-    expect((await call(member(alex), 'PATCH', `/v1/libraries/${id}/folders/${mine.id}`, { name: 'HR' })).statusCode).toBe(409);
-    expect((await call(member(alex), 'PATCH', `/v1/libraries/${id}/folders/${mine.id}`, { name: 'Notes' })).json().name).toBe('Notes');
-    expect((await call(lead(sam), 'DELETE', `/v1/libraries/${id}/folders/${theirs.id}`)).json().error).toBe('not-empty');
-    expect((await call(lead(sam), 'DELETE', `/v1/libraries/${id}/folders/${mine.id}`)).statusCode).toBe(204);
-    expect((await call(lead(sam), 'DELETE', `/v1/libraries/${id}/folders/${mine.id}`)).statusCode).toBe(404);
+  it('takes events only from AUGUR’s events service', async () => {
+    const { app, gateway, kept } = await behindGateway();
+    const key = { [IDEMPOTENCY_KEY_HEADER]: eventDeliveryKey(event) };
+    const person = await deliver(app, { ...(await delegated(gateway)), ...key });
+    const another = await deliver(app, { ...(await signedCallerHeaders(gateway, callerOfService('identity'), callerAudienceOf(manifest))), ...key });
+    const nobody = await deliver(app, key);
+    const malformed = await app.inject({ remoteAddress: fromGateway, method: 'POST', url: PART_EVENTS_PATH, headers: { ...(await delegated(gateway)), ...key }, payload: { nothing: true } });
+    expect([person.statusCode, another.statusCode, nobody.statusCode, malformed.statusCode]).toEqual([403, 403, 401, 403]);
+    expect(kept.all()).toEqual([]);
+  });
+
+  it('needs the idempotency key to keep an event once', async () => {
+    const { app, gateway, kept } = await behindGateway();
+    const res = await deliver(app, await signedCallerHeaders(gateway, callerOfService('events'), callerAudienceOf(manifest)));
+    expect(res.statusCode).toBe(400);
+    expect(kept.all()).toEqual([]);
   });
 });

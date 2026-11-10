@@ -1,7 +1,2 @@
 *
 !out/
-# The rendition worker's image (worker/Dockerfile) is built from the repository root too.
-!worker/pyproject.toml
-!worker/requirements.lock
-!worker/folio_worker/
-**/__pycache__
