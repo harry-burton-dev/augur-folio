@@ -9,15 +9,17 @@ It is being rebuilt as an app on the app contract (contract 3): its screen runs 
 | Path | What it is |
 | --- | --- |
 | `manifest.json` | What the shell draws for the app (places, commands, About sections), its settings, the scopes it asks for and the floors it works on (manifest 3). `$schema` points at the schema in `@augur/app-tools`, so your editor checks it; `pnpm check:app` checks it as the registry will |
-| `score/` | One Score file per part: `web` (the inbound service, with its database, setting and scratch folder) and `migrate` (a job that runs the migrations before each install switches over). Each says what the part asks for and its limits; `image: .` is pinned by digest in the release |
+| `score/` | One Score file per part: `web` (the inbound service, with its database, bucket, sign-in through the gateway, setting and scratch folder) and `migrate` (a job that runs the migrations before each install switches over). Each says what the part asks for and its limits; `image: .` is pinned by digest in the release |
 | `catalog-info.yaml` | The app's entry in Backstage's catalog, written from the manifest and the package.json files by `augur-app catalog`. Don't edit it: CI checks it's current (`pnpm check:catalog`) and Version packages rewrites it |
-| `service/` | The image both parts run (`@apps/folio`): `src/app.ts` its routes and `/healthz`, `src/events.ts` the events pushed to it, `src/migrations.ts` its schema, `src/index.ts` and `src/migrate.ts` what each part starts, each reaching the app's database with the service kit's `appDatabaseFromEnv` (none under `pnpm dev:app`) |
+| `service/` | The image both parts run (`@apps/folio`): `src/app.ts` builds it and serves `/healthz`, `src/library.ts` the library's routes, `src/access.ts` who may do what, `src/store.ts` and `src/migrations.ts` the store and its schema, `src/objects.ts` the bucket, `src/platform.ts` the Inbox and the gateway, `src/events.ts` the events pushed to it, `src/index.ts` and `src/migrate.ts` what each part starts, each reaching the app's database with the service kit's `appDatabaseFromEnv` (none under `pnpm dev:app`) |
 | `service/src/api-types.ts` | The wire types, written once: the service answers with them, its OpenAPI document describes them and the frontend reads them |
 | `frontend/` | What the shell runs in the app's worker (`@apps/folio-frontend`): `src/entry.ts` its `start(ctx)`, `src/screen.ts` what it draws |
 | `run/index.ts` | Its scenarios for AUGUR's run suite (augur-run): give each a RUN id there when the app joins the proving run |
 
 `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm check:app` run everything; set
 `NODE_AUTH_TOKEN` first, and for `check:app` also `GITHUB_REPOSITORY` (`owner/repo`, which names the image; CI sets it).
+The store's tests run on Postgres: set `DATABASE_URL` to a database of your own (each test file makes and drops a
+schema of its own in it); without it they are skipped. CI gives them one.
 
 ## Releases
 
