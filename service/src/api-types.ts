@@ -97,6 +97,8 @@ export interface DocumentView {
   latest: VersionView;
   /** The newest Issued version, which is what readers get, when there is one. */
   issued?: VersionView;
+  /** Where the caller's one place for it is, when that is a floor above this one: a signpost there. */
+  placed?: Signpost;
 }
 
 /** A move from one lifecycle state to another, on the record. */
@@ -127,6 +129,10 @@ export interface FolderAnswer {
   rights: Rights;
   /** What a folder made in it would be, and what else it may be. */
   holds: UnitLevel[];
+  /** What floors below published up here that the floor's leads put in this folder. */
+  received: ReceivedItem[];
+  /** Where the caller's one place for this folder is, when that is a floor above. */
+  placed?: Signpost;
 }
 
 /** `GET /v1/folders/:id/documents`: a page of what's in it. */
@@ -146,6 +152,114 @@ export interface DocumentAnswer {
   rights: Rights;
   /** For each version's state, where it can go from there, and why not when it can't. */
   next: { to: ContentState; allowed: boolean; why?: string }[];
+  /** When the caller reads it only because it was published up to a floor of theirs: which, and the one version that lets them see. */
+  reached?: { placement: string; floor: FloorView; version: number };
+}
+
+/** A floor as publishing up names it: a team's or someone's own floor by its id, the org as `org`. */
+export interface FloorView {
+  id: string;
+  kind: FloorKind;
+  name: string;
+  /** How high it sits: the org 0, a team how deep it is, someone's own floor lowest. */
+  rank: number;
+}
+
+export type RecordKind = 'folder' | 'document';
+
+/** What a placement shows: a folder (and all in it) or a document. */
+export interface RecordRef {
+  kind: RecordKind;
+  id: string;
+  name: string;
+  level: UnitLevel;
+}
+
+/** A record published up to a floor, through a filter of lifecycle states. */
+export interface PlacementView {
+  id: string;
+  record: RecordRef;
+  from: FloorView;
+  to: FloorView;
+  filter: ContentState[];
+  /** The placement it came up through, when a floor that received it published it on. */
+  via?: string;
+  /** Where the receiving floor put it in its library; none while it waits under From below. */
+  landed?: { folder: string; name: string };
+  note?: string;
+  by: string;
+  byName?: string;
+  at: string;
+  ended?: { at: string; by: string; reason?: string };
+  /** What the caller may do with it, and why not. */
+  can: { withdraw: boolean; land: boolean; why?: string };
+}
+
+/** A floor a record could be published up to, or why not. */
+export interface PublishTarget {
+  from: FloorView;
+  to: FloorView;
+  /** Publishing on from a floor that received it: that placement, and the most it may show. */
+  via?: string;
+  most?: ContentState[];
+  why?: string;
+}
+
+/** `GET /v1/placements?record=`: where a record is, who owns it, every step up, and where it could go next. */
+export interface PlacementsAnswer {
+  record: RecordRef;
+  /** The floor it is kept on. */
+  own: FloorView;
+  /** The highest floor it has reached, or its own. */
+  owner: FloorView;
+  placements: PlacementView[];
+  targets: PublishTarget[];
+}
+
+/** A pointer from a floor below to where something's one place is. */
+export interface Signpost {
+  placement: string;
+  to: FloorView;
+  /** Where it sits there, when its leads gave it a place. */
+  landed?: string;
+}
+
+/** Something published up to this floor, as From below and a folder that holds it show it. */
+export interface ReceivedItem {
+  placement: PlacementView;
+  /** The states the caller sees of it here, with every floor of theirs counted. */
+  states: ContentState[];
+  /** For a document, the version the caller sees, when one passes. */
+  version?: VersionView;
+}
+
+/** A folder on this floor a received record may be put in. */
+export interface LandingPlace {
+  id: string;
+  /** Its path, `Procedures › Berths`. */
+  label: string;
+  level: FolderLevel;
+}
+
+/** `GET /v1/received`: what floors below published up to this one. */
+export interface ReceivedAnswer {
+  /** Waiting for a place here, or put somewhere on this floor. */
+  here: ReceivedItem[];
+  /** Ones whose place for the caller is a floor higher up. */
+  signposts: (Signpost & { record: RecordRef })[];
+  /** Where the floor's leads may put things; empty for anyone else. */
+  places: LandingPlace[];
+}
+
+/** `GET /v1/received/:id?folder=`: inside a folder published up here. */
+export interface ReceivedFolderAnswer {
+  placement: PlacementView;
+  folder: { id: string; name: string; level: FolderLevel };
+  /** From the published folder down to this one. */
+  path: PathStep[];
+  folders: FolderView[];
+  documents: (DocumentView & { version: VersionView })[];
+  states: ContentState[];
 }
 
 export interface TagView {

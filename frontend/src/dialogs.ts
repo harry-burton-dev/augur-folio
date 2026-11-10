@@ -1,7 +1,7 @@
 import { CONTENT_LIFECYCLE } from '@augur/records';
 import type { RemoteNode } from '@augur/mfe-sdk/sdk3';
-import type { ContentState, FolderLevel, GrantView, LevelInfo, Level, PeopleAnswer } from '../../service/src/api-types.js';
-import { levelName } from './library.js';
+import type { ContentState, FolderLevel, GrantView, LandingPlace, LevelInfo, Level, PeopleAnswer, PlacementsAnswer, RecordKind } from '../../service/src/api-types.js';
+import { floorName, levelName, statesLine } from './library.js';
 import { quill } from './screen.js';
 
 /**
@@ -22,7 +22,13 @@ export type Dialog =
   | { kind: 'folder'; parent?: string; levels: FolderLevel[]; error?: string }
   | { kind: 'add'; into: { folder: string; name: string } | { document: string; title: string }; error?: string; busy?: boolean }
   | { kind: 'move'; document: string; version: number; options: { to: ContentState; allowed: boolean; why?: string }[]; error?: string }
-  | { kind: 'share'; document: string; title: string; grants: GrantView[]; found?: PeopleAnswer; chosen: Principal[]; error?: string };
+  | { kind: 'share'; document: string; title: string; grants: GrantView[]; found?: PeopleAnswer; chosen: Principal[]; error?: string }
+  /** `target` is a target's key (`targetKey`); `filter` the states ticked. */
+  | { kind: 'publish'; record: { kind: RecordKind; id: string }; title: string; answer: PlacementsAnswer; target?: string; filter: ContentState[]; error?: string }
+  | { kind: 'land'; placement: string; title: string; places: LandingPlace[]; current?: string; error?: string };
+
+/** Which floor a publish target goes to, and from which placement when it goes on up. */
+export const targetKey = (t: { to: { id: string }; via?: string }) => `${t.to.id}${t.via ? `|${t.via}` : ''}`;
 
 export interface DialogOn {
   close: () => void;
@@ -33,6 +39,11 @@ export interface DialogOn {
   unshare: (principal: string) => void;
   query: (q: string) => void;
   choose: (chosen: Principal[]) => void;
+  publish: (note?: string) => void;
+  target: (key: string) => void;
+  filter: (states: ContentState[]) => void;
+  withdraw: (placement: string) => void;
+  land: (folder?: string) => void;
 }
 
 const field = (node: ReturnType<typeof quill>) => ({ ...node, props: { ...node.props, slot: 'fields' } });
@@ -113,6 +124,99 @@ export const dialogFor = (dialog: Dialog | undefined, levels: readonly LevelInfo
         ],
       );
     }
+    case 'publish': {
+      const { answer } = dialog;
+      const target = answer.targets.find((t) => targetKey(t) === dialog.target);
+      const most = target?.most;
+      const live = answer.placements.filter((p) => !p.ended);
+      return quill(
+        'quill-dialog',
+        {
+          ...common,
+          heading: `Publish “${dialog.title}” up`,
+          summary: 'The floor you choose sees it, live, in the states you tick: what changes here shows there. Nothing is copied.',
+          actionLabel: 'Publish up',
+          size: 'read',
+          onSubmit: (values: Record<string, string>) => on.publish(values.note || undefined),
+        },
+        [
+          field(
+            quill('quill-details', {
+              items: [
+                { label: 'Kept on', value: answer.own.name },
+                { label: 'Owned by', value: answer.owner.name, note: 'The highest floor it has reached owns it.' },
+              ],
+            }),
+          ),
+          field(
+            quill('quill-choice', {
+              label: 'Up to',
+              name: 'to',
+              ...(dialog.target ? { value: dialog.target } : {}),
+              options: answer.targets.map((t) => ({
+                value: targetKey(t),
+                label: t.to.name,
+                ...(t.via ? { detail: `On up from ${floorName(t.from)}, which was shown ${statesLine(t.most ?? []).toLowerCase()}` } : {}),
+                ...(t.why ? { disabled: true, reason: t.why } : {}),
+              })),
+              onChange: on.target,
+            }),
+          ),
+          field(
+            quill('quill-checkbox-group', {
+              label: 'They see',
+              name: 'filter',
+              value: dialog.filter,
+              hint: 'Complete and Issued at first: what’s finished.',
+              options: CONTENT_LIFECYCLE.states.map((st) => ({
+                value: st.id,
+                label: st.name,
+                detail: st.meaning,
+                ...(most && !most.includes(st.id) ? { disabled: true, reason: 'A floor can’t show more than it was shown.' } : {}),
+              })),
+              onChange: (values: string[]) => on.filter(values as ContentState[]),
+            }),
+          ),
+          field(quill('quill-text-field', { label: 'Note', name: 'note', optional: true, multiline: true, rows: 2, maxLength: 500, hint: 'Sent to the floor with it.' })),
+          live.length
+            ? quill('quill-list', {
+                label: 'Published up to',
+                noun: ['floor', 'floors'],
+                density: 'compact',
+                items: live.map((p) => ({
+                  id: p.id,
+                  title: p.to.name,
+                  detail: `Shows ${statesLine(p.filter).toLowerCase()}${p.landed ? ` · in ${p.landed.name}` : ''}`,
+                  ...(p.can.withdraw ? { actions: [{ id: 'withdraw', label: 'Take it back' }] } : {}),
+                })),
+                onAction: ({ item }: { item: string; action: string }) => on.withdraw(item),
+              })
+            : null,
+        ],
+      );
+    }
+    case 'land':
+      return quill(
+        'quill-dialog',
+        {
+          ...common,
+          heading: `Give “${dialog.title}” a place`,
+          summary: 'Where it sits in this floor’s library. It is still kept, and changed, on the floor that published it.',
+          actionLabel: 'Put it there',
+          size: 'decision',
+          onSubmit: (values: Record<string, string>) => on.land(values.folder || undefined),
+        },
+        [
+          field(
+            quill('quill-choice', {
+              label: 'In',
+              name: 'folder',
+              value: dialog.current ?? dialog.places[0]?.id ?? '',
+              options: [...dialog.places.map((pl) => ({ value: pl.id, label: pl.label, detail: levelName(levels, pl.level) })), { value: '', label: 'Leave it under From below' }],
+            }),
+          ),
+        ],
+      );
     case 'share':
       return quill(
         'quill-dialog',

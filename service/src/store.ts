@@ -141,6 +141,27 @@ export interface DocumentQuery {
 export const MAX_PAGE = 200;
 export const MAX_SEARCH_WORDS = 8;
 
+/** A folder or document put on a floor above its own (migration 004). Floors as placements name them. */
+export interface PlacementRecord {
+  id: string;
+  /** The floor the record is kept on. */
+  workspace: string;
+  record: { kind: 'folder' | 'document'; id: string };
+  from: string;
+  to: string;
+  toPrincipal: string;
+  filter: ContentState[];
+  via?: string;
+  /** The folder on the receiving floor it was put in; none while it waits under From below. */
+  landed?: string;
+  note?: string;
+  by: string;
+  at: string;
+  ended?: { at: string; by: string; reason?: string };
+}
+
+export class PlacedError extends Error {}
+
 export class NameTakenError extends Error {}
 export class NotEmptyError extends Error {}
 export class GoneError extends Error {}
@@ -694,6 +715,59 @@ export class Store {
     const { rowCount } = await this.pool.query(`update renditions set state = 'queued', tries = 0, why = null, queued_at = now(), finished_at = null where version_id = $1 and state = 'failed'`, [version]);
     return rowCount === 1;
   }
+
+  // Publishing up
+
+  async place(input: Omit<PlacementRecord, 'id' | 'at' | 'ended'>): Promise<PlacementRecord> {
+    const id = newId('p');
+    try {
+      await this.pool.query(
+        `insert into placements (id, workspace_id, record_kind, record_id, from_floor, to_floor, to_principal, filter, via, landed_folder, note, placed_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [id, input.workspace, input.record.kind, input.record.id, input.from, input.to, input.toPrincipal, input.filter, input.via ?? null, input.landed ?? null, input.note ?? null, input.by],
+      );
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new PlacedError('It’s already on that floor.');
+      throw err;
+    }
+    return (await this.placement(id))!;
+  }
+
+  async placement(id: string): Promise<PlacementRecord | undefined> {
+    const { rows } = await this.pool.query('select * from placements where id = $1', [id]);
+    return rows[0] ? placementOf(rows[0]) : undefined;
+  }
+
+  /** Every placement of these records, taken back or not, oldest first. */
+  async placementsOf(records: readonly string[]): Promise<PlacementRecord[]> {
+    if (!records.length) return [];
+    const { rows } = await this.pool.query('select * from placements where record_id = any($1) order by placed_at, id', [[...new Set(records)]]);
+    return rows.map(placementOf);
+  }
+
+  /** What is on a floor through publishing up, live, newest first. */
+  async placementsTo(floor: string, limit = 200): Promise<PlacementRecord[]> {
+    const { rows } = await this.pool.query('select * from placements where to_floor = $1 and ended_at is null order by placed_at desc limit $2', [floor, limit]);
+    return rows.map(placementOf);
+  }
+
+  /** What a floor's leads put in one of its folders. */
+  async landedIn(folder: string): Promise<PlacementRecord[]> {
+    const { rows } = await this.pool.query('select * from placements where landed_folder = $1 and ended_at is null order by placed_at desc limit 200', [folder]);
+    return rows.map(placementOf);
+  }
+
+  async landPlacement(id: string, folder: string | null) {
+    await this.pool.query('update placements set landed_folder = $2 where id = $1 and ended_at is null', [id, folder]);
+    return this.placement(id);
+  }
+
+  /** Takes these back, once each. */
+  async endPlacements(ids: readonly string[], by: string, reason?: string): Promise<PlacementRecord[]> {
+    const { rows } = await this.pool.query('update placements set ended_at = now(), ended_by = $2, ended_reason = $3 where id = any($1) and ended_at is null returning *', [[...ids], by, reason ?? null]);
+    return rows.map(placementOf);
+  }
+
 }
 
 const renditionOf = (r: DatabaseRow): RenditionRecord => ({
@@ -716,4 +790,20 @@ const grantOf = (r: DatabaseRow): GrantRecord => ({
   level: r.level as Level,
   createdBy: r.created_by as string,
   createdAt: iso(r.created_at),
+});
+
+const placementOf = (r: DatabaseRow): PlacementRecord => ({
+  id: r.id as string,
+  workspace: r.workspace_id as string,
+  record: { kind: r.record_kind as 'folder' | 'document', id: r.record_id as string },
+  from: r.from_floor as string,
+  to: r.to_floor as string,
+  toPrincipal: r.to_principal as string,
+  filter: r.filter as ContentState[],
+  ...(r.via ? { via: r.via as string } : {}),
+  ...(r.landed_folder ? { landed: r.landed_folder as string } : {}),
+  ...(r.note ? { note: r.note as string } : {}),
+  by: r.placed_by as string,
+  at: iso(r.placed_at),
+  ...(r.ended_at ? { ended: { at: iso(r.ended_at), by: r.ended_by as string, ...(r.ended_reason ? { reason: r.ended_reason as string } : {}) } } : {}),
 });

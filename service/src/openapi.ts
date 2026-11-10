@@ -24,6 +24,11 @@ const ROUTES: Record<string, Record<string, string>> = {
   '/shared': { get: 'What other floors have shared with the caller (SharedItem)' },
   '/people': { get: 'People and teams to share with (PeopleAnswer)' },
   '/search': { get: 'Find: the floor’s documents whose title matches, best first, at most ten' },
+  '/placements': { get: 'Where a folder or document is up the floors, who owns it, and where it could go next (PlacementsAnswer)', post: 'Publish it up to a floor above, through a filter of states (PlacementView)' },
+  '/placements/{id}/landing': { put: 'Where it sits on the floor it went to, by that floor’s leads; no folder puts it back under From below' },
+  '/placements/{id}/withdraw': { post: 'Take it back, and every step that went on up through it' },
+  '/received': { get: 'From below: what floors below published up to this one, each in one place (ReceivedAnswer)' },
+  '/received/{id}': { get: 'Inside a folder published up here, at the states it shows (ReceivedFolderAnswer)' },
 };
 
 /**

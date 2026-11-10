@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { Problem, appServer, floorCaller, packageVersion, readManifest, serviceFastifyOptions, type AppAudit, type AppManifest, type AppPeople, type CallerCheck, type Jobs } from '@augur/service-kit';
+import { Problem, appServer, floorCaller, packageVersion, readManifest, serviceFastifyOptions, type AppAudit, type AppManifest, type AppNotify, type AppPeople, type CallerCheck, type Jobs } from '@augur/service-kit';
 import { memoryEvents, partEvents, type EventsKept } from './events.ts';
 import { libraryRoutes } from './library.ts';
 import { MemoryObjectStore, type ObjectStore } from './objects.ts';
@@ -46,6 +46,8 @@ export interface Options {
   people?: AppPeople;
   inbox?: Inbox;
   audit?: AppAudit;
+  /** Tells people as the app (`notifications:send`); startAppService passes it in. */
+  notify?: AppNotify;
   /** The most one upload may be, in bytes: the manifest's `maxUpload` unless a test says less. */
   maxUploadBytes?: number;
   env?: Record<string, string | undefined>;
@@ -63,6 +65,7 @@ export const buildApp = async ({
   people,
   inbox = memoryInbox(),
   audit = async () => undefined,
+  notify = async () => undefined,
   maxUploadBytes = uploadLimitOf(manifest),
   env = process.env,
 }: Options = {}) => {
@@ -78,7 +81,7 @@ export const buildApp = async ({
 
   await app.register(
     async (app) => {
-      if (store) await libraryRoutes(app, { manifest, store, objects, ...(people ? { people } : {}), inbox, audit, maxUploadBytes });
+      if (store) await libraryRoutes(app, { manifest, store, objects, ...(people ? { people } : {}), inbox, audit, notify, maxUploadBytes });
       else
         // Nothing to keep documents in: every route says so, rather than answering as if the floor were empty.
         app.all('/*', async (req) => {
