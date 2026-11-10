@@ -10,6 +10,7 @@ import type {
   Home,
   LevelInfo,
   LibraryAnswer,
+  LinksAnswer,
   PeopleAnswer,
   PlacementsAnswer,
   PlacementView,
@@ -70,7 +71,13 @@ export const startArtifacts = (ctx: AppContext) => {
   const actions = (): FrameAction[] => {
     if (route.kind === 'library' && library.kind === 'answered')
       return [{ command: 'collection.new', ...unavailable(`Only the floor’s leads make collections.`, library.value.rights.manage) }];
-    if (route.kind === 'folder' && folder.kind === 'answered') return [{ command: 'document.add', ...unavailable(folder.value.folder.rights.why, folder.value.folder.rights.add) }];
+    if (route.kind === 'folder' && folder.kind === 'answered') {
+      const { rights, follow } = folder.value.folder;
+      return [
+        { command: 'document.add', ...unavailable(rights.why, rights.add) },
+        ...(follow ? [{ command: 'series.follow', label: follow.following ? 'Stop following' : 'Follow' }] : []),
+      ];
+    }
     if (route.kind === 'document' && doc.kind === 'answered') {
       const { rights } = doc.value.answer;
       return [
@@ -78,6 +85,7 @@ export const startArtifacts = (ctx: AppContext) => {
         { command: 'document.share', ...unavailable(rights.why, rights.share) },
         { command: 'document.download' },
         { command: 'document.add', label: 'Add a version', ...unavailable(rights.why, rights.add) },
+        { command: 'document.link', ...unavailable(doc.value.links?.can.why, Boolean(doc.value.links?.can.change)) },
         { command: 'document.publish', ...unavailable(publishWhy(doc.value.placements), Boolean(doc.value.placements?.targets.some((t) => !t.why))) },
       ];
     }
@@ -173,7 +181,8 @@ export const startArtifacts = (ctx: AppContext) => {
       else if (section.id === 'place') root.render(placeAbout(data, ctx.workspace));
       else if (section.id === 'access') root.render(accessAbout(data, ctx.workspace, () => void share()));
       else if (section.id === 'floors') root.render(floorsAbout(data, ctx.workspace, () => void publish()));
-      else if (section.id === 'links') root.render(linksAbout());
+      else if (section.id === 'links')
+        root.render(linksAbout(data, { link: () => void link(), open: (id) => go({ kind: 'document', id }), unlink: (id) => void unlink(id) }));
     }
   };
 
@@ -217,13 +226,14 @@ export const startArtifacts = (ctx: AppContext) => {
       const answer = await api.get<DocumentAnswer>(`/documents/${encodeURIComponent(id)}`);
       const version = shownVersion(answer, number);
       if (!version) throw new Error(`This document has no version ${number}.`);
-      const [reader, grants, placements] = await Promise.all([
+      const [reader, grants, placements, links] = await Promise.all([
         api.get<ReaderAnswer>(`/documents/${encodeURIComponent(id)}/versions/${version.number}/reader`),
         answer.rights.share ? api.get<{ grants: GrantView[] }>(`/grants?kind=document&record=${encodeURIComponent(id)}`).then((g) => g.grants) : Promise.resolve([]),
         api.get<PlacementsAnswer>(`/placements?kind=document&record=${encodeURIComponent(id)}`).catch(() => undefined),
+        api.get<LinksAnswer>(`/documents/${encodeURIComponent(id)}/links`).catch(() => undefined),
       ]);
       if (at !== turn) return;
-      doc = { kind: 'answered', value: { answer, version, reader, grants, ...(placements ? { placements } : {}) } };
+      doc = { kind: 'answered', value: { answer, version, reader, grants, ...(placements ? { placements } : {}), ...(links ? { links } : {}) } };
       if (reader.state === 'queued' || reader.state === 'working') watchReader(id, version.number, at, 0);
     } catch (err) {
       if (at !== turn) return;
@@ -481,6 +491,44 @@ export const startArtifacts = (ctx: AppContext) => {
     draw();
   };
 
+  /** The Link dialog, for the document on screen or the one the radial menu was opened on. */
+  const link = async (detail?: unknown) => {
+    const answer = await documentFor(detail);
+    if (!answer) return;
+    let links: LinksAnswer;
+    try {
+      links = doc.kind === 'answered' && doc.value.answer.document.id === answer.document.id && doc.value.links ? doc.value.links : await api.get<LinksAnswer>(`/documents/${encodeURIComponent(answer.document.id)}/links`);
+    } catch (err) {
+      return say('Its links couldn’t be asked for.', whyOf(err));
+    }
+    if (!links.can.change) return say('You can’t link this.', links.can.why);
+    dialog = { kind: 'link', document: answer.document.id, title: answer.document.title, kinds: links.kinds, relation: links.kinds.find((k) => k.available)?.id ?? 'relates-to' };
+    draw();
+  };
+
+  const unlink = async (id: string) => {
+    if (doc.kind !== 'answered') return;
+    try {
+      await api.send('DELETE', `/documents/${encodeURIComponent(doc.value.answer.document.id)}/links/${encodeURIComponent(id)}`);
+      say('The link is off.');
+    } catch (err) {
+      return say('The link couldn’t be taken off.', whyOf(err));
+    }
+    await refresh();
+  };
+
+  const follow = async () => {
+    if (route.kind !== 'folder' || folder.kind !== 'answered' || !folder.value.folder.follow) return say('Open a series to follow it.');
+    const f = folder.value.folder;
+    try {
+      await api.send('PUT', `/folders/${encodeURIComponent(f.folder.id)}/follow`, { on: !f.follow!.following });
+      say(f.follow!.following ? `You no longer follow ${f.folder.name}.` : `You follow ${f.folder.name}.`, f.follow!.following ? undefined : 'You’re told each time one of its documents is Issued.');
+    } catch (err) {
+      return say('That couldn’t be changed.', whyOf(err));
+    }
+    await refresh();
+  };
+
   const readAgain = async () => {
     if (doc.kind !== 'answered') return;
     const { answer, version } = doc.value;
@@ -583,6 +631,40 @@ export const startArtifacts = (ctx: AppContext) => {
         const { withdrawn } = await api.send<{ withdrawn: { name: string }[] }>('POST', `/placements/${encodeURIComponent(placement)}/withdraw`, {});
         say(`Took “${dialog.title}” back.`, withdrawn.length > 1 ? `It went from ${withdrawn.map((f) => f.name).join(', ')}.` : undefined);
       }),
+    link: () =>
+      void working(async () => {
+        if (dialog?.kind !== 'link') return;
+        const d = dialog;
+        if (!d.to) throw new Error('Find the document to link it to, and choose it.');
+        await api.send('POST', `/documents/${encodeURIComponent(d.document)}/links`, { relation: d.relation, to: { id: d.to } });
+        say(`Linked “${d.title}”.`);
+      }),
+    linkRelation: (relation: string) => {
+      if (dialog?.kind === 'link') dialog = { ...dialog, relation };
+    },
+    linkQuery: (q: string) =>
+      void (async () => {
+        if (dialog?.kind !== 'link') return;
+        const query = q.trim();
+        if (!query) {
+          dialog = { ...dialog, query: '', found: [] };
+          return draw();
+        }
+        let found: { id: string; title: string; detail?: string }[] = [];
+        try {
+          found = (await api.get<{ results: { id: string; title: string; detail?: string }[] }>(`/search?q=${encodeURIComponent(query)}`)).results;
+        } catch (err) {
+          if (dialog?.kind === 'link') dialog = { ...dialog, error: whyOf(err) };
+        }
+        if (dialog?.kind === 'link') {
+          const chosen = dialog.to;
+          dialog = { ...dialog, query, found, to: found.some((f) => f.id === chosen) ? chosen : undefined };
+        }
+        draw();
+      })(),
+    linkTo: (to: string) => {
+      if (dialog?.kind === 'link') dialog = { ...dialog, to };
+    },
     land: (folderId?: string) =>
       void working(async () => {
         if (dialog?.kind !== 'land') return;
@@ -606,6 +688,8 @@ export const startArtifacts = (ctx: AppContext) => {
     'document.download': (detail) => download(detail),
     'document.publish': (detail) => publish(detail),
     'folder.publish': (detail) => publish(detail),
+    'document.link': (detail) => link(detail),
+    'series.follow': () => follow(),
     'document.about': () => say('Saying what a document is about comes in the next version of Artifacts.'),
     'folder.new': (detail) => newFolder((detail as { thing?: { id?: string } } | undefined)?.thing?.id),
     'collection.new': () => newFolder(undefined, true),

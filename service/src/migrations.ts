@@ -213,4 +213,31 @@ export const MIGRATIONS: readonly Migration[] = [
       -- One live window per record and floor.
       create unique index placements_live on placements (record_id, to_floor) where ended_at is null;`,
   },
+  {
+    id: '005_links_follows',
+    sql: `
+      -- Links from a document to another record (\`@augur/records\` relations): another document here, or, for
+      -- \`about\` and \`serves\`, a thing another app keeps. Kept by the floor of the document they start from.
+      create table links (
+        id text primary key,
+        workspace_id text not null references floors (workspace_id),
+        from_document text not null references documents (id),
+        relation text not null,
+        to_app text not null,
+        to_kind text not null,
+        to_id text not null,
+        to_label text,
+        linked_by text not null,
+        linked_at timestamptz not null default now()
+      );
+      create unique index links_one on links (from_document, relation, to_app, to_id);
+      create index links_to on links (to_app, to_id);
+      -- Who follows a series (the spec's D6): each is told when one of its documents is Issued.
+      create table follows (
+        folder_id text not null references folders (id) on delete cascade,
+        person text not null,
+        followed_at timestamptz not null default now(),
+        primary key (folder_id, person)
+      );`,
+  },
 ];

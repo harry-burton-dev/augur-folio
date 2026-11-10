@@ -1,6 +1,6 @@
 import { CONTENT_LIFECYCLE } from '@augur/records';
 import type { RemoteNode } from '@augur/mfe-sdk/sdk3';
-import type { ContentState, FolderLevel, GrantView, LandingPlace, LevelInfo, Level, PeopleAnswer, PlacementsAnswer, RecordKind } from '../../service/src/api-types.js';
+import type { ContentState, FolderLevel, GrantView, LandingPlace, LevelInfo, Level, LinkKind, PeopleAnswer, PlacementsAnswer, RecordKind } from '../../service/src/api-types.js';
 import { floorName, levelName, statesLine } from './library.js';
 import { quill } from './screen.js';
 
@@ -25,7 +25,9 @@ export type Dialog =
   | { kind: 'share'; document: string; title: string; grants: GrantView[]; found?: PeopleAnswer; chosen: Principal[]; error?: string }
   /** `target` is a target's key (`targetKey`); `filter` the states ticked. */
   | { kind: 'publish'; record: { kind: RecordKind; id: string }; title: string; answer: PlacementsAnswer; target?: string; filter: ContentState[]; error?: string }
-  | { kind: 'land'; placement: string; title: string; places: LandingPlace[]; current?: string; error?: string };
+  | { kind: 'land'; placement: string; title: string; places: LandingPlace[]; current?: string; error?: string }
+  /** `found` is what Find answered for `query`; `relation` and `to` what's chosen so far. */
+  | { kind: 'link'; document: string; title: string; kinds: LinkKind[]; relation: string; query?: string; found?: { id: string; title: string; detail?: string }[]; to?: string; error?: string };
 
 /** Which floor a publish target goes to, and from which placement when it goes on up. */
 export const targetKey = (t: { to: { id: string }; via?: string }) => `${t.to.id}${t.via ? `|${t.via}` : ''}`;
@@ -44,6 +46,10 @@ export interface DialogOn {
   filter: (states: ContentState[]) => void;
   withdraw: (placement: string) => void;
   land: (folder?: string) => void;
+  link: () => void;
+  linkRelation: (relation: string) => void;
+  linkQuery: (q: string) => void;
+  linkTo: (document: string) => void;
 }
 
 const field = (node: ReturnType<typeof quill>) => ({ ...node, props: { ...node.props, slot: 'fields' } });
@@ -191,6 +197,39 @@ export const dialogFor = (dialog: Dialog | undefined, levels: readonly LevelInfo
                 })),
                 onAction: ({ item }: { item: string; action: string }) => on.withdraw(item),
               })
+            : null,
+        ],
+      );
+    }
+    case 'link': {
+      const found = (dialog.found ?? []).filter((d) => d.id !== dialog.document);
+      return quill(
+        'quill-dialog',
+        {
+          ...common,
+          heading: `Link “${dialog.title}” to…`,
+          summary: 'Another document on this floor. Both show the link, each read its own way.',
+          actionLabel: 'Link them',
+          size: 'decision',
+          onSubmit: () => on.link(),
+        },
+        [
+          field(
+            quill('quill-choice', {
+              label: 'How',
+              name: 'relation',
+              value: dialog.relation,
+              options: dialog.kinds.map((k) => ({ value: k.id, label: k.name, detail: `Read back as “${k.inverse}”`, ...(k.available ? {} : { disabled: true, reason: k.why ?? 'It can’t be made here.' }) })),
+              onChange: on.linkRelation,
+            }),
+          ),
+          field(quill('quill-text-field', { label: 'Find the document', name: 'q', type: 'search', placeholder: 'Words in its title', ...(dialog.query ? { value: dialog.query } : {}), onCommit: on.linkQuery, onChange: on.linkQuery })),
+          dialog.query
+            ? field(
+                found.length
+                  ? quill('quill-choice', { label: 'Which', name: 'to', ...(dialog.to ? { value: dialog.to } : {}), options: found.map((d) => ({ value: d.id, label: d.title, ...(d.detail ? { detail: d.detail } : {}) })), onChange: on.linkTo })
+                  : quill('quill-state', { kind: 'empty', heading: `No document here has “${dialog.query}” in its title.`, size: 'line' }),
+              )
             : null,
         ],
       );
