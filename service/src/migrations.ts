@@ -150,4 +150,32 @@ export const MIGRATIONS: readonly Migration[] = [
         updated_at timestamptz not null default now()
       );`,
   },
+  {
+    id: '003_renditions',
+    sql: `
+      -- Each version's reader copy, made by the worker part (score/worker.score.yaml) without ML models (the
+      -- spec's D3). A row is queued in the same transaction as its version; the worker takes the oldest one
+      -- it may with SKIP LOCKED, holds it for a lease, and tries three times. \`none\` means there's no reader
+      -- copy for that kind of file, and \`why\` says so to whoever opens it.
+      create table renditions (
+        version_id text primary key references document_versions (id),
+        workspace_id text not null,
+        document_id text not null references documents (id),
+        state text not null default 'queued' check (state in ('queued', 'working', 'ready', 'failed', 'none')),
+        tries integer not null default 0,
+        -- Not before: a try that failed waits a while before the next.
+        queued_at timestamptz not null default now(),
+        lease_until timestamptz,
+        finished_at timestamptz,
+        why text,
+        pages integer,
+        reader_key text,
+        thumbnail_key text,
+        picture_keys text[] not null default '{}',
+        -- The words of its text, for Find.
+        text_words tsvector
+      );
+      create index renditions_waiting on renditions (queued_at) where state in ('queued', 'working');
+      create index renditions_words on renditions using gin (text_words);`,
+  },
 ];

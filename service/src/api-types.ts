@@ -10,6 +10,8 @@ export type ContainerState = 'open' | 'closed' | 'archived';
 export type ContentState = 'in-progress' | 'in-review' | 'complete' | 'issued' | 'retired';
 export type Level = 'read' | 'edit' | 'manage';
 export type GrantKind = 'library' | 'folder' | 'document';
+/** Where a version's reader copy is: waiting, being made, made, given up on, or not one this kind of file has. */
+export type ReaderState = 'queued' | 'working' | 'ready' | 'failed' | 'none';
 
 /** What the caller may do with a thing, so the screen offers only what will work, and says why not. */
 export interface Rights {
@@ -64,6 +66,24 @@ export interface VersionView {
   createdBy: string;
   createdByName?: string;
   createdAt: string;
+  /** Where its reader copy is. */
+  reader?: ReaderState;
+  /** Whether it has a picture of its first page (`…/thumbnail`). */
+  thumbnail: boolean;
+}
+
+/**
+ * `GET /v1/documents/:id/versions/:number/reader`: the version's reader copy, as Markdown for the kit's
+ * reader. Its pictures are paths under the app's own API, which the host fetches. Without one, `why`
+ * says why and what can be done.
+ */
+export interface ReaderAnswer {
+  state: ReaderState;
+  markdown?: string;
+  pages?: number;
+  why?: string;
+  /** Whether the caller can ask for it again (it failed, and they can change the document). */
+  retry: boolean;
 }
 
 export interface DocumentView {

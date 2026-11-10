@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseClient, DatabasePool, DatabaseRow } from '@augur/service-kit';
 import type { ContainerState, ContentState, Level } from '@augur/records';
-import type { FloorKind, FolderLevel, GrantKind, UnitLevel } from './api-types.ts';
+import type { FloorKind, FolderLevel, GrantKind, ReaderState, UnitLevel } from './api-types.ts';
 
 /**
  * Artifacts' store: one library per floor, its folders, documents and their versions, tags and grants,
@@ -41,7 +41,40 @@ export interface VersionRecord {
   state: ContentState;
   createdBy: string;
   createdAt: string;
+  /** Where its reader copy is: undefined for a version made before reader copies were. */
+  reader?: ReaderState;
+  thumbnail: boolean;
 }
+
+/** A version's reader copy, as the worker left it. */
+export interface RenditionRecord {
+  version: string;
+  document: string;
+  state: ReaderState;
+  tries: number;
+  why?: string;
+  pages?: number;
+  readerKey?: string;
+  thumbnailKey?: string;
+  pictureKeys: string[];
+}
+
+/** A reader copy for the worker to make: the version it is of, and where the file is. */
+export interface RenditionTask {
+  version: string;
+  document: string;
+  number: number;
+  filename: string;
+  mediaType: string;
+  size: number;
+  objectKey: string;
+  tries: number;
+}
+
+/** What the worker made of a version. */
+export type RenditionResult =
+  | { state: 'ready'; text: string; pages?: number; readerKey: string; thumbnailKey?: string; pictureKeys: string[] }
+  | { state: 'none'; why: string };
 
 export interface DocumentRecord {
   id: string;
@@ -149,11 +182,27 @@ const versionOf = (r: DatabaseRow): VersionRecord => ({
   state: r.state as ContentState,
   createdBy: r.created_by as string,
   createdAt: iso(r.created_at),
+  ...(r.reader ? { reader: r.reader as ReaderState } : {}),
+  thumbnail: Boolean(r.thumbnail),
 });
+
+/** A version's columns with its reader copy's state, from `document_versions v`. */
+const VERSION_SELECT = `
+  select v.*, (select r.state from renditions r where r.version_id = v.id) as reader,
+    (select r.thumbnail_key is not null from renditions r where r.version_id = v.id) as thumbnail
+  from document_versions v`;
+
+/** How long a try may wait before the next: a minute, then five. */
+const RETRY_AFTER_SECONDS = [60, 300];
+/** Tries before a reader copy is given up on. */
+export const RENDITION_TRIES = 3;
+/** At most this much of a document's text goes into Find (a tsvector holds at most 1 MB). */
+export const MAX_FIND_TEXT = 256 * 1024;
 
 const VERSION_JSON = (alias: string) =>
   `json_build_object('id', ${alias}.id, 'document_id', ${alias}.document_id, 'number', ${alias}.number, 'filename', ${alias}.filename, 'media_type', ${alias}.media_type,
-    'size_bytes', ${alias}.size_bytes, 'sha256', ${alias}.sha256, 'object_key', ${alias}.object_key, 'state', ${alias}.state, 'created_by', ${alias}.created_by, 'created_at', ${alias}.created_at)`;
+    'size_bytes', ${alias}.size_bytes, 'sha256', ${alias}.sha256, 'object_key', ${alias}.object_key, 'state', ${alias}.state, 'created_by', ${alias}.created_by, 'created_at', ${alias}.created_at,
+    'reader', (select r.state from renditions r where r.version_id = ${alias}.id), 'thumbnail', (select r.thumbnail_key is not null from renditions r where r.version_id = ${alias}.id))`;
 
 /** A document with its tags, newest version and newest Issued version, as one row. */
 const DOCUMENT_SELECT = `
@@ -297,6 +346,8 @@ export class Store {
       [v.id, workspace, document, number, v.filename, v.mediaType, v.size, v.sha256, v.objectKey, v.createdBy],
     );
     await c.query('insert into state_moves (workspace_id, record_id, version_number, to_state, moved_by) values ($1, $2, $3, $4, $5)', [workspace, document, number, 'in-progress', v.createdBy]);
+    // Its reader copy waits for the worker from the moment the version exists.
+    await c.query('insert into renditions (version_id, workspace_id, document_id) values ($1, $2, $3)', [v.id, workspace, document]);
   }
 
   /** Adds the next version. Its number is one past the newest, decided under a lock on the document. */
@@ -315,12 +366,12 @@ export class Store {
   }
 
   async versions(document: string): Promise<VersionRecord[]> {
-    const { rows } = await this.pool.query('select * from document_versions where document_id = $1 order by number desc', [document]);
+    const { rows } = await this.pool.query(`${VERSION_SELECT} where v.document_id = $1 order by v.number desc`, [document]);
     return rows.map(versionOf);
   }
 
   async version(document: string, number: number): Promise<VersionRecord | undefined> {
-    const { rows } = await this.pool.query('select * from document_versions where document_id = $1 and number = $2', [document, number]);
+    const { rows } = await this.pool.query(`${VERSION_SELECT} where v.document_id = $1 and v.number = $2`, [document, number]);
     return rows[0] ? versionOf(rows[0]) : undefined;
   }
 
@@ -425,11 +476,13 @@ export class Store {
     await this.pool.query('insert into looked (person_id, workspace_id, at) values ($1, $2, $3) on conflict (person_id, workspace_id) do update set at = excluded.at', [person, workspace, at]);
   }
 
-  /** Documents on a floor whose title matches every word as the start of one. */
+  /** Documents on a floor whose title, or the text of their newest version, has every word as the start of one. */
   async search(workspace: string, words: readonly string[], limit = 10): Promise<DocumentRecord[]> {
     if (!words.length) return [];
     const query = words.map((w) => `${w.replace(/[^\p{L}\p{N}]/gu, '')}:*`).join(' & ');
-    const { rows } = await this.pool.query(`${DOCUMENT_SELECT} where d.workspace_id = $1 and d.deleted_at is null and d.title_words @@ to_tsquery('simple', $2) order by d.updated_at desc limit $3`, [
+    const { rows } = await this.pool.query(`${DOCUMENT_SELECT} where d.workspace_id = $1 and d.deleted_at is null and (d.title_words @@ to_tsquery('simple', $2)
+      or exists (select 1 from renditions r where r.version_id = (select v.id from document_versions v where v.document_id = d.id order by v.number desc limit 1) and r.text_words @@ to_tsquery('simple', $2)))
+      order by d.updated_at desc limit $3`, [
       workspace,
       query,
       limit,
@@ -548,7 +601,9 @@ export class Store {
   /** Deleted documents past the retention days whose files haven't been cleared yet, with every file's key. */
   async purgeable(days: number, limit = 50): Promise<{ id: string; keys: string[] }[]> {
     const { rows } = await this.pool.query(
-      `select d.id, array(select v.object_key from document_versions v where v.document_id = d.id) as keys from documents d
+      `select d.id, array(select v.object_key from document_versions v where v.document_id = d.id
+         union all select k from renditions r, unnest(array_remove(array[r.reader_key, r.thumbnail_key], null) || r.picture_keys) k where r.document_id = d.id) as keys
+       from documents d
        where d.deleted_at is not null and d.purged_at is null and d.deleted_at < now() - make_interval(days => $1) order by d.deleted_at limit $2`,
       [days, limit],
     );
@@ -556,9 +611,102 @@ export class Store {
   }
 
   async purged(id: string) {
-    await this.pool.query('update documents set purged_at = now() where id = $1', [id]);
+    await this.tx(async (c) => {
+      await c.query('update documents set purged_at = now() where id = $1', [id]);
+      // Its text leaves Find with its files.
+      await c.query(`update renditions set state = 'none', why = 'It was deleted, and its files have been cleared.', text_words = null, reader_key = null, thumbnail_key = null, picture_keys = '{}' where document_id = $1`, [id]);
+    });
+  }
+
+  // Reader copies
+
+  async rendition(version: string): Promise<RenditionRecord | undefined> {
+    const { rows } = await this.pool.query('select * from renditions where version_id = $1', [version]);
+    return rows[0] ? renditionOf(rows[0]) : undefined;
+  }
+
+  /**
+   * Takes the oldest reader copy that is due, for `leaseSeconds`: one queued and due, or one whose last
+   * worker stopped holding it. SKIP LOCKED, so two workers never take the same one. One taken for the last
+   * time and lost again is given up on first.
+   */
+  async takeRendition(leaseSeconds: number): Promise<RenditionTask | undefined> {
+    await this.pool.query(
+      `update renditions set state = 'failed', finished_at = now(), lease_until = null, why = 'Making its reader copy stopped part way, ${RENDITION_TRIES} times.'
+       where state = 'working' and lease_until < now() and tries >= $1`,
+      [RENDITION_TRIES],
+    );
+    const { rows } = await this.pool.query(
+      `update renditions r set state = 'working', tries = r.tries + 1, lease_until = now() + make_interval(secs => $1)
+       from document_versions v
+       where v.id = r.version_id and r.version_id = (
+         select version_id from renditions
+         where (state = 'queued' and queued_at <= now()) or (state = 'working' and lease_until < now())
+         order by queued_at limit 1 for update skip locked)
+       returning r.version_id, r.document_id, r.tries, v.number, v.filename, v.media_type, v.size_bytes, v.object_key`,
+      [leaseSeconds],
+    );
+    const r = rows[0];
+    return r
+      ? {
+          version: r.version_id as string,
+          document: r.document_id as string,
+          number: r.number as number,
+          filename: r.filename as string,
+          mediaType: r.media_type as string,
+          size: Number(r.size_bytes),
+          objectKey: r.object_key as string,
+          tries: r.tries as number,
+        }
+      : undefined;
+  }
+
+  /** Keeps what the worker made. False when it no longer held the copy (its lease ran out and another took it). */
+  async finishRendition(task: RenditionTask, result: RenditionResult): Promise<boolean> {
+    const { rowCount } =
+      result.state === 'ready'
+        ? await this.pool.query(
+            `update renditions set state = 'ready', finished_at = now(), lease_until = null, why = null, pages = $3, reader_key = $4, thumbnail_key = $5, picture_keys = $6,
+               text_words = to_tsvector('simple', $7) where version_id = $1 and state = 'working' and tries = $2`,
+            [task.version, task.tries, result.pages ?? null, result.readerKey, result.thumbnailKey ?? null, result.pictureKeys, result.text.slice(0, MAX_FIND_TEXT)],
+          )
+        : await this.pool.query(`update renditions set state = 'none', finished_at = now(), lease_until = null, why = $3 where version_id = $1 and state = 'working' and tries = $2`, [
+            task.version,
+            task.tries,
+            result.why,
+          ]);
+    return rowCount === 1;
+  }
+
+  /** A try that failed: queued again after a wait, or given up on after the last. */
+  async failRendition(task: RenditionTask, why: string) {
+    const last = task.tries >= RENDITION_TRIES;
+    await this.pool.query(
+      `update renditions set state = $3, lease_until = null, why = $4, finished_at = case when $3 = 'failed' then now() end,
+         queued_at = case when $3 = 'queued' then now() + make_interval(secs => $5) else queued_at end
+       where version_id = $1 and state = 'working' and tries = $2`,
+      [task.version, task.tries, last ? 'failed' : 'queued', why, RETRY_AFTER_SECONDS[task.tries - 1] ?? 300],
+    );
+  }
+
+  /** Asks for a reader copy again, from three fresh tries. Only one that failed. */
+  async retryRendition(version: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(`update renditions set state = 'queued', tries = 0, why = null, queued_at = now(), finished_at = null where version_id = $1 and state = 'failed'`, [version]);
+    return rowCount === 1;
   }
 }
+
+const renditionOf = (r: DatabaseRow): RenditionRecord => ({
+  version: r.version_id as string,
+  document: r.document_id as string,
+  state: r.state as ReaderState,
+  tries: r.tries as number,
+  ...(r.why ? { why: r.why as string } : {}),
+  ...(r.pages != null ? { pages: r.pages as number } : {}),
+  ...(r.reader_key ? { readerKey: r.reader_key as string } : {}),
+  ...(r.thumbnail_key ? { thumbnailKey: r.thumbnail_key as string } : {}),
+  pictureKeys: (r.picture_keys as string[] | null) ?? [],
+});
 
 const grantOf = (r: DatabaseRow): GrantRecord => ({
   workspace: r.workspace_id as string,

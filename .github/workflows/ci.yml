@@ -60,6 +60,8 @@ jobs:
       - run: pnpm check:catalog
       - run: pnpm check:app
       - run: pnpm typecheck
+      # Poppler, which the worker part's reader copies use; the image has it too (Dockerfile).
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils
       - run: pnpm test
         env:
           DATABASE_URL: postgres://folio:folio-ci-only@localhost:5432/folio

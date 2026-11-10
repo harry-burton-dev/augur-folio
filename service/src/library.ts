@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import { floorCaller, Problem, standInPeople, type AppAudit, type AppManifest, type AppPeople, type OnFloor } from '@augur/service-kit';
 import { BadMoveError, PRINCIPAL } from '@augur/records';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   closedAbove,
   CONTAINER_LIFECYCLE,
@@ -39,6 +39,8 @@ import type {
   HomeItem,
   LibraryAnswer,
   PeopleAnswer,
+  ReaderAnswer,
+  ReaderState,
   SharedItem,
   TagView,
   UnitLevel,
@@ -81,6 +83,8 @@ const versionView = (v: VersionRecord, names: ReadonlyMap<string, string>): Vers
   createdBy: v.createdBy,
   ...(names.get(v.createdBy) ? { createdByName: names.get(v.createdBy) } : {}),
   createdAt: v.createdAt,
+  ...(v.reader ? { reader: v.reader } : {}),
+  thumbnail: v.thumbnail,
 });
 
 const documentView = (d: DocumentRecord, names: ReadonlyMap<string, string> = new Map()): DocumentView => ({
@@ -481,6 +485,66 @@ export const libraryRoutes = async (app: FastifyInstance, { manifest, store, obj
     const body = await objects.get(version.objectKey);
     if (!body) throw new Problem(404, 'file_missing', 'The file for this version can’t be found in storage.', { whoCanChange: 'An admin, who can check the app’s bucket.' });
     return reply.type(version.mediaType).header('content-length', version.size).header('content-disposition', contentDisposition(version.filename)).header('cache-control', 'private, no-store').send(body);
+  });
+
+  // Reader copies: made by the worker part (renditions.ts); read here as Markdown with their pictures.
+
+  const readVersion = async (req: FastifyRequest<{ Params: { id: string; number: number } }>) => {
+    const caller = await callerOf(req);
+    const { document, level } = await readDocument(caller, req.params.id);
+    const version = await store.version(document.id, req.params.number);
+    if (!version) throw notFound('version');
+    return { document, version, level, rendition: await store.rendition(version.id) };
+  };
+
+  const READER_WHY: Partial<Record<ReaderState, string>> = {
+    queued: 'Its copy to read here is waiting to be made. It usually takes a minute.',
+    working: 'Its copy to read here is being made.',
+  };
+
+  app.get<{ Params: { id: string; number: number } }>('/documents/:id/versions/:number/reader', { schema: { params: versionParams } }, async (req, reply): Promise<ReaderAnswer> => {
+    const { level, rendition } = await readVersion(req);
+    reply.header('cache-control', 'private, no-store');
+    if (!rendition) return { state: 'none', why: 'This version was added before Artifacts made copies to read. Download the original to open it.', retry: false };
+    const retry = rendition.state === 'failed' && reaches(level, 'edit');
+    if (rendition.state !== 'ready' || !rendition.readerKey) return { state: rendition.state, why: rendition.why ?? READER_WHY[rendition.state] ?? 'There’s no copy to read here.', retry };
+    const body = await objects.get(rendition.readerKey);
+    if (!body) throw new Problem(404, 'file_missing', 'The copy to read can’t be found in storage.', { whoCanChange: 'An admin, who can check the app’s bucket.' });
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk as Uint8Array));
+    return { state: 'ready', markdown: Buffer.concat(chunks).toString('utf8'), ...(rendition.pages ? { pages: rendition.pages } : {}), retry: false };
+  });
+
+  app.post<{ Params: { id: string; number: number } }>('/documents/:id/versions/:number/reader', { schema: { params: versionParams } }, async (req, reply) => {
+    const { document, version, level, rendition } = await readVersion(req);
+    need(level, 'edit', 'ask for its copy to read again');
+    if (rendition?.state !== 'failed' || !(await store.retryRendition(version.id))) throw new Problem(409, 'not_failed', 'Only a copy that couldn’t be made can be asked for again.');
+    void recorded({ actor: floorOf(req).id, action: 'document.reader-retried', target: document.id, workspace: document.workspace, detail: { version: version.number } });
+    return reply.code(202).send({ state: 'queued' });
+  });
+
+  const sendStored = async (reply: FastifyReply, key: string | undefined, contentType: string) => {
+    const body = key ? await objects.get(key) : undefined;
+    if (!body) throw notFound('picture');
+    // A version never changes, so neither do its pictures: the browser may keep them, for this person only.
+    return reply.type(contentType).header('cache-control', 'private, max-age=86400, immutable').header('x-content-type-options', 'nosniff').send(body);
+  };
+
+  const PICTURE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+
+  app.get<{ Params: { id: string; number: number; name: string } }>(
+    '/documents/:id/versions/:number/pictures/:name',
+    { schema: { params: { type: 'object', required: ['id', 'number', 'name'], properties: { ...versionParams.properties, name: { type: 'string', pattern: '^[A-Za-z0-9-]{1,40}\\.(png|jpg|gif|webp)$' } } } } },
+    async (req, reply) => {
+      const { rendition } = await readVersion(req);
+      const key = rendition?.pictureKeys.find((k) => k.endsWith(`/pictures/${req.params.name}`));
+      return sendStored(reply, key, PICTURE_TYPES[req.params.name.split('.').pop()!]!);
+    },
+  );
+
+  app.get<{ Params: { id: string; number: number } }>('/documents/:id/versions/:number/thumbnail', { schema: { params: versionParams } }, async (req, reply) => {
+    const { rendition } = await readVersion(req);
+    return sendStored(reply, rendition?.thumbnailKey, 'image/png');
   });
 
   // Review: a version In review waits in the Inbox of whoever manages the floor (the spec's D10).

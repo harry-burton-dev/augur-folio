@@ -3,6 +3,9 @@
 # dependencies into out/), so the image only copies the result and needs no registry token. The
 # frontend is not in it: it is released as a bundle of its own, which the shell serves.
 FROM node:22-alpine
+# Poppler, for the worker part's reader copies of PDFs (pdftotext, pdftoppm, pdfinfo). Word documents go
+# through Mammoth, which is in the service's own dependencies.
+RUN apk add --no-cache poppler-utils
 WORKDIR /app
 COPY out/ .
 ENV NODE_ENV=production
