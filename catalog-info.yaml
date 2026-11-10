@@ -13,10 +13,9 @@
       "augur.dev/version": "0.8.0",
       "augur.dev/app-id": "folio",
       "augur.dev/route": "/folio",
-      "augur.dev/sdk-range": "^2.1.0",
-      "augur.dev/category": "pillar",
+      "augur.dev/contract": "3",
       "augur.dev/floors": "personal,team,org",
-      "augur.dev/scopes": "audit:write,people:read,notifications:send,events:publish"
+      "augur.dev/scopes": "audit:write,events:publish,people:read,notifications:send,inbox:write,knowledge:read,knowledge:extract"
     }
   },
   "spec": {
@@ -31,7 +30,7 @@
   "metadata": {
     "name": "apps-folio-frontend",
     "title": "@apps/folio-frontend",
-    "description": "Folio's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
+    "description": "Artifacts's frontend: one ES module the shell runs in a web worker, drawing Quill's remote elements by name.",
     "annotations": {
       "github.com/project-slug": "harry-burton-dev/augur-folio",
       "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/frontend/",
@@ -58,7 +57,7 @@
   "metadata": {
     "name": "apps-folio",
     "title": "@apps/folio",
-    "description": "Folio's service: its API behind the gateway at /api/folio.",
+    "description": "Artifacts's inbound part: its API behind the gateway at /api/folio, and the events AUGUR pushes to it.",
     "annotations": {
       "github.com/project-slug": "harry-burton-dev/augur-folio",
       "backstage.io/source-location": "url:https://github.com/harry-burton-dev/augur-folio/tree/main/service/",
@@ -75,12 +74,10 @@
     "system": "folio",
     "consumesApis": [
       "api:default/events-api",
+      "api:default/knowledge-api",
       "api:default/registry-api"
     ],
-    "dependsOn": [
-      "resource:default/folio-bucket",
-      "resource:default/folio-db"
-    ]
+    "dependsOn": []
   }
 }
 ---
@@ -97,40 +94,6 @@
     "lifecycle": "experimental",
     "owner": "group:default/augur-core",
     "system": "folio",
-    "definition": "{\n  \"intents\": [\n    \"document.open\",\n    \"document.pick\",\n    \"library.open\",\n    \"unit.open\",\n    \"folio.open\"\n  ]\n}"
-  }
-}
----
-{
-  "apiVersion": "backstage.io/v1alpha1",
-  "kind": "Resource",
-  "metadata": {
-    "name": "folio-db",
-    "description": "Artifacts's schema in Postgres"
-  },
-  "spec": {
-    "type": "database",
-    "owner": "group:default/augur-core",
-    "system": "folio",
-    "dependsOn": [
-      "resource:default/postgres"
-    ]
-  }
-}
----
-{
-  "apiVersion": "backstage.io/v1alpha1",
-  "kind": "Resource",
-  "metadata": {
-    "name": "folio-bucket",
-    "description": "Artifacts's bucket in Garage"
-  },
-  "spec": {
-    "type": "s3-bucket",
-    "owner": "group:default/augur-core",
-    "system": "folio",
-    "dependsOn": [
-      "resource:default/garage"
-    ]
+    "definition": "{\n  \"intents\": [\n    \"document.open\",\n    \"document.pick\"\n  ]\n}"
   }
 }

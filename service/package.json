@@ -4,26 +4,20 @@
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
-  "description": "Folio's service: its API behind the gateway at /api/folio.",
+  "description": "Artifacts's inbound part: its API behind the gateway at /api/folio, and the events AUGUR pushes to it.",
   "scripts": {
     "build": "tsc -p tsconfig.json && cp ../manifest.json dist/manifest.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "node --watch --experimental-strip-types src/index.ts",
     "start": "node dist/index.js",
-    "test": "vitest run",
-    "migrate": "node --experimental-strip-types src/migrate.ts"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@augur/records": "npm:@harry-burton-dev/augur-records@^0.1.0",
-    "@augur/service-kit": "npm:@harry-burton-dev/augur-service-kit@^0.13.0",
-    "@aws-sdk/client-s3": "^3.1156.0",
-    "@aws-sdk/lib-storage": "^3.1156.0",
-    "fastify": "^5.6.0",
-    "pg": "^8.23.1"
+    "@augur/service-kit": "npm:@harry-burton-dev/augur-service-kit@^0.18.0",
+    "fastify": "^5.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/pg": "^8.23.1",
     "typescript": "^5.6.0",
     "vitest": "^3.2.0"
   }

@@ -5,7 +5,7 @@ name: App dev builds
 on:
   push:
     branches: [main]
-    paths: ['frontend/**', 'service/**', 'manifest.json', 'Dockerfile']
+    paths: ['frontend/**', 'service/**', 'score/**', 'manifest.json', 'Dockerfile']
 concurrency:
   group: app-dev
   cancel-in-progress: false
@@ -16,7 +16,8 @@ permissions:
 jobs:
   dev:
     # A Version packages merge is released by release.yml, not built twice.
-    if: "!startsWith(github.event.head_commit.message, 'Version packages')"
+    # The template itself releases nothing: an app made from it does.
+    if: "!github.event.repository.is_template && !startsWith(github.event.head_commit.message, 'Version packages')"
     runs-on: ubuntu-latest
     steps:
       # The token secrets can carry a line ending from how they were pasted; pnpm then rejects the header.
@@ -47,7 +48,7 @@ jobs:
           version=$(pnpm exec augur-app dev "$GITHUB_RUN_NUMBER")
           pnpm build && pnpm release-out
           pnpm exec augur-app bundle dev > "$RUNNER_TEMP/bundle.json"
-          pnpm exec augur-app publish "$RUNNER_TEMP/bundle.json"
+          pnpm exec augur-app release publish "$RUNNER_TEMP/bundle.json"
           pnpm exec augur-app clean-devs "app/$(jq -r .id manifest.json)@$version"
           echo "Dev build $version: a preview server set to take its dev builds installs it at its next check." >> "$GITHUB_STEP_SUMMARY"
         env:
