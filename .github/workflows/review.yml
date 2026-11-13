@@ -1,0 +1,18 @@
+name: Review
+# This pull request's review tier and what it needs (REVIEW.md), checked by AUGUR's reusable Review workflow
+# against this repository's .github/review-tiers.json. Seconds; editing the description checks it again.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+permissions:
+  contents: read
+jobs:
+  review:
+    permissions:
+      contents: read
+      # To take Harry's ok off when new commits change the pull request after it.
+      pull-requests: write
+    uses: harry-burton-dev/augur/.github/workflows/review.yml@083f1f454ca32f342e533996255647928cde9b8c # main
+    with:
+      # The tier script from the same commit, so the two move together.
+      script-ref: 083f1f454ca32f342e533996255647928cde9b8c
