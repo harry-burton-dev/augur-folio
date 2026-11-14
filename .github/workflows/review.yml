@@ -12,7 +12,7 @@ jobs:
       contents: read
       # To take Harry's ok off when new commits change the pull request after it.
       pull-requests: write
-    uses: harry-burton-dev/augur/.github/workflows/review.yml@083f1f454ca32f342e533996255647928cde9b8c # main
+    uses: harry-burton-dev/augur/.github/workflows/review.yml@main
     with:
       # The tier script from the same commit, so the two move together.
-      script-ref: 083f1f454ca32f342e533996255647928cde9b8c
+      script-ref: main
