@@ -16,6 +16,15 @@ The paths a pull request changes set its tier (`.github/review-tiers.json`). Its
 
 A bot's pull request (Renovate) has no description to check: CI and Harry's ok on his paths are its gates.
 
+## The next rules and the auto-ok log
+
+`next` in `.github/review-tiers.json` holds the rules that take over after a shadow week (AUGUR's REVIEW.md
+has the whole of it). Harry's ok is then only for migrations, retention, `access.ts`, the workflows that release or publish (release, app-dev, app-preview) and the release scripts in `package.json`,
+these rules, a manifest that asks for a new scope, and a workflow that gains privilege or a new action. The
+rest of today's High paths stay High but merge on green. Until the switch the Review check only reports what
+the next rules make of a pull request. When one merges that waited for Harry's ok and wouldn't have under the
+next rules, it gets an `auto-ok` comment and label; Harry adds `harry-would-not` to one he would have stopped.
+
 ## Before you open the pull request
 
 1. Run the checks AGENTS.md lists, and paste their result lines into Testing.
