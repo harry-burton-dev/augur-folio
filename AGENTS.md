@@ -22,6 +22,8 @@ AGENTS.md and the ADRs there before changing how this app reaches the platform.
   releases the app as a beta; AUGUR's Promote to stable makes it stable.
 - `pnpm install`, then `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`. Locally you need
   `NODE_AUTH_TOKEN` set to a token that can read GitHub Packages.
-- Merge your own pull request once CI is green, after merging fresh `origin/main` into it.
+- Before a pull request: REVIEW.md. The paths it changes set its tier, which says what it needs before it
+  merges (the description's sections, a `/code-review` run, Harry's ok on his paths); the Review check checks it.
+- Merge your own pull request once CI and the Review check are green, after merging fresh `origin/main` into it.
 - Nothing in the repository names the tool that wrote it: no assistant trailers on commits or attribution
   in pull requests, and no links to private chats.

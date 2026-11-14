@@ -19,4 +19,19 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-expressions': ['error', { allowShortCircuit: true, allowTernary: true }],
     },
   },
+  {
+    // A pg Pool without an error listener ends the process when Postgres restarts (REVIEW.md): wrap it in
+    // steadyPool from @augur/service-kit. Tests' pools end with the test.
+    files: ['**/*.{ts,mts,cts,js,mjs,cjs}'],
+    ignores: ['**/*.test.*', '**/*.testing.ts', '**/test/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: ":matches(NewExpression[callee.property.name='Pool'], NewExpression[callee.name='Pool']):not(CallExpression[callee.name='steadyPool'] > NewExpression, CallExpression[callee.property.name='steadyPool'] > NewExpression)",
+          message: 'Wrap a new pg Pool in steadyPool() from @augur/service-kit, so a lost connection is logged instead of ending the process.',
+        },
+      ],
+    },
+  },
 );
