@@ -11,19 +11,21 @@ The paths a pull request changes set its tier (`.github/review-tiers.json`). Its
 - **Low**: docs, tests, stories, changesets only. Merges on green CI.
 - **Medium**: everything else. Needs the description's sections and a pre-merge review.
 - **High**: the paths listed as `high`. Needs what Medium needs, under 400 changed lines (or a reason), and, on
-  Harry's paths (migrations, retention, `access.ts`, a manifest that asks for a new scope, a workflow that gains
-  privilege or a new action, and the review check's own files), **Harry's ok**: he answers the three questions below; only then add the `harry-ok`
-  label. Never add it on your own. A push that changes the pull request's own diff takes it off.
+  what can't be undone or gives more access (migrations, retention, `access.ts`, a manifest that asks for a new scope, a workflow that gains
+  privilege or a new action, and the review check's own files), **a deep code review**: a
+  `/code-review` run at `high`, `xhigh` or `max` effort named in the Review section, listed by the Review check
+  under "Needs a deep review". Harry is not a gate on any pull request; the auto-ok log tells him afterwards.
 
-A bot's pull request (Renovate) has no description to check: CI and Harry's ok on his paths are its gates.
+A bot's pull request (Renovate) has no description to check: CI is its gate, except on the files that need a deep
+review, where an agent takes it over and writes the description first.
 
 ## The auto-ok log
 
-Harry chose (PER-438) to be asked only about what can't be undone or gives more access. Every other High pull
-request merges on green, and the Review workflow writes an **auto-ok record** on it when it merges (a comment and
-the `auto-ok` label): what merged, the paths that set its tier, its checks, and its Not run, How to undo and Risk.
-AUGUR's REVIEW.md has the whole of it. If Harry reads a record and would not have said ok, he adds the
-`harry-would-not` label; the next change to these rules tightens the one that let it through.
+Harry chose (PER-438) not to be asked: the code review is the gate. When a High pull request merges, the Review
+workflow writes an **auto-ok record** on it (a comment and the `auto-ok` label): what merged, the paths that set
+its tier, the files that needed a deep review, its checks, and its Not run, How to undo, Risk and Review.
+AUGUR's REVIEW.md has the whole of it. If Harry reads a record and would not have let it through, he adds the
+`harry-would-not` label; the next change to these rules tightens the rule, or the review, that let it through.
 
 ## Before you open the pull request
 
@@ -40,7 +42,7 @@ Don't run `/security-review` as a gate: its filter drops findings that matter he
 
 `## Testing` (commands and results), `## Not run` (and why), `## Risk` (tier, why, which release path),
 `## How to undo`, `## Review` (the `/code-review` run: effort, findings, what was fixed or answered).
-Harry's three questions read straight off them: what isn't tested, how to undo it, and which release path.
+The three questions read straight off them: what isn't tested, how to undo it, and which release path.
 
 ## What failure looks like here
 
