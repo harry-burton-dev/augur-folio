@@ -9,8 +9,9 @@ reusable Review workflow) checks the parts a machine can.
 The paths a pull request changes set its tier (`.github/review-tiers.json`). Its tier is its highest path.
 
 - **Low**: docs, tests, stories, changesets only. Merges on green CI.
-- **Medium**: everything else. Needs the description's sections and a pre-merge review.
-- **High**: the paths listed as `high`. Needs what Medium needs, under 400 changed lines (or a reason), and, on
+- **Medium**: everything else. Needs the description's sections, a pre-merge review, and no more than 400
+  changed lines (or a reason).
+- **High**: the paths listed as `high`. Needs what Medium needs, and, on
   what can't be undone or gives more access (migrations, retention, `access.ts`, a manifest that asks for a new scope, a workflow that gains
   privilege or a new action, and the review check's own files), **a deep code review**: a
   `/code-review` run at `high`, `xhigh` or `max` effort named in the Review section, listed by the Review check
@@ -34,7 +35,15 @@ AUGUR's REVIEW.md has the whole of it. If Harry reads a record and would not hav
    findings ranked 1 to 6. Say what you did in the Review section.
 3. At most two review rounds; the second reviews only what changed. If it still finds an Important problem,
    stop and rethink the approach, and say so.
-4. One concern per pull request. A High one over 400 lines says in Risk: "Over 400 lines because …".
+4. One concern per pull request, no more than 400 changed lines. Tests, stories, fixtures and generated files
+   don't count (`notSized` and `notCount` in the tiers file), except on the deep-review paths; the Review
+   check says how many do.
+5. A change that won't fit goes in as a series: what the rest builds on first, whatever removes the old path
+   last. Open each against `main` once the one before has merged. Each leaves `main` working on its own, and
+   says where it sits: "Part of PER-x, 2 of 4".
+6. One still over 400 lines says in Risk: "Over 400 lines because …", and the reason says why it could not
+   be split: recorded or generated content, a rename, a migration that must move with its store. "It is one
+   feature" is not a reason.
 
 Don't run `/security-review` as a gate: its filter drops findings that matter here.
 

@@ -1,5 +1,5 @@
 {
-  "about": "Review tiers by path (REVIEW.md), read by AUGUR's Review workflow. High if any path matches high (and not notHigh), Low if every path matches low (and not notLow), otherwise Medium. notCount: generated files, which don't set the tier; with ignoreRenames, a file only renamed doesn't either. Harry's ok (harryOk, harryOkWhen) only for what can't be undone or gives more access: migrations, retention, access.ts, a manifest asking for a new scope, a workflow gaining privilege or a new action, and the review check's own files. autoOk: every other High pull request merges on green and gets an auto-ok record. Globs follow node:path matchesGlob.",
+  "about": "Review tiers by path (REVIEW.md), read by AUGUR's Review workflow. High if any path matches high (and not notHigh), Low if every path matches low (and not notLow), otherwise Medium. notCount: generated files, which don't set the tier; with ignoreRenames, a file only renamed doesn't either. Harry's ok (harryOk, harryOkWhen) only for what can't be undone or gives more access: migrations, retention, access.ts, a manifest asking for a new scope, a workflow gaining privilege or a new action, and the review check's own files. autoOk: every other High pull request merges on green and gets an auto-ok record. sizeMedium: Medium is held to 400 changed lines or a reason as High always is; generated files (notCount) and the files in notSized (tests, stories, fixtures) aren't counted, except on the deep-review paths. Globs follow node:path matchesGlob.",
   "high": [
     "service/src/**/store*",
     "service/src/**/migrat*",
@@ -40,6 +40,8 @@
   "notCount": [
     "pnpm-lock.yaml"
   ],
+  "sizeMedium": true,
+  "notSized": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.test.js", "**/*.testing.ts", "**/*.spec.ts", "**/*.stories.tsx", "**/fixtures/**"],
   "ignoreRenames": true,
   "harryOk": [
     "service/src/**/migrat*",
