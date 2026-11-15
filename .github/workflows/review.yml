@@ -1,16 +1,17 @@
 name: Review
 # This pull request's review tier and what it needs (REVIEW.md), checked by AUGUR's reusable Review workflow
 # against this repository's .github/review-tiers.json. Seconds; editing the description checks it again.
+# On a merge it writes the auto-ok record instead (AUGUR's REVIEW.md): `closed` is for that.
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled, closed]
 permissions:
   contents: read
 jobs:
   review:
     permissions:
       contents: read
-      # To take Harry's ok off when new commits change the pull request after it.
+      # To take Harry's ok off when new commits change the pull request after it, and to write the auto-ok record.
       pull-requests: write
     uses: harry-burton-dev/augur/.github/workflows/review.yml@main
     with:

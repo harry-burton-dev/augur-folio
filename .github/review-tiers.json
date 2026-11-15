@@ -1,5 +1,5 @@
 {
-  "about": "Review tiers by path (REVIEW.md), read by AUGUR's Review workflow. High if any path matches high (and not notHigh), Low if every path matches low (and not notLow), otherwise Medium. harryOk: the High paths that also wait for Harry's ok. Globs follow node:path matchesGlob.",
+  "about": "Review tiers by path (REVIEW.md), read by AUGUR's Review workflow. High if any path matches high (and not notHigh), Low if every path matches low (and not notLow), otherwise Medium. harryOk: the High paths that also wait for Harry's ok. Globs follow node:path matchesGlob. next: the rules that take over after the shadow week; reported on every pull request, but only these decide the check.",
   "high": [
     "service/src/**/store*",
     "service/src/**/migrat*",
@@ -42,5 +42,100 @@
     "REVIEW.md",
     "manifest.json"
   ],
-  "deployTest": []
+  "deployTest": [],
+  "next": {
+    "about": "The rules that take over after the shadow week (REVIEW.md, and AUGUR's REVIEW.md). Harry's ok only for what is hard to undo (migrations, retention, the workflows and scripts that release or publish), what widens what the app may do (a new scope in the manifest, access.ts, a workflow's privileges or a new action) and these rules. notCount: generated files, which don't count towards the tier; with ignoreRenames, a file only renamed doesn't either (it still counts for Harry's ok).",
+    "high": [
+      "service/src/**/store*",
+      "service/src/**/migrat*",
+      "service/src/index.ts",
+      "service/src/access.ts",
+      "service/src/retention.ts",
+      "service/src/knowledge.ts",
+      "manifest.json",
+      "score/**",
+      "Dockerfile",
+      "frontend/vite.config.ts",
+      "package.json",
+      ".github/**",
+      "scripts/sync-version.mjs",
+      "REVIEW.md"
+    ],
+    "notHigh": [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.test.mjs",
+      "**/*.testing.ts",
+      "**/README.md",
+      ".github/pull_request_template.md"
+    ],
+    "low": [
+      "**/*.md",
+      ".changeset/**",
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.test.mjs",
+      "**/*.stories.tsx"
+    ],
+    "notLow": [
+      "REVIEW.md",
+      "AGENTS.md",
+      "CLAUDE.md"
+    ],
+    "notCount": [
+      "pnpm-lock.yaml"
+    ],
+    "ignoreRenames": true,
+    "harryOk": [
+      "service/src/**/migrat*",
+      "service/src/retention.ts",
+      "service/src/access.ts",
+      ".github/workflows/release.yml",
+      ".github/workflows/app-dev.yml",
+      ".github/workflows/app-preview.yml",
+      ".github/workflows/review.yml",
+      ".github/review-tiers.json",
+      "REVIEW.md"
+    ],
+    "harryOkWhen": [
+      {
+        "paths": [
+          "manifest.json"
+        ],
+        "added": "\"[a-z][a-z-]*:[a-z][a-z-]*\"|\"(scopes|permissions)\"",
+        "why": "asks for a new scope"
+      },
+      {
+        "paths": [
+          "package.json"
+        ],
+        "added": "\"release[a-z:-]*\"\\s*:",
+        "why": "changes how a release is built"
+      },
+      {
+        "paths": [
+          ".github/workflows/**",
+          ".github/actions/**"
+        ],
+        "added": "^\\s*permissions:|: *write\\b|\\bsecrets\\b|id-token|pull_request_target|workflow_run|issue_comment|uses:\\s*['\"]?docker://",
+        "why": "gives a workflow more privilege or a riskier trigger"
+      },
+      {
+        "paths": [
+          ".github/workflows/**",
+          ".github/actions/**"
+        ],
+        "removed": "^\\s*permissions:|: *(read|none)\\b",
+        "why": "takes a limit off a workflow's token"
+      },
+      {
+        "paths": [
+          ".github/workflows/**",
+          ".github/actions/**"
+        ],
+        "newAction": true,
+        "why": "uses an action no workflow used before"
+      }
+    ]
+  }
 }
